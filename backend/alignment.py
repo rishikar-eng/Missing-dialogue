@@ -194,12 +194,16 @@ def align_script_to_channels(
     vad_kwargs: dict[str, Any] | None = None,
     offset_s: float | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    region_cache: dict[str, list[Interval]] | None = None,
 ) -> dict[str, Any]:
     """Full pass: per character with a mapped channel, VAD the channel and score
     their lines. Returns a JSON-serialisable report.
 
     on_progress(done, total, channel) fires after each track's VAD completes (VAD
     is the slow step), so a UI can show real progress.
+
+    Pass a persistent ``region_cache`` to reuse VAD results across calls — e.g. so
+    re-scoring at a new tolerance is instant instead of re-running VAD.
     """
     spans_by_char: dict[str, list[tuple[int, float, float]]] = {}
     for seg in doc.segments:
@@ -216,10 +220,11 @@ def align_script_to_channels(
             and ent.channel not in to_vad
         ):
             to_vad.append(ent.channel)
-    total = len(to_vad)
+    if region_cache is None:
+        region_cache = {}
+    total = sum(1 for ch in to_vad if ch not in region_cache)
     done = 0
 
-    region_cache: dict[str, list[Interval]] = {}
     channel_reports: list[ChannelAlignment] = []
     unmapped: list[str] = []
 

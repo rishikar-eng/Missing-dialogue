@@ -129,14 +129,18 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
     def _prog(done: int, total: int, channel: str) -> None:
         PROGRESS.update(running=True, done=done, total=total, stage=channel)
 
+    region_cache: dict[str, Any] = {}
     try:
         report = align_script_to_channels(
-            doc, characters, channel_wavs, tol_s=req.tol_s, on_progress=_prog
+            doc, characters, channel_wavs, tol_s=req.tol_s,
+            on_progress=_prog, region_cache=region_cache,
         )
     finally:
         PROGRESS.update(running=False)
 
-    STATE.update(doc=doc, characters=characters, channel_wavs=channel_wavs)
+    # Keep the VAD results so /api/realign (tolerance changes) is instant.
+    STATE.update(doc=doc, characters=characters, channel_wavs=channel_wavs,
+                 region_cache=region_cache)
     return {
         "characters": [c.model_dump() for c in characters],
         "source_format": doc.source_format,
@@ -152,7 +156,8 @@ def realign(req: RealignRequest) -> dict[str, Any]:
     if STATE.get("doc") is None:
         raise HTTPException(status_code=400, detail="Run analyze first")
     report = align_script_to_channels(
-        STATE["doc"], STATE["characters"], STATE["channel_wavs"], tol_s=req.tol_s
+        STATE["doc"], STATE["characters"], STATE["channel_wavs"], tol_s=req.tol_s,
+        region_cache=STATE.get("region_cache"),  # reuse VAD -> instant
     )
     return _alignment_payload(report)
 
