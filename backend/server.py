@@ -16,6 +16,7 @@ Flow:
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -58,14 +59,33 @@ class RealignRequest(BaseModel):
     tol_s: float = 1.0
 
 
+def _auto_prefix(stems: list[str]) -> str:
+    """Detect a common vendor prefix shared by all track names (e.g.
+    'GAVV EPI 16 MAL - '), trimmed back to a natural separator so we never cut
+    into a character's name. Returns '' when there's nothing safe to strip."""
+    if len(stems) < 2:
+        return ""
+    lcp = os.path.commonprefix(stems)
+    for sep in (" - ", " – ", " — ", "_", " "):
+        i = lcp.rfind(sep)
+        if i != -1:
+            return lcp[: i + len(sep)]
+    return ""
+
+
 def _discover_channels(audio_dir: Path, strip_prefix: str) -> dict[str, Path]:
+    files = [
+        p for p in sorted(audio_dir.iterdir())
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTS
+    ]
+    # If the user didn't give a prefix, auto-detect the common one.
+    prefix = strip_prefix or _auto_prefix([p.stem for p in files])
     out: dict[str, Path] = {}
-    for p in sorted(audio_dir.iterdir()):
-        if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
-            name = p.stem
-            if strip_prefix and name.startswith(strip_prefix):
-                name = name[len(strip_prefix):]
-            out[name.strip()] = p
+    for p in files:
+        name = p.stem
+        if prefix and name.startswith(prefix):
+            name = name[len(prefix):]
+        out[name.strip()] = p
     return out
 
 

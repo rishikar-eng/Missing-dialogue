@@ -110,16 +110,26 @@ def align_channel(
     *,
     tol_s: float = 0.5,
     missing_coverage: float = 0.15,
-    truncated_ratio: float = 0.6,
+    aligned_coverage: float = 0.5,
+    min_extra_s: float = 0.6,
     offset_s: float | None = None,
 ) -> ChannelAlignment:
-    """Score one character's scripted lines against their channel's VAD regions."""
+    """Score one character's scripted lines against their channel's VAD regions.
+
+    Alignment is judged by COVERAGE — how much of the line's scripted slot actually
+    contains speech — not by the speech region's outer edges. (VAD speech is often
+    continuous across adjacent lines, so a region can stick out well beyond a single
+    line even though that line is perfectly present; edge-based drift would wrongly
+    flag those as misaligned.)
+        coverage < missing_coverage  -> MISSING   (line absent)
+        coverage < aligned_coverage  -> MISALIGNED (only partly present: shifted/clipped)
+        otherwise                    -> OK
+    """
     spans = [(a, b) for _, a, b in script_spans]
     if offset_s is None:
         offset_s = estimate_offset(spans, regions)
 
     errors: list[AlignError] = []
-    matched_regions: list[Interval] = []
     n_missing = n_misaligned = 0
 
     for idx, a, b in script_spans:
@@ -137,39 +147,29 @@ def align_channel(
             ))
             continue
 
-        matched_regions.append(matched)
-        onset_drift = matched[0] - span[0]
-        offset_drift = matched[1] - span[1]
-        span_dur = max(1e-9, span[1] - span[0])
-        matched_dur = matched[1] - matched[0]
-
-        subtype = None
-        if matched_dur < truncated_ratio * span_dur:
-            subtype = "truncated"
-        elif abs(onset_drift) > abs(offset_drift) and abs(onset_drift) > tol_s:
-            subtype = "onset_drift"
-        elif abs(offset_drift) > tol_s:
-            subtype = "offset_drift"
-
-        if subtype:
+        if cov < aligned_coverage:
             n_misaligned += 1
-            drift = onset_drift if subtype == "onset_drift" else offset_drift
-            if subtype == "truncated":
-                drift = matched_dur - span_dur
+            # Where does the speech sit relative to the slot? (early vs late)
+            ov_lo, ov_hi = max(span[0], matched[0]), min(span[1], matched[1])
+            shift = (ov_lo + ov_hi) / 2 - (span[0] + span[1]) / 2
             errors.append(AlignError(
-                type="MISALIGNED", subtype=subtype, severity="warn",
-                character=character, channel=channel, script_index=idx,
+                type="MISALIGNED", subtype=("late" if shift > 0 else "early"),
+                severity="warn", character=character, channel=channel, script_index=idx,
                 script_start_s=round(a, 3), script_end_s=round(b, 3),
                 audio_start_s=round(matched[0] - offset_s, 3),
                 audio_end_s=round(matched[1] - offset_s, 3),
-                drift_s=round(drift, 3), coverage=round(cov, 3),
-                message=f"Line {idx} {subtype.replace('_', ' ')} by {drift:+.2f}s "
-                        f"in '{channel}'.",
+                drift_s=round(shift, 3), coverage=round(cov, 3),
+                message=f"Line {idx}: only {cov:.0%} of its slot has speech "
+                        f"(shifted {'late' if shift > 0 else 'early'}) in '{channel}'.",
             ))
 
     # EXTRA: speech regions not overlapping any scripted (offset-shifted) line.
+    # Skip very short blips (breaths, grunts, fight vocalisations) — those are
+    # un-scripted noise, not missed dialogue.
     shifted = [(a + offset_s, b + offset_s) for a, b in spans]
     for r in regions:
+        if (r[1] - r[0]) < min_extra_s:
+            continue
         if all(_overlap(r, s) <= 0 for s in shifted):
             errors.append(AlignError(
                 type="EXTRA", severity="info", character=character, channel=channel,
@@ -236,9 +236,12 @@ def align_script_to_channels(
             done += 1
             if on_progress:
                 on_progress(done, total, ent.channel)
+        # Map the tolerance slider to the coverage threshold: higher tol = more
+        # lenient = a line only needs less of its slot covered to count as aligned.
+        aligned_cov = max(0.2, min(0.8, 1.0 - tol_s * 0.5))
         channel_reports.append(align_channel(
             ent.id, ent.channel, spans, region_cache[ent.channel],
-            tol_s=tol_s, offset_s=offset_s,
+            tol_s=tol_s, aligned_coverage=aligned_cov, offset_s=offset_s,
         ))
 
     # Attach the scripted dialogue line to each error that references a script index.
