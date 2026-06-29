@@ -86,6 +86,16 @@ export default function App() {
     return () => clearInterval(id);
   }, [analyze.isPending]);
 
+  const reset = () => {
+    setScriptPath("");
+    setAudioDir("");
+    setStripPrefix("");
+    setResult(null);
+    setError(null);
+    setFilter("ALL");
+    setProgress(null);
+  };
+
   const chars = result?.characters ?? [];
   const report = result?.alignment ?? null;
   const errors = report?.errors ?? [];
@@ -103,7 +113,14 @@ export default function App() {
           <h1 className="font-display text-[18px] font-semibold tracking-tight">
             Dialogue QC <span className="text-ink-500 font-normal text-sm">· missing-dialogue detection</span>
           </h1>
-          <span className="font-mono text-[10.5px] text-ink-500">offline · local</span>
+          <div className="flex items-center gap-3">
+            {(scriptPath || audioDir || result) && (
+              <button className="btn-ghost" onClick={reset} disabled={analyze.isPending}>
+                New analysis
+              </button>
+            )}
+            <span className="font-mono text-[10.5px] text-ink-500">offline · local</span>
+          </div>
         </div>
       </header>
 
