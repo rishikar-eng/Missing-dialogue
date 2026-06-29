@@ -56,10 +56,15 @@ to run the backend; to force a specific interpreter set `DQC_PYTHON`:
 ```powershell
 $env:DQC_PYTHON = "C:\path\to\python.exe"; npm run dev
 ```
-> The backend alone can be run with `python run.py` (serves on `127.0.0.1:8765`),
-> and the UI opened in a browser at `http://localhost:5173` — but file **drag-and-drop
-> and native pickers only work in the Electron window** (browsers can't read local paths;
-> there you must paste full paths).
+> The backend alone can be run with `python run.py` (serves on `127.0.0.1:8765`).
+> The UI also opens in a browser at `http://localhost:5173`, but **choosing files only
+> works in the Electron window** — browsers can't read local file paths.
+
+**Troubleshooting — the app window doesn't open / Electron crashes with
+`Cannot read properties of undefined (reading 'isPackaged')`:** that means
+`ELECTRON_RUN_AS_NODE` is set in your environment (it makes Electron run as plain Node).
+The `dev:electron` script already clears it; if it persists, unset it in your shell
+(`Remove-Item Env:ELECTRON_RUN_AS_NODE` in PowerShell) and re-run.
 
 ---
 
