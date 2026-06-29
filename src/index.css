@@ -1,0 +1,194 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =============================================================
+   Theme variables — RGB triplets (no commas) so Tailwind's
+   `bg-ink-800/40` opacity syntax keeps working.
+   ============================================================= */
+:root, html[data-theme="dark"] {
+  --ink-50:  248 243 232;
+  --ink-100: 244 237 226;
+  --ink-200: 217 210 196;
+  --ink-300: 163 157 146;
+  --ink-400: 125 118 105;
+  --ink-500: 94 89 80;
+  --ink-600: 58 52 46;
+  --ink-700: 42 38 34;
+  --ink-800: 31 27 24;
+  --ink-900: 22 20 18;
+  --ink-950: 12 11 10;
+  --amber:      245 165 36;
+  --amber-soft: 255 208 137;
+  --amber-deep: 196 119 0;
+  --coral:      255 122 89;
+  --ok:         106 210 138;
+  --err:        239 68 68;
+  --noise-blend: overlay;
+  --noise-opacity: 0.06;
+  --wash-amber: 0.07;
+  --wash-coral: 0.05;
+}
+
+html[data-theme="light"] {
+  --ink-50:  255 255 255;
+  --ink-100: 26 22 18;
+  --ink-200: 60 50 40;
+  --ink-300: 94 85 74;
+  --ink-400: 125 117 105;
+  --ink-500: 150 139 124;
+  --ink-600: 200 190 175;
+  --ink-700: 230 220 203;
+  --ink-800: 255 255 255;
+  --ink-900: 255 250 242;
+  --ink-950: 247 243 236;
+  --amber:      184 115 13;
+  --amber-soft: 255 209 122;
+  --amber-deep: 145 95 0;
+  --coral:      225 102 70;
+  --ok:         46 125 79;
+  --err:        220 53 69;
+  --noise-blend: multiply;
+  --noise-opacity: 0.05;
+  --wash-amber: 0.08;
+  --wash-coral: 0.04;
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-ink-950 text-ink-100 font-sans antialiased;
+    position: relative;
+    font-feature-settings: "ss01", "ss02";
+    transition: background-color 0.4s ease, color 0.4s ease;
+  }
+
+  /* Warm film-grain noise behind everything */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    opacity: var(--noise-opacity);
+    mix-blend-mode: var(--noise-blend);
+  }
+
+  /* Soft amber wash top-left, faint coral bottom-right */
+  body::after {
+    content: '';
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      radial-gradient(700px circle at -10% -10%, rgb(var(--amber) / var(--wash-amber)), transparent 60%),
+      radial-gradient(500px circle at 110% 110%, rgb(var(--coral) / var(--wash-coral)), transparent 60%);
+  }
+
+  #root { position: relative; z-index: 1; }
+
+  ::selection { background: rgb(var(--amber)); color: rgb(var(--ink-950)); }
+
+  h1, h2, h3 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 350;
+    letter-spacing: -0.02em;
+    font-variation-settings: "opsz" 36;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-ink-900 border border-ink-700 rounded-[18px] p-5;
+    box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.4);
+  }
+  .card-elevated {
+    @apply bg-ink-900 border border-ink-700 rounded-[18px] p-5;
+    box-shadow: 0 20px 60px -30px rgb(0 0 0 / 0.5);
+  }
+
+  /* Default button: solid amber, hovers to ink (light=cream→black, dark=amber→cream) */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-[10px]
+           text-sm font-medium transition border bg-amber text-ink-950 border-amber
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: rgb(var(--ink-100));
+    border-color: rgb(var(--ink-100));
+    color: rgb(var(--ink-950));
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.45);
+  }
+
+  .btn-primary-lg {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-[10px]
+           text-[15px] font-semibold transition border bg-amber text-ink-950 border-amber
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary-lg:hover:not(:disabled) {
+    background: rgb(var(--amber-soft));
+    border-color: rgb(var(--amber-soft));
+    transform: translateY(-1px);
+    box-shadow: 0 12px 30px -12px rgb(var(--amber) / 0.7);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-[10px]
+           bg-ink-800 border border-ink-700 text-ink-100 text-sm font-medium
+           transition hover:bg-ink-700
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary:hover { border-color: rgb(var(--ink-500)); }
+
+  .btn-ghost {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded text-xs
+           text-ink-300 transition hover:text-ink-100 hover:bg-ink-800;
+  }
+
+  .input,
+  input[type="text"], input[type="number"], select, textarea {
+    @apply bg-ink-800 border border-ink-700 rounded-[10px] text-ink-100 placeholder-ink-500 transition focus:outline-none;
+  }
+  .input:focus,
+  input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+    border-color: rgb(var(--amber));
+    box-shadow: 0 0 0 1px rgb(var(--amber) / 0.40);
+  }
+  select { @apply px-3 py-2 text-sm; }
+  input[type="text"], input[type="number"] { @apply px-3 py-2 text-sm; }
+
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-mono font-medium border tracking-wider lowercase;
+  }
+  .status-ok    { background: rgb(var(--ok) / 0.15);    color: rgb(var(--ok));    border-color: rgb(var(--ok) / 0.30); }
+  .status-warn  { background: rgb(var(--amber) / 0.15); color: rgb(var(--amber)); border-color: rgb(var(--amber) / 0.30); }
+  .status-err   { background: rgb(var(--err) / 0.15);   color: rgb(var(--err));   border-color: rgb(var(--err) / 0.30); }
+  .status-idle  { @apply bg-ink-800 text-ink-300 border-ink-700; }
+
+  .section-num {
+    @apply font-mono text-[11px] tracking-widest uppercase;
+    color: rgb(var(--amber));
+  }
+  .section-title {
+    @apply font-display text-[18px] font-medium text-ink-100 leading-tight tracking-tight;
+    font-variation-settings: "opsz" 24;
+  }
+  .section-sub {
+    @apply text-xs text-ink-300 mt-1;
+  }
+  .divider {
+    @apply h-px;
+    background: linear-gradient(90deg, transparent, rgb(var(--ink-700)), transparent);
+  }
+
+  .accent-text { color: rgb(var(--amber)); }
+  .accent-ring-best { box-shadow: 0 0 0 1px rgb(var(--amber) / 0.5), 0 8px 24px -12px rgb(var(--amber) / 0.5); }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  .card, .card-elevated { animation: fadeUp .35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+  @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 9999px; background: rgb(var(--ok)); animation: pulseDot 2s infinite; }
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--ink-700)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-600)); }
