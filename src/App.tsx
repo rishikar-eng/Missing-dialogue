@@ -19,6 +19,16 @@ const TYPE_STYLE: Record<string, { dot: string; label: string }> = {
   EXTRA: { dot: "bg-sky-400", label: "Extra" },
 };
 
+const pad = (n: number) => String(n).padStart(2, "0");
+// seconds -> HH:MM:SS:FF, matching the script's timecode format
+const toTimecode = (s: number, fps: number): string => {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const f = Math.round((s - Math.floor(s)) * fps);
+  return `${pad(h)}:${pad(m)}:${pad(sec)}:${pad(f)}`;
+};
+
 const hasElectron = () => typeof window !== "undefined" && !!window.electronAPI;
 
 export default function App() {
@@ -94,6 +104,60 @@ export default function App() {
     setError(null);
     setFilter("ALL");
     setProgress(null);
+  };
+
+  const downloadReport = () => {
+    if (!result) return;
+    const fps = result.fps ?? 25;
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const detailOf = (e: AlignError) => {
+      if (e.type === "MISSING") return `No speech in track (coverage ${Math.round((e.coverage ?? 0) * 100)}%)`;
+      if (e.type === "MISALIGNED")
+        return `${(e.subtype ?? "drift").replace("_", " ")} ${e.drift_s != null && e.drift_s > 0 ? "+" : ""}${e.drift_s?.toFixed(2)}s`;
+      return "Extra speech (no scripted line)";
+    };
+    const lines: string[] = [];
+    lines.push(["#", "Type", "Character", "Timecode", "Start_s", "End_s", "Script line", "Detail", "Track"].map(esc).join(","));
+    let n = 1;
+    // whole characters with no track first
+    for (const c of result.characters.filter((c) => !c.channel && c.line_count > 0)) {
+      lines.push(
+        [n++, "NO AUDIO", c.name, "", "", "", "", `No track delivered — ${c.line_count} lines / ${Math.round(c.total_speech_s)}s of dialogue`, ""]
+          .map(esc)
+          .join(","),
+      );
+    }
+    // then every error, in episode order
+    const errs = [...result.alignment.errors].sort(
+      (a, b) => (a.script_start_s ?? a.audio_start_s ?? 0) - (b.script_start_s ?? b.audio_start_s ?? 0),
+    );
+    for (const e of errs) {
+      const t = e.script_start_s ?? e.audio_start_s;
+      lines.push(
+        [
+          n++,
+          TYPE_STYLE[e.type].label,
+          e.character ?? "",
+          t != null ? toTimecode(t, fps) : "",
+          e.script_start_s ?? e.audio_start_s ?? "",
+          e.script_end_s ?? e.audio_end_s ?? "",
+          e.text ?? "",
+          detailOf(e),
+          e.channel ?? "",
+        ]
+          .map(esc)
+          .join(","),
+      );
+    }
+    const csv = "﻿" + lines.join("\r\n"); // BOM so Excel reads UTF-8
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const base = (scriptPath.split(/[\\/]/).pop() || "report").replace(/\.[^.]+$/, "");
+    a.href = url;
+    a.download = `dialogue-qc_${base}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const chars = result?.characters ?? [];
@@ -253,24 +317,29 @@ export default function App() {
                 <div className="section-title">3 · Detected errors</div>
                 <div className="section-sub">Missing / misaligned / extra dialogue, with timestamps.</div>
               </div>
-              <label className="flex items-center gap-2 text-xs text-ink-400">
-                <span title="A line is only flagged misaligned when its start/end drifts more than this. Higher = fewer false drifts.">
-                  Tolerance
-                </span>
-                <input
-                  type="range"
-                  min={0.2}
-                  max={3}
-                  step={0.1}
-                  value={tolS}
-                  onChange={(e) => setTolS(parseFloat(e.target.value))}
-                  className="w-32 accent-amber"
-                />
-                <span className="font-mono text-ink-200 w-9 tabular-nums">{tolS.toFixed(1)}s</span>
-                <button className="btn-ghost" disabled={realign.isPending} onClick={() => realign.mutate()}>
-                  {realign.isPending ? "…" : "Re-run"}
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="flex items-center gap-2 text-xs text-ink-400">
+                  <span title="A line is only flagged misaligned when its start/end drifts more than this. Higher = fewer false drifts.">
+                    Tolerance
+                  </span>
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={3}
+                    step={0.1}
+                    value={tolS}
+                    onChange={(e) => setTolS(parseFloat(e.target.value))}
+                    className="w-32 accent-amber"
+                  />
+                  <span className="font-mono text-ink-200 w-9 tabular-nums">{tolS.toFixed(1)}s</span>
+                  <button className="btn-ghost" disabled={realign.isPending} onClick={() => realign.mutate()}>
+                    {realign.isPending ? "…" : "Re-run"}
+                  </button>
+                </label>
+                <button className="btn-primary" onClick={downloadReport} title="Download all issues as a CSV (opens in Excel)">
+                  ↓ Download report
                 </button>
-              </label>
+              </div>
             </div>
 
             {s && (
