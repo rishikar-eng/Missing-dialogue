@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import io
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -199,9 +199,16 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
     #
     # Tracks are processed in PARALLEL: soundfile I/O, numpy, and onnxruntime all
     # release the GIL, and the shared Silero session is thread-safe for concurrent
-    # runs. Workers are capped at 4 to bound peak memory (each worker holds one
-    # track's native-rate signal, ~300 MB for a 25-min 48 kHz stem).
-    PROGRESS.update(running=True, done=0, total=len(channel_wavs), stage="detecting speech")
+    # runs. Worker count scales with cores but is bounded so peak memory stays sane
+    # (each worker holds one track's native-rate signal, ~150-300 MB per 25-min stem).
+    # 4 is the measured sweet spot: the Silero loop is a tight ~47k-call Python loop
+    # per track that holds the GIL between its (GIL-releasing) ONNX runs, so more
+    # threads add contention, not speed (8 workers benchmarked SLOWER than 4). True
+    # >4x would need multiprocessing — deferred.
+    total = len(channel_wavs)
+    n_workers = max(1, min(4, os.cpu_count() or 2, total))
+    PROGRESS.update(running=True, done=0, total=total,
+                    stage=f"analysing audio — {n_workers} tracks in parallel")
     region_cache: dict[str, Any] = {}
     envelopes: dict[str, Any] = {}
     naming_issues: list[dict[str, Any]] = []
@@ -216,15 +223,19 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
         return ch, [(r["start"], r["end"]) for r in regs], envelope(native, native_sr)
 
     try:
-        workers = min(4, os.cpu_count() or 2, max(1, len(channel_wavs)))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
+        with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            # as_completed so progress reflects REAL completions (parallel, out of
+            # submission order) rather than lagging behind ex.map's in-order yield.
+            futures = {ex.submit(_process_track, item): item[0] for item in channel_wavs.items()}
             done = 0
-            for ch, regions, env in ex.map(_process_track, channel_wavs.items()):
+            for fut in as_completed(futures):
+                ch, regions, env = fut.result()
                 region_cache[ch] = regions
                 envelopes[ch] = env
                 done += 1
-                PROGRESS.update(running=True, done=done, total=len(channel_wavs), stage=ch)
-        PROGRESS.update(running=True, done=len(channel_wavs), total=len(channel_wavs), stage="mapping")
+                PROGRESS.update(running=True, done=done, total=total,
+                                stage=f"{done}/{total} tracks analysed ({n_workers} in parallel)")
+        PROGRESS.update(running=True, done=total, total=total, stage="mapping speakers")
 
         # Name match first (authoritative where it fits), then content verification:
         # rescue characters the name step missed and flag name/voice disagreements.
@@ -388,6 +399,71 @@ def audio_slice(channel: str | None = None, start_s: float = 0.0, end_s: float =
     buf = io.BytesIO()
     sf.write(buf, np.asarray(data, dtype="float32"), sr, format="WAV", subtype="PCM_16")
     return Response(content=buf.getvalue(), media_type="audio/wav")
+
+
+def _missing_windows(tol_s: float, pad_s: float) -> list[tuple[float, float]]:
+    """[start,end] windows (script timecodes) of every MISSING line, padded and
+    merged where they overlap. MISSING is independent of tolerance (fixed coverage
+    floor), but we accept tol_s for consistency with the rest of the API."""
+    report = align_script_to_channels(
+        STATE["doc"], STATE["characters"], STATE["channel_wavs"],
+        tol_s=tol_s, region_cache=STATE.get("region_cache"),
+    )
+    wins = sorted(
+        (max(0.0, e["script_start_s"] - pad_s), (e["script_end_s"] or e["script_start_s"]) + pad_s)
+        for e in report["errors"]
+        if e["type"] == "MISSING" and e.get("script_start_s") is not None
+    )
+    merged: list[tuple[float, float]] = []
+    for s, en in wins:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], en))
+        else:
+            merged.append((s, en))
+    return merged
+
+
+@app.get("/api/missing-compilation")
+def missing_compilation(pad_s: float = 1.25, gap_s: float = 0.6, tol_s: float = 1.0):
+    """One WAV of every MISSING line, cut from the ORIGINAL audio with ~pad_s of
+    context on each side and a short silence between clips — a re-record worklist
+    the team can play straight through. Requires an original-language file."""
+    if STATE.get("doc") is None:
+        raise HTTPException(status_code=400, detail="Run analyze first")
+    orig = STATE.get("original_audio_path")
+    if not orig:
+        raise HTTPException(status_code=400,
+                            detail="No original audio — add the original-language file and re-analyse")
+    windows = _missing_windows(tol_s, pad_s)
+    if not windows:
+        raise HTTPException(status_code=404, detail="No missing lines to compile")
+    try:
+        with sf.SoundFile(str(orig)) as f:
+            sr = f.samplerate
+            total = len(f)
+            gap = np.zeros(int(gap_s * sr), dtype=np.float32)
+            parts: list[np.ndarray] = []
+            for s, en in windows:
+                i0, i1 = max(0, int(s * sr)), min(total, int(en * sr))
+                if i1 <= i0:
+                    continue
+                f.seek(i0)
+                d = f.read(i1 - i0, dtype="float32", always_2d=False)
+                if getattr(d, "ndim", 1) > 1:
+                    d = d.mean(axis=1)
+                parts.append(np.asarray(d, dtype=np.float32))
+                parts.append(gap)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=415, detail="Could not decode the original audio file")
+    if not parts:
+        raise HTTPException(status_code=404, detail="No audio extracted for the missing lines")
+    out = np.concatenate(parts[:-1])  # drop trailing gap
+    buf = io.BytesIO()
+    sf.write(buf, out, sr, format="WAV", subtype="PCM_16")
+    headers = {"Content-Disposition": f'attachment; filename="missing-lines-original-{len(windows)}clips.wav"'}
+    return Response(content=buf.getvalue(), media_type="audio/wav", headers=headers)
 
 
 @app.get("/api/progress")

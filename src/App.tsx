@@ -475,9 +475,7 @@ export default function App() {
                 />
               </div>
               <div className="text-[11px] text-ink-500 font-mono">
-                {progress && progress.total
-                  ? `VAD track ${progress.done}/${progress.total} — ${progress.stage}`
-                  : "Parsing script…"}
+                {progress?.stage || "Parsing script…"}
               </div>
             </div>
           )}
@@ -680,6 +678,10 @@ export default function App() {
               </div>
             )}
 
+            {result?.original_audio && (s?.n_missing ?? 0) > 0 && (
+              <MissingCompilation nMissing={s!.n_missing} tolS={report.tol_s} />
+            )}
+
             {errors.length > 0 ? (
               <>
                 <div className="flex items-center gap-2 mt-4 mb-2">
@@ -832,6 +834,67 @@ function PathRow({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// A re-record worklist: all MISSING lines cut from the ORIGINAL audio, stitched
+// back-to-back (with ~1.25s of context each) into one WAV to play through.
+function MissingCompilation({ nMissing, tolS }: { nMissing: number; tolS: number }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const build = async () => {
+    setStatus("loading");
+    setErr(null);
+    try {
+      const res = await fetch(api.missingCompilationUrl(1.25, tolS));
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.detail || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      setUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
+      setStatus("ready");
+    } catch (e) {
+      setErr((e as Error).message);
+      setStatus("error");
+    }
+  };
+
+  const download = () => {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `missing-lines-original-${nMissing}.wav`;
+    a.click();
+  };
+
+  return (
+    <div className="mt-3 border border-ink-700 rounded-lg px-3 py-2.5 bg-ink-800/40">
+      <div className="text-sm text-ink-100 font-medium">Missing lines — compiled from the original ({nMissing})</div>
+      <div className="text-[11px] text-ink-400 mt-0.5">
+        Every missing line cut from the original audio with ~1.25s of context, back-to-back — a re-record
+        worklist to play straight through.
+      </div>
+      <div className="flex items-center gap-3 mt-2 flex-wrap">
+        <button className="btn-ghost" onClick={build} disabled={status === "loading"}>
+          {status === "loading" ? "Building…" : status === "ready" ? "Rebuild" : "🎧 Build audio"}
+        </button>
+        {status === "ready" && url && (
+          <>
+            <audio key={url} controls preload="metadata" className="h-8 flex-1 min-w-[240px]">
+              <source src={url} type="audio/wav" />
+            </audio>
+            <button className="btn-primary" onClick={download}>↓ Download WAV</button>
+          </>
+        )}
+      </div>
+      {status === "error" && <div className="text-xs text-err mt-2">{err}</div>}
     </div>
   );
 }
