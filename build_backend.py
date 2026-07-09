@@ -72,7 +72,14 @@ def main() -> int:
         "--collect-data", "soundfile",
         # onnxruntime native libs + the Silero VAD model
         "--collect-all", "onnxruntime",
+        # Rian login proxy deps (AES payload encryption + HTTP client) — bundle fully
+        # so the frozen backend can reach the auth API.
+        "--collect-all", "cryptography",
+        "--collect-submodules", "httpx",
+        "--collect-submodules", "httpcore",
         "--add-data", f"{ROOT / 'backend' / 'models' / 'silero_vad.onnx'}{os.pathsep}backend/models",
+        # ElevenLabs voice bank (per-language voice IDs shown in the character table)
+        "--add-data", f"{ROOT / 'backend' / 'data' / 'voice_bank.json'}{os.pathsep}backend/data",
         *_conda_dll_args(),
         str(ROOT / "run.py"),
     ]

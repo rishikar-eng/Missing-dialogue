@@ -16,13 +16,17 @@ import difflib
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
 from .script_parser import ScriptDoc
 
 # Studio suffixes / generic role words that aren't part of a character's identity.
-_AFFIX = {"stomach", "inc", "granute", "kaijin", "monster", "voice", "vo", "dub",
+# NB: "granute" is deliberately NOT here — it's a franchise family name (Granute Man,
+# Granute Woman are distinct characters); stripping it collapsed both tracks to
+# "man"/"woman" and mis-mapped them (e.g. Granute Man -> generic MAN track).
+_AFFIX = {"stomach", "inc", "kaijin", "monster", "voice", "vo", "dub",
           "stem", "track", "ch", "channel", "16k", "src", "onscreen", "screen"}
 _ROLE_WORDS = {"actor", "actress", "acter", "man", "woman", "boy", "girl", "agent",
                "narrator", "narration", "guard", "soldier", "male", "female", "crowd"}
@@ -36,7 +40,14 @@ class CharacterEntity(BaseModel):
     total_speech_s: float         # summed scripted duration
     first_start_s: float
     channel: str | None = None    # mapped audio-channel name (channels mode)
-    voice_id: str | None = None   # assigned bank voice
+    mapped_by: str | None = None  # "name" | "content" — how the channel was assigned
+    level_dbfs: float | None = None      # median speech loudness on the mapped track (dBFS)
+    level_min_dbfs: float | None = None   # quietest delivered line (dBFS)
+    level_max_dbfs: float | None = None   # loudest delivered line (dBFS)
+    voice_id: str | None = None   # assigned bank voice (legacy single-voice field)
+    # ElevenLabs voices across dub languages, from the production voice bank:
+    # [{lang: "hi"|"ta"|..., name, id, form: "normal"|"granute"}]
+    voices: list[dict[str, Any]] | None = None
 
 
 def build_characters(doc: ScriptDoc) -> list[CharacterEntity]:

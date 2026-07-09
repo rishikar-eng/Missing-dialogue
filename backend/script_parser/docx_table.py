@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .base import ScriptDoc, ScriptSegment, infer_fps_from_frames, normalize_character, parse_timecode
+from .base import ParseStats, ScriptDoc, ScriptSegment, infer_fps_from_frames, normalize_character, parse_timecode
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _TC_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}[:;]\d{1,3}$")
@@ -72,6 +72,10 @@ def parse(path: Path, fps: float | None = None) -> ScriptDoc:
 
     segments: list[ScriptSegment] = []
     n = 0
+    # A row with >=2 timecode cells IS a dialogue row (every parsed row must have
+    # both). Count them so callers can see how many dialogue-looking rows were
+    # dropped — a dropped row is a scripted line the QC pass never checks.
+    candidates = sum(1 for r in rows[header_i + 1:] if sum(1 for c in r if _TC_RE.match(c)) >= 2)
     for r in rows[header_i + 1:]:
         # Resolve start/end either by header columns or by "two timecode cells".
         if {"start", "end", "character"} <= idx_keys(cols) and len(r) > max(cols["start"], cols["end"], cols["character"]):
@@ -103,4 +107,6 @@ def parse(path: Path, fps: float | None = None) -> ScriptDoc:
 
     if not segments:
         raise ValueError("No timecoded character rows parsed from DOCX")
-    return ScriptDoc(source_format="docx", fps=use_fps, segments=segments)
+    stats = ParseStats(candidates=candidates, parsed=len(segments),
+                       dropped=max(0, candidates - len(segments)))
+    return ScriptDoc(source_format="docx", fps=use_fps, segments=segments, parse_stats=stats)

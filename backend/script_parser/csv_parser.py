@@ -14,7 +14,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from .base import ScriptDoc, ScriptSegment, normalize_character, parse_timecode
+from .base import ParseStats, ScriptDoc, ScriptSegment, normalize_character, parse_timecode
 
 _ALIASES = {
     "start": ("start", "start time", "in", "tc in", "start_time", "begin"),
@@ -75,4 +75,6 @@ def parse(path: Path, fps: float | None = None) -> ScriptDoc:
 
     if not segments:
         raise ValueError("No valid rows parsed from CSV")
-    return ScriptDoc(source_format="csv", fps=fps, segments=segments)
+    stats = ParseStats(candidates=len(rows) - 1, parsed=len(segments),
+                       dropped=max(0, (len(rows) - 1) - len(segments)))
+    return ScriptDoc(source_format="csv", fps=fps, segments=segments, parse_stats=stats)

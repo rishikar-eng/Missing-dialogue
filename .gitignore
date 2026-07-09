@@ -17,3 +17,22 @@ backend-dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Episode data (multi-GB audio + vendor scripts — never commit)
+episodes/
+*.zip
+
+# Large media + vendor reference material dropped in the repo root (kept local only).
+# The committed voice data is the derived backend/data/voice_bank.json, not the xlsx.
+*.wav
+*.mp4
+*.mov
+*.mkv
+*.xlsx
+*.docx
+*.pdf
+vox-api-docs*.html
+TECH_STACK*.md
+
+# Local machine settings
+.claude/settings.local.json

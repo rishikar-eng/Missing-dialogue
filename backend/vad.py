@@ -10,6 +10,7 @@ be caught), per the QC requirements.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,26 +23,40 @@ _WINDOW = 512  # samples per inference step at 16 kHz (Silero v5 requirement)
 
 _MODEL_PATH = Path(__file__).resolve().parent / "models" / "silero_vad.onnx"
 _session: ort.InferenceSession | None = None
+_session_lock = threading.Lock()
 
 
 def _get_session() -> ort.InferenceSession:
+    """The shared Silero session. ONNX Runtime sessions are thread-safe for
+    concurrent .run() calls (each carries its own state tensors), so analyze can
+    VAD several tracks in parallel; the lock only guards lazy creation."""
     global _session
     if _session is None:
-        if not _MODEL_PATH.exists():
-            raise FileNotFoundError(f"Silero VAD model missing at {_MODEL_PATH}")
-        opts = ort.SessionOptions()
-        opts.inter_op_num_threads = 1
-        opts.intra_op_num_threads = 1
-        _session = ort.InferenceSession(
-            str(_MODEL_PATH), sess_options=opts, providers=["CPUExecutionProvider"]
-        )
+        with _session_lock:
+            if _session is None:
+                if not _MODEL_PATH.exists():
+                    raise FileNotFoundError(f"Silero VAD model missing at {_MODEL_PATH}")
+                opts = ort.SessionOptions()
+                opts.inter_op_num_threads = 1
+                opts.intra_op_num_threads = 1
+                _session = ort.InferenceSession(
+                    str(_MODEL_PATH), sess_options=opts, providers=["CPUExecutionProvider"]
+                )
     return _session
 
 
-def _load_mono_16k(wav_path: Path) -> np.ndarray:
+def load_mono_native(wav_path: Path) -> tuple[np.ndarray, int]:
+    """Mono float32 at the file's NATIVE sample rate + that rate. Use this when
+    the caller needs true sample peaks (clipping detection) — resampling to 16k
+    under-reads peaks. Feed the same array to ``resample_16k`` for VAD."""
     data, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
     if data.ndim > 1:
         data = data.mean(axis=1)
+    return data, sr
+
+
+def resample_16k(data: np.ndarray, sr: int) -> np.ndarray:
+    """Resample a mono signal to the 16 kHz VAD rate (linear interp)."""
     if sr != _TARGET_SR and len(data) > 1:
         n_new = int(round(len(data) * _TARGET_SR / sr))
         data = np.interp(
@@ -76,20 +91,29 @@ def _speech_probs(audio: np.ndarray) -> np.ndarray:
     return probs
 
 
+def load_mono_16k(wav_path: Path) -> np.ndarray:
+    """Public loader: mono, 16 kHz float32 — the exact signal VAD analyses."""
+    return resample_16k(*load_mono_native(wav_path))
+
+
 def detect_speech_regions(
     wav_path: Path,
     threshold: float = 0.5,
     min_speech_ms: int = 90,      # keep short interjections (don't omit small lines)
     min_silence_ms: int = 120,
     speech_pad_ms: int = 120,
+    audio: np.ndarray | None = None,
     **_ignored: Any,
 ) -> list[dict[str, float]]:
     """Return voiced regions [{"start": s, "end": s}] (seconds) using Silero VAD.
 
+    Pass a preloaded ``audio`` (mono 16 kHz, from ``load_mono_16k``) to skip the
+    file read — lets a caller compute VAD and loudness from a single load.
     Extra kwargs are accepted and ignored so existing energy-VAD call sites keep
     working unchanged.
     """
-    audio = _load_mono_16k(wav_path)
+    if audio is None:
+        audio = load_mono_16k(wav_path)
     if len(audio) < _WINDOW:
         return []
 

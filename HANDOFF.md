@@ -76,12 +76,41 @@ Verified on **Kamen Rider Gavv E16 (Malayalam)**: 14 characters built, ~10 missi
 ## 8. Current UI features
 Drag-drop / click-to-browse file pickers · character table (aliases, mapped track, red "no audio") · error list with **expandable rows** (script line + audio player for that slice) · **tolerance slider** (+ instant Re-run via VAD cache) · **live progress bar** (per track) · **"New analysis"** reset button · **"Download report"** CSV (all issues with script timecodes + lines + detail + track, episode-ordered, opens in Excel).
 
-## 9. Roadmap / next steps (not yet done)
-- **Content-based (timeline) track mapping** — match a track to a character by whether its *speech timing* correlates with that character's *script timing*. Would catch "generic-labelled `Actor` is really Shoma" and make "no audio" content-verified instead of name-only. **Logic already exists** in the S2ST sibling scripts (`verify_channel_speakers.py` / `detect_naming_inconsistencies.py`) — port it into `characters.map_characters_to_channels` (pass `content_scores`).
-- **Parallelize VAD across tracks** — analysis is ~75 s sequential; threads/async would cut it to ~15 s (onnxruntime releases the GIL).
+## 9. Roadmap / next steps
+- **Content-based (timeline) track mapping — DONE (2026-07-01).** Ported natively into
+  [backend/content_map.py](backend/content_map.py) (`verify_mapping`), wired into `server.py::analyze`.
+  Now VADs **every** track up front, then: keeps name matches (authoritative), **rescues**
+  name-unmapped characters via voice-timeline coverage (precision/recall), **flags** name↔voice
+  disagreements, and **content-verifies** "no audio". Surfaced in the UI (a "Track ↔ character
+  checks" panel + "via voice" badge) and the payload (`naming_issues`, `characters[].mapped_by`).
+  Tuning constants at the top of `content_map.py`. Validated on E29 (3 rescues incl. `Agent→LADY BIT 02`
+  at precision 1.0 — a mislabelled stem — + 1 name-mismatch flag) and E30 (clean names → 0 rescues,
+  no regressions). Trade-off: analysis now VADs all tracks, so it's slower (E29 ~200s) → makes the
+  next item more valuable.
+- **False-negative hardening — DONE (2026-07-06).** Four silent-miss fixes, adversarially reviewed:
+  (1) **whole-track sync warnings** — a uniformly late/early track (auto-offset ≥0.75s,
+  `SYNC_WARN_OFFSET_S` in alignment.py) is surfaced instead of silently corrected;
+  (2) **rescue guard** — content rescues auto-map only at precision ≥0.5 (`RESCUE_STRONG_PREC`);
+  weaker candidates become a `possible_match` issue and the character STAYS no-audio;
+  (3) **parse stats** — `ParseStats{candidates,parsed,dropped}` from every parser; dropped
+  dialogue-looking rows (= lines never checked) trigger a red UI banner + report warning;
+  (4) **native-rate clipping** — loudness envelope built from the native signal (true peaks);
+  `envelope(audio, sr)` returns `(rms, peak, sec_per_frame)` and `measure()` indexes with the
+  true frame duration. Login: Rian auth works against `api.rian.io/v1/Auth/LoginUser` with
+  AES-256-CBC-encrypted payloads (backend/auth.py); bad creds → status 50004/50169.
+- **Parallelize VAD across tracks** — analysis is sequential; threads/async would cut it a lot
+  (onnxruntime releases the GIL). More impactful now that we VAD every track for content mapping.
 - **Cloud/serverless hosting** for the Rian pipeline — see `docs/cloud-hosting-plan.md` (Lambda + Step Functions + S3 + API Gateway; fan-out one Lambda per track; auto-triggered off Box import). Lambda suffices; SageMaker only if ASR/voiceprints are added.
 - **ASR (Whisper)** for wrong-line detection, and **speaker embeddings (ECAPA-TDNN)** for true voiceprint identity — both are "phase 2 if needed", not required now.
-- **Code signing** before distributing the installer to QC staff.
+- **Code signing** before distributing the installer to QC staff. No code change needed:
+  electron-builder signs automatically when these env vars are set at `npm run dist` time —
+  `WIN_CSC_LINK` (path to the `.pfx` certificate) and `WIN_CSC_KEY_PASSWORD`. Also sign the
+  frozen backend separately (`signtool sign /f cert.pfx /p <pw> /tr http://timestamp.digicert.com
+  /td sha256 /fd sha256 backend-dist\dqc-backend.exe`) BEFORE `npm run dist` bundles it.
+  What to buy: an **OV code-signing certificate** (~$100–300/yr, e.g. Sectigo/Certum) clears the
+  SmartScreen "Run anyway" prompt after some reputation builds; an **EV certificate** (~$300–500/yr,
+  hardware token) is trusted immediately and passes Smart App Control. Until then, testers click
+  through SmartScreen once; SAC-enforced machines need SAC off.
 
 ## 10. Conventions
 Match the existing style. Backend: FastAPI + pydantic, single in-memory session, keep `detect_speech_regions(wav_path) -> [{start,end}]` stable so alignment/characters don't change. Frontend: React + react-query, Tailwind `ink-*` theme, one screen (`App.tsx`). Commit messages end with the Co-Authored-By trailer; push to `main`.

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .base import ScriptDoc, ScriptSegment, normalize_character, parse_timecode
+from .base import ParseStats, ScriptDoc, ScriptSegment, normalize_character, parse_timecode
 
 _TIME_LINE = re.compile(r"(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{1,3})")
 # Speaker tag: "NAME:" or "- NAME:" at line start, or "[NAME]" / "(NAME)".
@@ -28,6 +28,7 @@ def parse(path: Path) -> ScriptDoc:
 
     segments: list[ScriptSegment] = []
     n = 0
+    candidates = sum(1 for b in blocks if _TIME_LINE.search(b))
     for block in blocks:
         lines = [ln for ln in block.splitlines() if ln.strip() != ""]
         if not lines:
@@ -61,4 +62,6 @@ def parse(path: Path) -> ScriptDoc:
 
     if not segments:
         raise ValueError("No cues parsed from SRT")
-    return ScriptDoc(source_format="srt", fps=None, segments=segments)
+    stats = ParseStats(candidates=candidates, parsed=len(segments),
+                       dropped=max(0, candidates - len(segments)))
+    return ScriptDoc(source_format="srt", fps=None, segments=segments, parse_stats=stats)

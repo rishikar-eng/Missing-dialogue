@@ -1,7 +1,9 @@
-# Dialogue-QC backend — fully offline, no external APIs.
+# Dialogue-QC backend. Offline analysis; the only network call is the Rian login proxy.
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 pydantic==2.9.0
 numpy==1.26.4
 soundfile==0.12.1
 onnxruntime==1.19.2
+httpx==0.28.1          # server-to-server call to the Rian auth API (login proxy)
+cryptography==49.0.0   # AES-256-CBC encryption of the Rian login payload

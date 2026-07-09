@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import ScriptDoc, ScriptSegment, canonical_key, normalize_character, parse_timecode
+from .base import ParseStats, ScriptDoc, ScriptSegment, canonical_key, normalize_character, parse_timecode
 
 __all__ = [
-    "ScriptDoc", "ScriptSegment", "parse_script",
+    "ParseStats", "ScriptDoc", "ScriptSegment", "parse_script",
     "canonical_key", "normalize_character", "parse_timecode",
 ]
 

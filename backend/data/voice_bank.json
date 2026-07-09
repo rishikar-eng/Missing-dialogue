@@ -1,0 +1,1970 @@
+[
+ {
+  "character": "SHOUMA",
+  "raw_name": "SHOUMA\n(MAIN LEAD)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Shouma Hi",
+    "id": "T7GHHnaUzNRtzfdoDO7N",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Shouma__ta",
+    "id": "kClBv3M8V2GnMkWPbu5M",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Shouma__te",
+    "id": "OpG31tYLJzj6ba377lYG",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Shouma Hi_MR",
+    "id": "PhcGptDkLTVMnchcnrpx",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Shouma Hi_BN",
+    "id": "NBWBNaHTwAouDxiUgETW",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Shouma Hi_KN",
+    "id": "dLOARsI8K26Igncfj9Vc",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Shouma Hi_ML",
+    "id": "mivUir0X1Z2MYSyaQLTD",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Little SHOUMA",
+  "raw_name": "Little SHOUMA\n(Flashbacks)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "LIL_METE_Kid_HI",
+    "id": "vk9abG6gK3jETpFYmRBt",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "LIL_METE_KID_TAMIL",
+    "id": "DyUZVVVXvJk5zEOCoPPw",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "LIL_METE_KID_TELUGU",
+    "id": "GaQCxv0pzkinZ8bNm56q",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "LIL_METE_Kid_HI_ML",
+    "id": "g4xX8P7Is3xNHVIRJrMo",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "METE_Kid_HI_KN",
+    "id": "qUW9RBc5GS6SLIVcXpOS",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "LIL_METE_Kid_HI_BN",
+    "id": "NzQX2GzUk6fnnm0eNcMK",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "LIL_METE_Kid_HI_MR",
+    "id": "ya444Yjk7kYa8MDkfyD5",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "HANTO  KARAKEDE",
+  "raw_name": "HANTO  KARAKEDE\n(Main Lead)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Hanto Karakade Hi",
+    "id": "5Ntn7kdJ8mjIGrjNtYHq",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Hanto Karakade__ta",
+    "id": "VJNxN0ciLUXgLu3oTPhR",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Hanto Karakade__te",
+    "id": "brH9zC8NZH9CimBviLdD",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Hanto Karakade Hi_MR",
+    "id": "lfSn4aVO2zOLP4j9VEew",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Hanto Karakade Hi_BN",
+    "id": "LMogVX5UOHPTjZRWWEDd",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Hanto Karakade Hi_KN",
+    "id": "AXSGs1qxh6rykwrkCVEt",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Hanto Karakade Hi_ML",
+    "id": "QOL4WBE3vS1DGD8btRqw",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Little HANTO",
+  "raw_name": "Little HANTO\n(Flashbacks)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "LIL_INCILA_Kid_HI",
+    "id": "cSqxeojpLtkIoc0wxoYp",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "LIL_INCILA_KID_TAMIL",
+    "id": "oPvedjy7ctsQuyZ4EvtL",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "LIL_INCILA_KID_TELUGU",
+    "id": "F3HyRKHqZOqFOpgMXM6F",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "LIL_INCILA_Kid_HI_MR",
+    "id": "A5c5tqKdtNK3kQIVdI5R",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "LIL_INCILA_Kid_HI_BN",
+    "id": "mewfEUHoGQQyxahllAwa",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "LIL_INCILA_Kid_HI_ML",
+    "id": "FgJmmrpmoxLQWpxffSS3",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "LIL_INCILA_Kid_HI_KN",
+    "id": "ll1pGRZvduGJmsL8q6sc",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "SHOUMA MOTHER",
+  "raw_name": "SHOUMA MOTHER\n(Flashbacks)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "Shoma Mother Hindi/Tamil",
+    "id": "vzov6y10x6nsGNFg883S",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "Shoma Mother Hindi/Tamil",
+    "id": "vzov6y10x6nsGNFg883S",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Samisha_Shoma mother__te",
+    "id": "Vt4uAp7DBeuaDalj2H8u",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Samisha_Shoma mother_ML",
+    "id": "epWpQZtOUUF4jXNaI9qd",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Samisha_Shoma mother_KN",
+    "id": "ih2f0WW6ZhoUF7ncl8yL",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Samisha_Shoma mother_BN",
+    "id": "gE0lLBNfMaTyqjJq8BYj",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Samisha_Shoma mother_MR",
+    "id": "u3mYoODwgpgsPQ0OrHCX",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Hanto’s Mom",
+  "raw_name": "Hanto’s Mom \n(Flashback)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "Shakuntala - Expressive Hindi/Tamil",
+    "id": "EGQM7bHbTHTb7VUEcOHG",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "Shakuntala - Expressive Hindi/Tamil",
+    "id": "EGQM7bHbTHTb7VUEcOHG",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Hanto's Mother_te",
+    "id": "bLEttxqEh7XriBh5ngkJ",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Hanto's Mother_KN",
+    "id": "gBAOdjQOeWC7wpcrLo9o",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Hanto's Mother_ML",
+    "id": "xSYOujVrcrhkIUFD9uTH",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Hanto's Mother_MR",
+    "id": "lz4XmJmghEGlxesk6tLl",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Hanto's Mother_BN",
+    "id": "vesmQ92xcqPL77hHZYVI",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "SACHIKE",
+  "raw_name": "SACHIKE\n(Main Lead)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Sachike Hi",
+    "id": "ZZvLMYi8jUaBGHULqXJo",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Sachike__ta",
+    "id": "1CCQxdAqQVWHCiism0o3",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Sachike__te",
+    "id": "AC5M864B0vXIqvY7FHEF",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Sachike Hi_MR",
+    "id": "gF0Kw6sjNDeACSnzRx02",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Sachike Hi_BN",
+    "id": "SGwCBgkPMlZwEPzc0u2U",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Sachike Hi_KN",
+    "id": "y2c1HMl3tBOij2gXoAh7",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Sachike Hi_ML",
+    "id": "QTiAnYWLGwbtGwjsEAE0",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "HAJIME",
+  "raw_name": "HAJIME\n(EP 1 )",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Hajime Hi",
+    "id": "t67e25obRA067jTc2TQe",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Hajime__ta",
+    "id": "gGdRysvleQrS1nBTHtNf",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Hajime__te",
+    "id": "D1jJfnHfanTXWV5g1sdP",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Hajime Hi_MR",
+    "id": "E8zdi0qb3IcdzcsROwUz",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Hajime Hi_BN",
+    "id": "xHq7RQhmnVuNanRtSV5I",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Hajime Hi_KN",
+    "id": "xoDalaKekB7eYVnBaTwt",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Hajime Hi_ML",
+    "id": "dGwc0Y4NScsTiQKJFRi2",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-HAJIME_Helena_MR",
+    "id": "31yXm1CD71luYPoc6BC1",
+    "form": "granute"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-HAJIME_Helena_BN",
+    "id": "EXgp7wgaGTjw39C84Yhf",
+    "form": "granute"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-HAJIME_Helena_ML",
+    "id": "pWlNhkZEwSKReteteSIV",
+    "form": "granute"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-HAJIME_Helena_KN",
+    "id": "mVcOetOWMRvWkq4FPolf",
+    "form": "granute"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-HAJIME_Helena_TE",
+    "id": "RyUS93LnwBTRlDP86PP0",
+    "form": "granute"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-HAJIME_Helena_TA",
+    "id": "srGmj68lWVx8ewkIgKPp",
+    "form": "granute"
+   }
+  ]
+ },
+ {
+  "character": "HOUND MAN",
+  "raw_name": "HOUND MAN",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Hound man_HI",
+    "id": "6zL96GrZMzcirDoQ1vQI",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Hound man_HI_ta",
+    "id": "GSmbBEpTpqgOTodc7bRr",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Hound man__te",
+    "id": "ziyBM1Si9cElZpOTOaqw",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Hound man_HI_MR",
+    "id": "f7XmE5DxVW9lDanWUv9d",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Hound man_HI_BN",
+    "id": "MzEKSeZb1K6sm8Abad8m",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Hound man_HI_KN",
+    "id": "GUXgB7HlwNIA35uIt6s1",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Hound man_HI_ML",
+    "id": "RglUd12cWCCtb9E4fZI6",
+    "form": "normal"
+   },
+   {
+    "lang": "hi",
+    "name": "KMR_Hound Monster_HI",
+    "id": "aGAQTPHDGSd59NKvIkAU",
+    "form": "granute"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Hound Monster_HI_ta",
+    "id": "3E8M167sXedp5Pxda1Kx",
+    "form": "granute"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Hound Monster__te",
+    "id": "nmlGD5aVnBtsK8da2pDt",
+    "form": "granute"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Hound Monster_HI_MR",
+    "id": "MUQqAlW85v3P9uRUphSR",
+    "form": "granute"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Hound Monster_HI_BN",
+    "id": "JcXTbTJSDz7rRQoUVOct",
+    "form": "granute"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Hound Monster_HI_KN",
+    "id": "u3wjmrKue1KrSZSAl6LJ",
+    "form": "granute"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Hound Monster_HI_ML",
+    "id": "E69JJctMpVDosx1ek2gH",
+    "form": "granute"
+   }
+  ]
+ },
+ {
+  "character": "Hajime’s mom",
+  "raw_name": "Hajime’s mom \n(EP 1 & 2)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "Tripti - Warm Customer Hindi/Tamil",
+    "id": "MwUMLXurEzSN7bIfIdXF",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "Tripti - Warm Customer Hindi/Tamil",
+    "id": "MwUMLXurEzSN7bIfIdXF",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR _Tripti_Hajime  mother__te",
+    "id": "PrxWWS4tgiYFt9VdPiGP",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Tripti_Hajime mother_BN",
+    "id": "lspWyVX8LjAOIxfwkmVo",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Tripti_Hajime mother_MR",
+    "id": "EDiUkA6UOZzYEkzS4pMa",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Tripti_Hajime mother_ML",
+    "id": "QFfwzaNfNT5wm2brOGZx",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Tripti_Hajime mother_KN",
+    "id": "5Koz3eyq76aVV835a0Al",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "RITSU",
+  "raw_name": "RITSU\n(Sachike's Friend)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Ritsu_HI",
+    "id": "NAMLZZFgBnn5e6uV3oCQ",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Ritsu_HI_ta",
+    "id": "V6Wa3bcVQ43huuuoLNCt",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Ritsu_HI_te",
+    "id": "rEy5NgMDCqCMLvr1D9ja",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Ritsu_HI_MR",
+    "id": "hHw7jA1dDhGoKxzus4AR",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Ritsu_HI_BN",
+    "id": "BPLn97n5HIKEzXAspq3V",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Ritsu_HI_KN",
+    "id": "J7kGyaoaXZFP3TivgmjN",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Ritsu_HI_ML",
+    "id": "hV6lqQsSUSJJV7gjOuTq",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "SOJI SHIOYA",
+  "raw_name": "SOJI SHIOYA\n(NEWS EDITOR)",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Soji Shioya Hi",
+    "id": "8GIxWrEPjkIMJcgAxDa9",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Soji Shioya__ta",
+    "id": "gfZ4ecyNyxBETep9o4kU",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Soji Shioya__te",
+    "id": "n4zVSso5BEYFO7oPceIV",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Soji Shioya Hi_MR",
+    "id": "s95mKNhl5tODFCHtMHUa",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Soji Shioya Hi_BN",
+    "id": "h3FhEdJy6n7IDqlNYF9J",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Soji Shioya Hi_KN",
+    "id": "p89pNi946Wj2hZ4CBoK5",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Soji Shioya Hi_ML",
+    "id": "pzSEuwRJTlBdZcfufSpx",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "NYELV STOMACH",
+  "raw_name": "NYELV STOMACH",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Nyelv Hi",
+    "id": "jCHVbvadHv5aO7E2IGmK",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR- NYELV BRO Hi_TA",
+    "id": "uSvftlFdvr6HWFVA9qqT",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-NYELV BRO Hi_Te",
+    "id": "0R14dLHU5YJisHGolGtQ",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Nyelv Hi_ML",
+    "id": "ZHctSMJorBJAPEr3P9f2",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Nyelv Hi_KN",
+    "id": "gRCSI79IOMNxuFUjAGfO",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Nyelv Hi_BN",
+    "id": "n0Rz2AVO8kezoZzt9uSJ",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Nyelv Hi_MR",
+    "id": "aarxCaiOHVfPRJ3kNzYz",
+    "form": "normal"
+   },
+   {
+    "lang": "hi",
+    "name": "KMR_Nyelv Stomach_HI",
+    "id": "1TButq5bfbrcLh9r2b1r",
+    "form": "granute"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Nyelv Stomach_HI_ta",
+    "id": "pqvGzFTWb4vv8yCJu3sJ",
+    "form": "granute"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Nyelv Stomach_HI_te",
+    "id": "DNt3BI1JTQ072eK7msD2",
+    "form": "granute"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Nyelv Stomach_HI_MR",
+    "id": "AIEGZDxaEeki1w0Rx3rW",
+    "form": "granute"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Nyelv Stomach_HI_BN",
+    "id": "J6hB0iJmR5rrP5hWypBb",
+    "form": "granute"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Nyelv Stomach_HI_KN",
+    "id": "9QTZsmAEXElp2PJ2djfH",
+    "form": "granute"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Nyelv Stomach_HI_ML",
+    "id": "n8RKbc6J5CT5wcdNcHOP",
+    "form": "granute"
+   }
+  ]
+ },
+ {
+  "character": "SITA STOMACH",
+  "raw_name": "SITA STOMACH",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Sita Stocmach_HI",
+    "id": "axkjpjShf75enWdRM02v",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Sita Stocmach_HI_ta",
+    "id": "nsz9KCTnUOppJmslXQCa",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Sita Stocmach_HI_te",
+    "id": "3MzBLFebcpxpkkGhXYJ0",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Sita Stocmach_HI_MR",
+    "id": "AtspSruV04lTvs53Vk6X",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Sita Stocmach_HI_BN",
+    "id": "azHXtR4urbMyYmccY62g",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Sita Stocmach_HI_KN",
+    "id": "FgNxpaXod35b7E7qhk1Z",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Sita Stocmach_HI_ML",
+    "id": "Lloh0CeOeQ3zWGQd7yTY",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Jilip Stomach",
+  "raw_name": "Jilip Stomach",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Jiip Stomach_HI",
+    "id": "4rCMLTzpdvbps6gLgzhd",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Jiip Stomach_HI_ta",
+    "id": "eJ5c9yhtj0SjtW2NtLP6",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Jiip Stomach_HI_te",
+    "id": "3MzBLFebcpxpkkGhXYJ0",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Jiip Stomach_HI_MR",
+    "id": "oCmwupVPG5zh2vTtqoV4",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Jiip Stomach_HI_BN",
+    "id": "vUbe3L3vGMPOXUQCx3wJ",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Jiip Stomach_HI_KN",
+    "id": "w5zpXwwplWoMyc7d7MzT",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Jiip Stomach_HI_ML",
+    "id": "aLn3S4KX6WUg9y6TMEdP",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "GLOTTA STOMACH",
+  "raw_name": "GLOTTA STOMACH",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Glotta Stomach_HI",
+    "id": "LZ5ddapQl7t2SH3f3aEF",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Glotta Stomach_HI_ta",
+    "id": "pqvGzFTWb4vv8yCJu3sJ",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Glotta Stomach_HI_te",
+    "id": "DNt3BI1JTQ072eK7msD2",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Glotta Stomach_HI_MR",
+    "id": "BpN3wuaUnJDdofydJbtk",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Glotta Stomach_HI_BN",
+    "id": "J0Cm7nyYNoC50RVon2CM",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Glotta Stomach_HI_KN",
+    "id": "5sH37MmDbDTLEzhTVteV",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Glotta Stomach_HI_ML",
+    "id": "oDt8y3IV6Tm0tSUGz0TW",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "LANGO STOMACH",
+  "raw_name": "LANGO STOMACH",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Lango Stomach_HI",
+    "id": "mKFaau4nzTZNSi1fPjoB",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Lango Stomach_HI_ta",
+    "id": "u1eIcNwtP7YSSPcoghic",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Lango Stomach_HI_te",
+    "id": "4YvFm6mswjVOub90PzyA",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Lango Stomach_HI_KN",
+    "id": "uYgAjWZvHGs6EmhldHrr",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Lango Stomach_HI_ML",
+    "id": "yyxmHPQupZ0gF1SNdhrV",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Lango Stomach_HI_MR",
+    "id": "yLozvJ3ANkefKbBbsDOQ",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Lango Stomach_HI_BN",
+    "id": "uDa1Tl1GtsnyieaBQmha",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "GRANUTE WHIPPLE",
+  "raw_name": "GRANUTE WHIPPLE",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Whipple Hi",
+    "id": "WhXLqx2c8Le0ZYMuevvI",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Whipple Hi_ta",
+    "id": "L3yyZUleFJuM5YD6KedJ",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Whipple Hi_te",
+    "id": "P6arP0c0AXvUj8dqbacp",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Whipple Hi_MR",
+    "id": "24zDYwoKLIMVYrpMWBXn",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Whipple Hi_BN",
+    "id": "RlyXawRvrwexfoSrbiTG",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Whipple Hi_KN",
+    "id": "nJAEUUVaHo0t39ILgXSJ",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Whipple Hi_ML",
+    "id": "7DdMcWbRpkI3dBwxgQLq",
+    "form": "normal"
+   },
+   {
+    "lang": "hi",
+    "name": "KMR_Granute Whipple Monster_HI",
+    "id": "WGhPrVlbtHENsNZUtDvM",
+    "form": "granute"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Whipple Monster_HI_TA",
+    "id": "snXF2wLEGsd0NYU7wdrf",
+    "form": "granute"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Whipple Monster_HI_TE",
+    "id": "LhMyncD0dv8lg4tAnA3C",
+    "form": "granute"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Whipple Monster_HI_KN",
+    "id": "hdGvDmumjqZgLSHz1Zjn",
+    "form": "granute"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Whipple Monster_HI_ML",
+    "id": "gP1cf2tp9rtDzjNP0dAs",
+    "form": "granute"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Whipple Monster_HI_MR",
+    "id": "tCSIZvTqbaCOn076xBPT",
+    "form": "granute"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Whipple Monster_HI_BN",
+    "id": "l8hlerUNyQjvAgWnqb7j",
+    "form": "granute"
+   }
+  ]
+ },
+ {
+  "character": "Vendor Women Gav",
+  "raw_name": "Vendor Women Gav\nFirst Appearance – EP 3",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Vendor Lady Gav Hi",
+    "id": "LFexS0KPxRcz0Wv5vLMn",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Vendor Lady Gav Hi_ta",
+    "id": "5jHMQ7j7npUYvsavsxk4",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Vendor Lady Gav Hi_te",
+    "id": "68frAr3hlwYQcsIsRyrX",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Vendor Lady Gav Hi_MR",
+    "id": "jKiNrU5RP3WojffF1TnF",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Vendor Lady Gav Hi_BN",
+    "id": "WDSuNk8LnPhv24XZVE9D",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Vendor Lady Gav Hi_KN",
+    "id": "2dZcqhfTkZzVRQJFrJk0",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Vendor Lady Gav Hi_ML",
+    "id": "XBgpGJwcSIXkSn8zx9AD",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Thief Guy",
+  "raw_name": "Thief Guy \nFirst Appearance – EP 3",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Thief Guy EP3_Hi",
+    "id": "ZWaqCxjoFglgFSVlLez7",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Thief Guy EP3_Hi_ta",
+    "id": "WYvdVNOJ55wUoV0XnxRr",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Thief Guy EP3_Hi_te",
+    "id": "cz8OFCbaGjwhQKUwCbhQ",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Thief Guy EP3_Hi_MR",
+    "id": "KUZvqDBhP80Xk5PjWFn9",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Thief Guy EP3_Hi_BN",
+    "id": "CyLz3Of5OVC9P7y0stnS",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Thief Guy EP3_Hi_KN",
+    "id": "STPGFChOQphpJhhyR9fH",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Thief Guy EP3_Hi_ML",
+    "id": "lAQUQDWNUAJcNnbUcpa1",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Kenzo Suga",
+  "raw_name": "Kenzo Suga \nFirst Appearance – EP 3",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Kenzo Suga Hi",
+    "id": "ZDdi8kV8PQKruODL70lc",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Kenzo Suga Hi_ta",
+    "id": "JElQvmptbrSy2LNA5GIa",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Kenzo Suga Hi_te",
+    "id": "8DBoaTMiu1Zhniq0YFvO",
+    "form": "normal"
+   },
+   {
+    "lang": "hi",
+    "name": "KMR_Kenzo Suga Hi_Mar",
+    "id": "IZBv7aOAiTIN3jzU5bc0",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Kenzo Suga Hi_BN",
+    "id": "xdR3YYOzPCt3r0KToyGc",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Kenzo Suga Hi_KN",
+    "id": "Iyzv4gWnrH9hvQK9dYqC",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Kenzo Suga Hi_ML",
+    "id": "Y7MvDWSKfp86TIvgz9LB",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Factory Boss EP 3",
+  "raw_name": "Factory Boss EP 3 \nFirst Appearance – EP 3",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Factory Boss EP3_Hi",
+    "id": "F4G4G0eL7S5jekTE0pzg",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Factory Boss EP3_Hi_ta",
+    "id": "Zg2EhMZ07fDxZRcjgldV",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR_Factory Boss EP3_Hi_te",
+    "id": "NJuMUkLTUuUEvYckWX1U",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Factory Boss EP3_Hi_MR",
+    "id": "B1n7x4dSYPorGzUW2b3s",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Factory Boss EP3_Hi_BN",
+    "id": "9YCe3Nb9OaekZJeRLllI",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Factory Boss EP3_Hi_KN",
+    "id": "W1k6VR3c6JshZSA4zNw5",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Factory Boss EP3_Hi_ML",
+    "id": "rk0o5xcboCjavJ8eG77r",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Farmer Uncle",
+  "raw_name": "Farmer Uncle \nFirst Appearance EP - 4",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Farmer Uncle Hi",
+    "id": "tq2vKQnFXTNV2O7ksVez",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Farmer Uncle Hi_ta",
+    "id": "FmTIxW5On1lD9LqoyjUm",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Farmer Uncle Hi_te",
+    "id": "pQ8GNlvPSIMFYObj9EgU",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Farmer Uncle Hi_MR",
+    "id": "d9sSHCnNCkeCoxCSe0ms",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Farmer Uncle Hi_BN",
+    "id": "Cqi7WhfTkUGF0IfVZNOK",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Farmer Uncle Hi_KN",
+    "id": "DOLA5hb4lpYlzWgmkqOU",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Farmer Uncle Hi_ML",
+    "id": "uWjIdivMDy2dIrU2GCrK",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Farmer Aunty",
+  "raw_name": "Farmer Aunty \nFirst Appearance EP - 4",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Farmer Aunty Hi",
+    "id": "8ckTogKC0geQG94J5oPP",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Farmer Aunty Hi_ta",
+    "id": "FmTIxW5On1lD9LqoyjUm",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Farmer Aunty Hi_te",
+    "id": "N8IsXYbzpE2Fxe5CK2Bl",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Farmer Aunty Hi_MR",
+    "id": "0BWyVK0uDcoQ19JdiLYy",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Farmer Aunty Hi_BN",
+    "id": "NO9PAcfmVLYKKDwYtRjy",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Farmer Aunty Hi_KN",
+    "id": "R4jII6KhI2LaNvz6pWFE",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Farmer Aunty Hi_ML",
+    "id": "IFpoLnoEuUoCynra3F8m",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "First Appearance EP - 4",
+  "raw_name": "First Appearance EP - 4",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-EP 5 Male Agent_HI",
+    "id": "peRBFsrNLXyWyIQLAgyD",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-EP 5 Male Agent_TA",
+    "id": "sdwMskABSjGV7DL6xB0M",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-EP 5 Male Agent_TE",
+    "id": "HIeIpH3F6zjR0JkzSYF2",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-EP 5 Male Agent_MR",
+    "id": "Xdn8TKwHc8RnT62Qu0oC",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-EP 5 Male Agent_BN",
+    "id": "kYMkiZKoshTqiwCGS378",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-EP 5 Male Agent_KN",
+    "id": "peRBFsrNLXyWyIQLAgyD",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-EP 5 Male Agent_ML",
+    "id": "MKgw1QIz0j5h8ucrKN04",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Black HAT Guy",
+  "raw_name": "Black HAT Guy  \nFirst appearance - EP 5",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Black Hat Gav Hi",
+    "id": "budfs0j70SAiYCiCbOFK",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Black Hat Gav Hi_ta",
+    "id": "Ik5dqZ66OSL8muWsQSvm",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Black Hat Gav Hi_te",
+    "id": "OkfvBL9vhexZQW2c91ko",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Black Hat Gav Hi_MR",
+    "id": "tYWAr2rLPd6m57eJpaDh",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Black Hat Gav Hi_BN",
+    "id": "xrtxRXPzshScSpIxof4Q",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Black Hat Gav Hi_KN",
+    "id": "3uLc8Y6jbsvAhDAZt9Sz",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Black Hat Gav Hi_ML",
+    "id": "ARvqGFeFqbKQHs2fwgZN",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Bush",
+  "raw_name": "Bush (Shoma’s Dad) \nFirst appearance - EP 5",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Bush (Shoumu's Dad) Hi",
+    "id": "NPHJiynVwUb8HqV4oShH",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_ta",
+    "id": "FQbRZKo5WQlpJ2aqo4QY",
+    "form": "normal"
+   },
+   {
+    "lang": "te",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_te",
+    "id": "ZSnaUct7Dab69dq2gfGC",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_MR",
+    "id": "mSdWmDDiEAQ0lZx77aUd",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_BN",
+    "id": "COWU0BisdSnX4IDkbCFh",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_KN",
+    "id": "vze0vROPrqecjhWL7167",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR-Bush (Shoumu's Dad) Hi_ML",
+    "id": "rnGL7LSJpTopP9m8WTGW",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Suetsuvu Ekava EP7",
+  "raw_name": "Suetsuvu Ekava EP7 (0:06:29)",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Suetsuvu Ekava",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Tamaki - ep 7",
+  "raw_name": "Tamaki - ep 7 ( 00:01:40:07)",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Tamaki",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Sachike Grandmother  - ep 7",
+  "raw_name": "Sachike Grandmother  - ep 7 ( 00:05:11:0)",
+  "voices": [
+   {
+    "lang": "te",
+    "name": "KMR_Sachike Grandmother_TE",
+    "id": "503tJjpcJqJMnOPUe9F8",
+    "form": "normal"
+   },
+   {
+    "lang": "ta",
+    "name": "KMR_Sachike Grandmother_TA",
+    "id": "DJDF6iD5k9BZnb1ANBOt",
+    "form": "normal"
+   },
+   {
+    "lang": "bn",
+    "name": "KMR_Sachike Grandmother_BN",
+    "id": "iDFci5airn3U0bK3Y20x",
+    "form": "normal"
+   },
+   {
+    "lang": "kn",
+    "name": "KMR_Sachike Grandmother_KN",
+    "id": "O3hofN0j8JH4UGFECJno",
+    "form": "normal"
+   },
+   {
+    "lang": "ml",
+    "name": "KMR_Sachike Grandmother_ML",
+    "id": "qyU5i8QTD9zVFAOzlHM2",
+    "form": "normal"
+   },
+   {
+    "lang": "mr",
+    "name": "KMR_Sachike Grandmother_MR",
+    "id": "yhgWOmKICdVmkUY0DhKo",
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "art dealer monster - ep 8",
+  "raw_name": "art dealer monster - ep 8 ( 00:13:44:11 )",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-art dealer monster",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "White tshirt girl - ep 9",
+  "raw_name": "White tshirt girl - ep 9 ( 00:02:29:14)",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-White t-shirt girl",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Red tshirt girl - ep 9   Kirari",
+  "raw_name": "Red tshirt girl - ep 9 ( 00:02:29:14) Kirari",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "LIL_INCILA_Kid_HI",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Old lady shopeeper distributing candy - ep 9",
+  "raw_name": "Old lady shopeeper distributing candy - ep 9 ( 00:06:52:09 )",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR_Elizabeth_EP1_old lady",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Random shopkeeper/ cafe worker - ep 9",
+  "raw_name": "Random shopkeeper/ cafe worker - ep 9 ( 00:07:06:13 )",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Dance acadmy teacher - ep 9 - 00:11:15:17",
+  "raw_name": "Dance acadmy teacher - ep 9 - 00:11:15:17",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 2",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Random monster ? - ep 9 - 00:16:56:00",
+  "raw_name": "Random monster ? - ep 9 - 00:16:56:00",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Granute Whipple Man_HI",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Construction site manager - ep 10 - 00:02:18:12",
+  "raw_name": "Construction site manager - ep 10 - 00:02:18:12",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Random lady - ep 10 - 00:10:36:04",
+  "raw_name": "Random lady - ep 10 - 00:10:36:04",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random female 2",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Random woman - talking in restaurant",
+  "raw_name": "Random woman - talking in restaurant \nep 11\n1:47",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random female 3",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Girl at the restaurant",
+  "raw_name": "Girl at the restaurant (Emi Torigaya)\nep 11\n2:53",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Emi",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Other girl at the restaurant",
+  "raw_name": "Other girl at the restaurant (Hana Torigaya)\nep 11\n2:53",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Hana",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Possessed kid",
+  "raw_name": "Possessed kid (Granute Early)\nep 11\n16:31",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Hound man_HI",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Granute Laage Nine",
+  "raw_name": "Granute Laage Nine\nep 12\n12:20",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Laage9/jellyfish",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Young Jiip and Siita",
+  "raw_name": "Young Jiip and Siita\nEp 13\n8:29",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Jiip Stomach_HI KMR_Sita Stocmach_HI",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Man in cafe",
+  "raw_name": "Man in cafe \nEp 13\n11:25",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Woman in cafe",
+  "raw_name": "Woman in cafe \nEp 13\n11:25",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random female 3",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Woman in cafe 2",
+  "raw_name": "Woman in cafe 2\nEp 13\n11:25",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random female 2",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Man in cafe 2",
+  "raw_name": "Man in cafe 2\nEp 13\n11:25",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 3",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Street musician   / Kani",
+  "raw_name": "Street musician (Granute Rojoe) / Kani\nEP 13\n14:56",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Rojoe",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Random musician",
+  "raw_name": "Random musician \nep 13\n15:13",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR_Thief Guy EP3",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Man eating food",
+  "raw_name": "Man eating food\nep 13\n15:19",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR-Farmer Uncle Hi",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Lady in red 1",
+  "raw_name": "Lady in red 1\nEP 13\n15:22",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Ritsu_HI",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Lady in red 2",
+  "raw_name": "Lady in red 2\nEP 13\n15:25",
+  "voices": [
+   {
+    "lang": "hi",
+    "name": "KMR_Vendor Lady Gav Hi",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Evil minions speaking togther",
+  "raw_name": "Evil minions speaking togther \nEP 14\n1:45",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR _Tripti_Hajime mother",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Crowd of customers",
+  "raw_name": "Crowd of customers \nep 15\n7:52",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Random man 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Police officer",
+  "raw_name": "Police officer\nep 15\n15:44",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-COP/Random man",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Wataru Kawahara",
+  "raw_name": "Wataru Kawahara\nep 15\n15:52",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Wataru Magen",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Judge",
+  "raw_name": "Judge (cant be seen but can be heard)\nep 15 \n15:55",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-judge/random man",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Granute Laage Nine",
+  "raw_name": "Granute Laage Nine\nep 15 (human form) \nand same guy from ep 12\n12:20",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Laage9/jellyfish",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Lawyer",
+  "raw_name": "Lawyer\nep 15\n18:04",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-lawyer/random man",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Actor in movie",
+  "raw_name": "Actor in movie\nep 16\n10:55",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "Random man 2",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Actress in movie",
+  "raw_name": "Actress in movie\nep 16\n10:55",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "random female 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Person watching movie",
+  "raw_name": "Person watching movie\nep 16\n10:56",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "Random man 1",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Granute Laage Nine after turning into a evil Kamen Rider version/ Vram",
+  "raw_name": "Granute Laage Nine after turning into a evil Kamen Rider version/ Vram\nep 18\n3:31",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-Laage9/jellyfish",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Suspicious red scarf woman",
+  "raw_name": "Suspicious red scarf woman (Granute Chooul)\nEP 18\n14:02",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR_Vendor Lady Gav",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ },
+ {
+  "character": "Policeman in restaurant",
+  "raw_name": "Policeman in restaurant\nEP 21\n16:20",
+  "voices": [
+   {
+    "lang": "?",
+    "name": "KMR-COP/Random man",
+    "id": null,
+    "form": "normal"
+   }
+  ]
+ }
+]

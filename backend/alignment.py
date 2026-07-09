@@ -28,6 +28,12 @@ from .vad import detect_speech_regions
 
 Interval = tuple[float, float]
 
+# The per-track capture offset is auto-estimated and subtracted before scoring so a
+# constant script-vs-audio shift doesn't false-flag every line. But a LARGE offset is
+# itself a finding — the whole track is out of sync with the script — and silently
+# correcting it would hide a real delivery problem. Above this, we emit a warning.
+SYNC_WARN_OFFSET_S = 0.75
+
 
 class AlignError(BaseModel):
     type: str                       # MISSING | MISALIGNED | EXTRA
@@ -257,16 +263,40 @@ def align_script_to_channels(
                 e.text = text_by_index.get(e.script_index)
 
     all_errors = [e for cr in channel_reports for e in cr.errors]
+
+    # Whole-track sync warnings: a big estimated offset means the track only lines
+    # up after shifting it — i.e. the delivered audio is out of sync with the
+    # script. We still score with the correction (so per-line results are useful),
+    # but surface the shift; otherwise a uniformly late/early track looks clean.
+    sync_warnings = [
+        {
+            "character": cr.character,
+            "channel": cr.channel,
+            "offset_s": cr.offset_s,
+            # offset_s = median(audio_onset - script_onset): positive => the audio
+            # runs LATE vs the script. Describe the track's state (not a corrective
+            # shift, which readers can apply in the wrong direction).
+            "message": f"Track '{cr.channel}' runs {abs(cr.offset_s):.2f}s "
+                       f"{'late' if cr.offset_s > 0 else 'early'} versus the script — "
+                       f"the whole track may be out of sync. "
+                       f"(Per-line results below are scored AFTER correcting for this.)",
+        }
+        for cr in channel_reports
+        if abs(cr.offset_s) >= SYNC_WARN_OFFSET_S
+    ]
+
     return {
         "tol_s": tol_s,
         "channels": [cr.model_dump() for cr in channel_reports],
         "errors": [e.model_dump() for e in all_errors],
         "unmapped_characters": unmapped,
+        "sync_warnings": sync_warnings,
         "summary": {
             "n_characters_checked": len(channel_reports),
             "n_missing": sum(cr.n_missing for cr in channel_reports),
             "n_misaligned": sum(cr.n_misaligned for cr in channel_reports),
             "n_extra": sum(cr.n_extra for cr in channel_reports),
             "n_unmapped": len(unmapped),
+            "n_sync_warnings": len(sync_warnings),
         },
     }

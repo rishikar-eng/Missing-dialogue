@@ -28,10 +28,21 @@ class ScriptSegment(BaseModel):
         return max(0.0, self.end_s - self.start_s)
 
 
+class ParseStats(BaseModel):
+    """How much of the script file the parser actually understood. A dropped row
+    is a line that LOOKED like dialogue (timecoded) but couldn't be parsed — those
+    lines are never checked at all, so silently dropping them would be a false
+    negative for the whole QC pass."""
+    candidates: int               # rows/cues that look like dialogue
+    parsed: int                   # segments successfully produced
+    dropped: int                  # candidates - parsed
+
+
 class ScriptDoc(BaseModel):
     source_format: str            # "docx" | "srt" | "csv"
     fps: float | None = None      # set when timecodes were frame-based (HH:MM:SS:FF)
     segments: list[ScriptSegment]
+    parse_stats: ParseStats | None = None
 
     def characters(self) -> set[str]:
         return {c for s in self.segments for c in s.characters}
