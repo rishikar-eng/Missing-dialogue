@@ -168,9 +168,10 @@ export const api = {
   progress: () => get<Progress>("/api/progress"),
   authLogin: (body: LoginBody) => post<LoginEnvelope>("/api/auth/login", body),
   authLogout: (rt: string, at?: string) => post<LoginEnvelope>("/api/auth/logout", { rt, at }),
-  // All MISSING lines cut from the ORIGINAL audio, compiled into one WAV.
-  missingCompilationUrl: (padS = 1.25, tolS = 1.0) =>
-    `${API}/api/missing-compilation?pad_s=${padS}&tol_s=${tolS}`,
+  // MISSING lines cut from the ORIGINAL audio, as one WAV. mode "stitch" = clips
+  // back-to-back; "timeline" = full episode-length track, silent except at the gaps.
+  missingCompilationUrl: (mode: "stitch" | "timeline" = "stitch", padS = 1.0, tolS = 1.0) =>
+    `${API}/api/missing-compilation?mode=${mode}&pad_s=${padS}&tol_s=${tolS}`,
   // channel=null + source:"original" slices the original-language reference file.
   audioSliceUrl: (channel: string | null, startS: number, endS: number, padS?: number,
                   opts?: { source?: "dub" | "original" }) =>

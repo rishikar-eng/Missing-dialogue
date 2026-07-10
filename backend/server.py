@@ -424,10 +424,14 @@ def _missing_windows(tol_s: float, pad_s: float) -> list[tuple[float, float]]:
 
 
 @app.get("/api/missing-compilation")
-def missing_compilation(pad_s: float = 1.25, gap_s: float = 0.6, tol_s: float = 1.0):
-    """One WAV of every MISSING line, cut from the ORIGINAL audio with ~pad_s of
-    context on each side and a short silence between clips — a re-record worklist
-    the team can play straight through. Requires an original-language file."""
+def missing_compilation(pad_s: float = 1.0, gap_s: float = 0.6, tol_s: float = 1.0, mode: str = "stitch"):
+    """A WAV of every MISSING line cut from the ORIGINAL audio (±pad_s context).
+    Requires the original-language file. Two modes:
+      mode="stitch"   — the clips back-to-back with a short silence between them
+                        (a short re-record worklist to play straight through).
+      mode="timeline" — a full episode-length track, silent everywhere EXCEPT at the
+                        missing lines, where the original plays at its real timecode
+                        (drop it onto the episode/dub timeline in an editor)."""
     if STATE.get("doc") is None:
         raise HTTPException(status_code=400, detail="Run analyze first")
     orig = STATE.get("original_audio_path")
@@ -441,28 +445,44 @@ def missing_compilation(pad_s: float = 1.25, gap_s: float = 0.6, tol_s: float = 
         with sf.SoundFile(str(orig)) as f:
             sr = f.samplerate
             total = len(f)
-            gap = np.zeros(int(gap_s * sr), dtype=np.float32)
-            parts: list[np.ndarray] = []
-            for s, en in windows:
-                i0, i1 = max(0, int(s * sr)), min(total, int(en * sr))
-                if i1 <= i0:
-                    continue
-                f.seek(i0)
-                d = f.read(i1 - i0, dtype="float32", always_2d=False)
-                if getattr(d, "ndim", 1) > 1:
-                    d = d.mean(axis=1)
-                parts.append(np.asarray(d, dtype=np.float32))
-                parts.append(gap)
+            if mode == "timeline":
+                # Silent buffer the full length of the original; paste each missing
+                # span at its true position so it lines up with the episode timeline.
+                out = np.zeros(total, dtype=np.float32)
+                for s, en in windows:
+                    i0, i1 = max(0, int(s * sr)), min(total, int(en * sr))
+                    if i1 <= i0:
+                        continue
+                    f.seek(i0)
+                    d = f.read(i1 - i0, dtype="float32", always_2d=False)
+                    if getattr(d, "ndim", 1) > 1:
+                        d = d.mean(axis=1)
+                    out[i0:i0 + len(d)] = d
+                fname = f"missing-lines-timeline-{len(windows)}.wav"
+            else:
+                gap = np.zeros(int(gap_s * sr), dtype=np.float32)
+                parts: list[np.ndarray] = []
+                for s, en in windows:
+                    i0, i1 = max(0, int(s * sr)), min(total, int(en * sr))
+                    if i1 <= i0:
+                        continue
+                    f.seek(i0)
+                    d = f.read(i1 - i0, dtype="float32", always_2d=False)
+                    if getattr(d, "ndim", 1) > 1:
+                        d = d.mean(axis=1)
+                    parts.append(np.asarray(d, dtype=np.float32))
+                    parts.append(gap)
+                if not parts:
+                    raise HTTPException(status_code=404, detail="No audio extracted for the missing lines")
+                out = np.concatenate(parts[:-1])  # drop trailing gap
+                fname = f"missing-lines-original-{len(windows)}clips.wav"
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(status_code=415, detail="Could not decode the original audio file")
-    if not parts:
-        raise HTTPException(status_code=404, detail="No audio extracted for the missing lines")
-    out = np.concatenate(parts[:-1])  # drop trailing gap
     buf = io.BytesIO()
     sf.write(buf, out, sr, format="WAV", subtype="PCM_16")
-    headers = {"Content-Disposition": f'attachment; filename="missing-lines-original-{len(windows)}clips.wav"'}
+    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
     return Response(content=buf.getvalue(), media_type="audio/wav", headers=headers)
 
 

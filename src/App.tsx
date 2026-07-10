@@ -838,63 +838,75 @@ function PathRow({
   );
 }
 
-// A re-record worklist: all MISSING lines cut from the ORIGINAL audio, stitched
-// back-to-back (with ~1.25s of context each) into one WAV to play through.
+// The missing lines, from the ORIGINAL audio, in two forms:
+//   stitch   — clips back-to-back (short worklist to play through)
+//   timeline — full episode-length track, silent except at the gaps (drop on the timeline)
 function MissingCompilation({ nMissing, tolS }: { nMissing: number; tolS: number }) {
-  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | "stitch" | "timeline">(null);
+  const [built, setBuilt] = useState<null | { mode: "stitch" | "timeline"; url: string; name: string }>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const build = async () => {
-    setStatus("loading");
+  const build = async (mode: "stitch" | "timeline") => {
+    setBusy(mode);
     setErr(null);
     try {
-      const res = await fetch(api.missingCompilationUrl(1.25, tolS));
+      const res = await fetch(api.missingCompilationUrl(mode, 1.0, tolS));
       if (!res.ok) {
         const d = await res.json().catch(() => null);
         throw new Error(d?.detail || `HTTP ${res.status}`);
       }
       const blob = await res.blob();
-      setUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return URL.createObjectURL(blob);
+      setBuilt((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url);
+        return {
+          mode,
+          url: URL.createObjectURL(blob),
+          name: mode === "timeline" ? `missing-lines-timeline-${nMissing}.wav` : `missing-lines-original-${nMissing}.wav`,
+        };
       });
-      setStatus("ready");
     } catch (e) {
       setErr((e as Error).message);
-      setStatus("error");
+      setBuilt(null);
+    } finally {
+      setBusy(null);
     }
   };
 
   const download = () => {
-    if (!url) return;
+    if (!built) return;
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `missing-lines-original-${nMissing}.wav`;
+    a.href = built.url;
+    a.download = built.name;
     a.click();
   };
 
   return (
     <div className="mt-3 border border-ink-700 rounded-lg px-3 py-2.5 bg-ink-800/40">
-      <div className="text-sm text-ink-100 font-medium">Missing lines — compiled from the original ({nMissing})</div>
+      <div className="text-sm text-ink-100 font-medium">Missing lines — from the original audio ({nMissing})</div>
       <div className="text-[11px] text-ink-400 mt-0.5">
-        Every missing line cut from the original audio with ~1.25s of context, back-to-back — a re-record
-        worklist to play straight through.
+        Every missing line taken from the original (±1s context). Build a short listen-through, or a
+        full episode-length track that's silent except at the gaps — to lay over the dub timeline.
       </div>
-      <div className="flex items-center gap-3 mt-2 flex-wrap">
-        <button className="btn-ghost" onClick={build} disabled={status === "loading"}>
-          {status === "loading" ? "Building…" : status === "ready" ? "Rebuild" : "🎧 Build audio"}
+      <div className="flex items-center gap-2 mt-2 flex-wrap">
+        <button className="btn-ghost" onClick={() => build("stitch")} disabled={busy !== null}>
+          {busy === "stitch" ? "Building…" : "🎧 Listen-through"}
         </button>
-        {status === "ready" && url && (
+        <button className="btn-ghost" onClick={() => build("timeline")} disabled={busy !== null}>
+          {busy === "timeline" ? "Building…" : "🎼 Full-length timeline"}
+        </button>
+        {built && (
           <>
-            <audio key={url} controls preload="metadata" className="h-8 flex-1 min-w-[240px]">
-              <source src={url} type="audio/wav" />
+            <span className="text-[10px] text-ink-500">
+              {built.mode === "timeline" ? "full-length" : "listen-through"}
+            </span>
+            <audio key={built.url} controls preload="metadata" className="h-8 flex-1 min-w-[220px]">
+              <source src={built.url} type="audio/wav" />
             </audio>
             <button className="btn-primary" onClick={download}>↓ Download WAV</button>
           </>
         )}
       </div>
-      {status === "error" && <div className="text-xs text-err mt-2">{err}</div>}
+      {err && <div className="text-xs text-err mt-2">{err}</div>}
     </div>
   );
 }
