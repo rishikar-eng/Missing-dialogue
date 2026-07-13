@@ -35,8 +35,8 @@ vox-api-docs*.html
 TECH_STACK*.md
 
 # Local analysis scratch (per-episode VAD caches + ad-hoc test results in the repo root)
-e2*_*.json
-e2*_*.txt
+e[0-9]*_*.json
+e[0-9]*_*.txt
 
 # Local machine settings
 .claude/settings.local.json
