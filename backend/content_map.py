@@ -26,6 +26,7 @@ Nothing here removes a name-based mapping; it only fills gaps and reports confli
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .characters import CharacterEntity, _name_score
@@ -46,6 +47,60 @@ PROMISCUOUS_MIN_CHARS = 3   # ...and covering this many characters marks it wall
 FLAG_PREC = 0.35       # a track whose best-matching character reaches this precision...
 FLAG_MARGIN = 0.15     # ...and beats the name-mapped character by this margin is flagged
 VERIFIED_ABSENT_RECALL = 0.15  # below this best-recall, a character's audio is "verified absent"
+
+# Group stems (WALLA / GIRL CROWD / LADY BIT …) can bundle several small parts into one
+# track. A bit-part with no dedicated track whose lines fall inside a genuinely SHARED
+# stem is DELIVERED (bundled), not missing — flagging it "No audio" is a false alarm. We
+# label it 'grouped' instead.
+#
+# Whether a group-NAMED track is really a shared bundle is decided by CONTENT, not the
+# name: if one character dominates the track's speech (high owner precision) it's really
+# THAT character's dedicated stem — even when generically named 'LADY BIT 02' (which on
+# Gavv E29 is 100% one bit-part) — so its owner is mapped normally. Only a track no
+# single character dominates is a "real group stem". This is what keeps a solo track
+# named 'MARIA VOX'/'BG SINGER'/'BORTAN (CROWD SCENE)' with its true owner instead of
+# tearing it off (false "No audio") or letting it absorb others (false "grouped").
+#
+# Still heuristic (VAD can't PROVE a voice is in a shared stem, only that the part's line
+# windows fall on its speech), so 'grouped' also requires a genuinely small part with
+# strong coverage and stays a reviewable bucket (with a listen sample), never silent.
+GROUP_COVER_RECALL = 0.50     # a shared stem must cover >=50% of the part's line-time
+GROUP_OWNER_PREC = 0.50       # a group-NAMED track one char dominates above this is really their solo stem
+BITPART_MAX_LINES = 6         # only small parts qualify for 'grouped' (protects real leads)...
+BITPART_MAX_SPEECH_S = 30.0   # ...by BOTH line count and total speech (a 6-line monologue is not a bit-part)
+# Group-stem name tokens. Includes plurals/synonyms/abbreviations seen in delivery
+# folders. Safe to be liberal: a solo track that merely carries one of these tokens is
+# rejected downstream because it's the confident name-match of a real-named character.
+_GROUP_TOKENS = {"walla", "wallas", "crowd", "crowds", "mob", "mobs", "group", "groups",
+                 "bit", "bits", "ensemble", "background", "bg", "ambience", "ambient",
+                 "chatter", "gang", "gangs", "kids", "villager", "villagers", "students",
+                 "guests", "passengers", "patrons", "reactions", "vox", "grp"}
+# Unambiguous stem words to also catch when the name has no separators ('WALLA01').
+_GROUP_SUBSTR = ("walla", "crowd", "chatter", "ensemble", "ambience")
+
+
+def _is_group_stem(channel: str) -> bool:
+    """True for tracks that bundle many small parts (WALLA, GIRL CROWD, LADY BIT…).
+    Token-based (so 'Rabbit'/'Bituin' don't match on 'bit'), plus a substring pass for
+    a few unambiguous stem words so separator-less names ('WALLA01') still match.
+    NOTE: this is a NAME test only — callers additionally require the track NOT to be the
+    confident dedicated track of a real-named character before treating it as a bundle."""
+    low = channel.lower()
+    if any(t in _GROUP_TOKENS for t in re.split(r"[^a-z0-9]+", low)):
+        return True
+    squashed = re.sub(r"[^a-z0-9]+", "", low)
+    return any(w in squashed for w in _GROUP_SUBSTR)
+
+
+def _looks_like_bitpart(ent: CharacterEntity) -> bool:
+    """A genuinely SMALL part — safe to treat as 'grouped' when a group stem covers it.
+    Gated on BOTH line count and total speech so a role-named lead ('Narrator' with
+    many/long lines) is never mistaken for a bit-part and silenced. (An earlier version
+    also short-circuited to True for any all-role-word name regardless of size — that
+    let a role-named lead be grouped away; removed.)"""
+    return ent.line_count <= BITPART_MAX_LINES and ent.total_speech_s <= BITPART_MAX_SPEECH_S
+
+
 
 
 def _total(iv: list[Interval]) -> float:
@@ -123,6 +178,8 @@ def verify_mapping(
                      kind="name_mismatch"   track labelled X but voice matches Y
                      kind="rescued"         unmapped char recovered by voice timeline
                      kind="possible_match"  weak candidate — NOT mapped, human confirms
+                     kind="grouped"         bit-part with no own track, delivered inside a
+                                            group stem (walla/crowd) — expected, not missing
                      kind="verified_absent" char with no track AND no voice match anywhere
     """
     ent_by_id = {e.id: e for e in characters}
@@ -135,27 +192,61 @@ def verify_mapping(
     # Characters that actually have scripted lines (others are irrelevant to QC).
     speaking = [e for e in characters if spans_by_char.get(e.id)]
 
-    # 1) RESCUE — unmapped speaking characters, best free track by recall.
-    taken = set(mapping.values())
-    unmapped = [e for e in speaking if e.id not in mapping]
-    # Greedy by best available recall so the strongest matches claim tracks first.
-    def best_free(cid: str) -> tuple[str | None, float, float]:
-        best = (None, 0.0, 0.0)
-        for ch in channel_names:
-            if ch in taken:
-                continue
-            s = scores.get((ch, cid))
-            if s and s["recall"] > best[1]:
-                best = (ch, s["recall"], s["precision"])
-        return best
-
-    # How many characters does each track substantially cover? Crowd/walla stems
-    # overlap many characters' lines, so their "matches" are weak evidence.
+    # How many characters does each track substantially cover? (Used only for the
+    # rescue crowd/walla note.)
     def n_covered(ch: str) -> int:
         return sum(
             1 for e in speaking
             if scores.get((ch, e.id), {}).get("recall", 0.0) >= PROMISCUOUS_RECALL
         )
+
+    # Owner precision: the largest fraction of a track's speech that belongs to any ONE
+    # character. A dedicated stem (even a generically-named one like 'LADY BIT 02') is
+    # dominated by its owner (high); a genuinely shared crowd/walla bundle is not (low).
+    # This CONTENT signal — not the track name — decides whether a group-NAMED track is
+    # really a shared bundle, so a solo track named 'MARIA VOX'/'BG SINGER' stays its
+    # owner's and a thin bit-stem 'LADY BIT 02' gets mapped to its one bit-part.
+    _owner_prec: dict[str, float] = {}
+    def owner_prec(ch: str) -> float:
+        if ch not in _owner_prec:
+            _owner_prec[ch] = max(
+                (scores.get((ch, e.id), {}).get("precision", 0.0) for e in speaking),
+                default=0.0,
+            )
+        return _owner_prec[ch]
+
+    def _is_real_group_stem(ch: str) -> bool:
+        """Named like a bundle AND dominated by no single character — a genuinely shared
+        stem. A group-named track one char owns (high owner precision) is that char's
+        dedicated stem, NOT a bundle, so it is mapped to them instead."""
+        return _is_group_stem(ch) and owner_prec(ch) < GROUP_OWNER_PREC
+
+    # 0) DEMOTE — a character name-matched to a genuinely shared group stem they do NOT
+    # dominate ('Girl' -> 'GIRL CROWD 03') was absorbed by name only, not delivered a
+    # dedicated track. Unmap so content rescue / the GROUPED pass re-handle them. A real
+    # solo track (its owner dominates it) is never a real group stem, so it is KEPT —
+    # this is what prevents tearing 'MARIA VOX'/'BORTAN (CROWD SCENE)' off its true owner.
+    for cid, ch in list(mapping.items()):
+        if _is_real_group_stem(ch):
+            del mapping[cid]
+            mapped_by.pop(cid, None)
+
+    # 1) RESCUE — unmapped speaking characters, best free track by recall. A group-NAMED
+    # track a bit-part actually dominates ('LADY BIT 02' = only Agent) IS a valid rescue
+    # target; only genuinely shared bundles are skipped (the GROUPED pass handles those).
+    taken = set(mapping.values())
+    unmapped = [e for e in speaking if e.id not in mapping]
+    possible_ids: set[str] = set()   # chars surfaced as possible_match (kept out of 'grouped')
+    # Greedy by best available recall so the strongest matches claim tracks first.
+    def best_free(cid: str) -> tuple[str | None, float, float]:
+        best = (None, 0.0, 0.0)
+        for ch in channel_names:
+            if ch in taken or _is_real_group_stem(ch):
+                continue
+            s = scores.get((ch, cid))
+            if s and s["recall"] > best[1]:
+                best = (ch, s["recall"], s["precision"])
+        return best
 
     # Sort rescues by their best recall, strongest first.
     ranked = sorted(unmapped, key=lambda e: best_free(e.id)[1], reverse=True)
@@ -186,6 +277,7 @@ def verify_mapping(
             # Weak: plausible but not proof — a busy track can cover a small part
             # by chance. Do NOT map (the character stays in the no-audio list);
             # surface the candidate for a human to confirm by ear.
+            possible_ids.add(e.id)
             crowd = (f" '{ch}' also covers {n_covered(ch) - 1} other characters' lines "
                      f"(likely a crowd/walla track)." if promiscuous else "")
             issues.append({
@@ -196,6 +288,48 @@ def verify_mapping(
                            f"low to auto-assign).{crowd} Listen to confirm; still "
                            f"counted as no-audio below.",
             })
+
+    # 1.5) GROUPED — a genuinely SMALL part with no dedicated track whose lines fall
+    # inside a real group stem (walla/crowd/bit) is DELIVERED (bundled), not missing.
+    # Requirements (all must hold, so we don't silence real missing dialogue):
+    #   * bit-part (few lines AND little speech) — a role-named LEAD never qualifies;
+    #   * the stem is a genuinely shared bundle — NO single character dominates it
+    #     (owner precision < GROUP_OWNER_PREC); a stem one char owns was mapped above;
+    #   * STRONG coverage (>=GROUP_COVER_RECALL of the part's line-time), not a weak
+    #     coincidental overlap with a continuously-chattering track;
+    #   * not already surfaced as a possible_match (a plausible dedicated track wins).
+    # Heuristic by nature (VAD can't PROVE the voice is in the bundle), so it stays a
+    # reviewable bucket with a listen sample — never a silent "clean".
+    group_channels = [ch for ch in channel_names if _is_real_group_stem(ch)]
+    grouped_ids: set[str] = set()
+    grouped_channel: dict[str, str] = {}
+    for e in speaking:
+        if e.id in mapping or e.id in possible_ids or not _looks_like_bitpart(e):
+            continue
+        best_ch, best_rec, best_prec = None, 0.0, 0.0
+        for ch in group_channels:
+            s = scores.get((ch, e.id))
+            if s and s["recall"] > best_rec:
+                best_ch, best_rec, best_prec = ch, s["recall"], s["precision"]
+        if not best_ch or best_rec < GROUP_COVER_RECALL:
+            continue
+        grouped_ids.add(e.id)
+        grouped_channel[e.id] = best_ch
+        win = _sample_window(spans_by_char.get(e.id, []), track_regions.get(best_ch, []))
+        samples = []
+        if win:
+            samples.append({
+                "label": f"'{best_ch}' at {e.name}'s line", "channel": best_ch,
+                "start_s": round(win[0], 3), "end_s": round(win[1], 3),
+            })
+        plural = "" if e.line_count == 1 else "s"
+        issues.append({
+            "kind": "grouped", "character": e.id, "character_name": e.name,
+            "channel": best_ch, "recall": best_rec, "precision": best_prec, "samples": samples,
+            "message": f"'{e.name}' ({e.line_count} line{plural}) has no dedicated track; their "
+                       f"lines fall inside the group stem '{best_ch}' (walla/crowd/bit). Normal "
+                       f"for small parts — treated as delivered, not missing. Listen to confirm.",
+        })
 
     # 2) FLAG — a name-mapped track whose voice best matches a different character.
     for cid, ch in list(name_mapping.items()):
@@ -241,8 +375,9 @@ def verify_mapping(
             })
 
     # 3) VERIFIED ABSENT — still-unmapped speaking chars: is their voice anywhere?
+    # (grouped bit-parts are accounted for above — don't also call them absent.)
     for e in speaking:
-        if e.id in mapping:
+        if e.id in mapping or e.id in grouped_ids:
             continue
         best_rec = max((scores.get((ch, e.id), {}).get("recall", 0.0) for ch in channel_names), default=0.0)
         if best_rec < VERIFIED_ABSENT_RECALL:

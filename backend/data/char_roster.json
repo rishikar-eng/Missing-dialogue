@@ -1,0 +1,141 @@
+[
+ {
+  "name": "Shouma",
+  "key": "shouma",
+  "aliases": [
+   "Shouma"
+  ],
+  "voice_name": "KMR_GAV_Shouma"
+ },
+ {
+  "name": "Shouma as hero",
+  "key": "shouma_as_hero",
+  "aliases": [
+   "Shouma as hero",
+   "Shouma"
+  ],
+  "voice_name": "KMR_GAV_Shouma as hero"
+ },
+ {
+  "name": "Hajime",
+  "key": "hajime",
+  "aliases": [
+   "Hajime"
+  ],
+  "voice_name": "KMR_GAV_Hajime"
+ },
+ {
+  "name": "Hanto Karakida - Writer",
+  "key": "hanto_karakida_writer",
+  "aliases": [
+   "Hanto Karakida - Writer",
+   "Hanto Karakida"
+  ],
+  "voice_name": "KMR_GAV_Hanto Karakida"
+ },
+ {
+  "name": "Keiko Shirakabe",
+  "key": "keiko_shirakabe",
+  "aliases": [
+   "Keiko Shirakabe"
+  ],
+  "voice_name": "KMR_GAV_Keiko Shirakabe"
+ },
+ {
+  "name": "Writer Hanto’s mentor",
+  "key": "writer_hanto_s_mentor",
+  "aliases": [
+   "Writer Hanto’s mentor"
+  ],
+  "voice_name": "KMR_GAV_Writer Hanto's Mentor"
+ },
+ {
+  "name": "Random man",
+  "key": "random_man",
+  "aliases": [
+   "Random man"
+  ],
+  "voice_name": "KMR_GAV_Random Man"
+ },
+ {
+  "name": "Random man as monster",
+  "key": "random_man_as_monster",
+  "aliases": [
+   "Random man as monster",
+   "Random man"
+  ],
+  "voice_name": "KMR_GAV_Random Man as Monster"
+ },
+ {
+  "name": "Villain",
+  "key": "villain",
+  "aliases": [
+   "Villain"
+  ],
+  "voice_name": "STAR-D012 Narrator"
+ },
+ {
+  "name": "Hajime’s dad",
+  "key": "hajime_s_dad",
+  "aliases": [
+   "Hajime’s dad"
+  ],
+  "voice_name": "KMR_GAV_Hajime's Dad"
+ },
+ {
+  "name": "Little shouma",
+  "key": "little_shouma",
+  "aliases": [
+   "Little shouma"
+  ],
+  "voice_name": "OTM_Yeon Hee"
+ },
+ {
+  "name": "Shouma’s mom",
+  "key": "shouma_s_mom",
+  "aliases": [
+   "Shouma’s mom"
+  ],
+  "voice_name": "KMR_GAV_Shouma's Mom"
+ },
+ {
+  "name": "Shouma’s minions",
+  "key": "shouma_s_minions",
+  "aliases": [
+   "Shouma’s minions"
+  ],
+  "voice_name": "Zoonicron_NepolZoonicron_BlueZoonicron_PinkZoonicron_NepolBrother"
+ },
+ {
+  "name": "Hajime’s mom",
+  "key": "hajime_s_mom",
+  "aliases": [
+   "Hajime’s mom"
+  ],
+  "voice_name": "CINW_Sister (angry)"
+ },
+ {
+  "name": "Crowd dialogues at 20:24",
+  "key": "crowd_dialogues_at_20_24",
+  "aliases": [
+   "Crowd dialogues at 20:24"
+  ],
+  "voice_name": "OTM_ChiefNHS_007 SudhaCINW_Woman in restaurantNHS_003_Producer"
+ },
+ {
+  "name": "TV News anchor",
+  "key": "tv_news_anchor",
+  "aliases": [
+   "TV News anchor"
+  ],
+  "voice_name": "KMR_GAV_TV News Anchor"
+ },
+ {
+  "name": "Passerby",
+  "key": "passerby",
+  "aliases": [
+   "Passerby"
+  ],
+  "voice_name": "KMR_GAV_Passerby"
+ }
+]

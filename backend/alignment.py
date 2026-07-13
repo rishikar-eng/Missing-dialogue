@@ -239,7 +239,10 @@ def align_script_to_channels(
         if not spans:
             continue
         if not ent.channel or ent.channel not in channel_wavs:
-            unmapped.append(ent.id)
+            # Bit-parts delivered inside a group stem (walla/crowd) are expected, not
+            # missing — surfaced as 'grouped' elsewhere, so keep them out of no-audio.
+            if not getattr(ent, "grouped_in", None):
+                unmapped.append(ent.id)
             continue
         if ent.channel not in region_cache:
             regs = detect_speech_regions(channel_wavs[ent.channel], **(vad_kwargs or {}))

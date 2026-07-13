@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from .alignment import align_script_to_channels
 from .auth import login as rian_login, logout as rian_logout
+from .char_list import apply_char_list
 from .characters import build_characters, map_characters_to_channels
 from .content_map import verify_mapping
 from .loudness import analyze_loudness, envelope
@@ -182,6 +183,10 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
         )
 
     characters = build_characters(doc)
+    # Studio character list (roster) as a mapping aid: lend each script character the
+    # canonical name / aliases / voice-name convention so the delivered track — often
+    # named the studio's way, not the script's — still matches. Additive & optional.
+    apply_char_list(characters)
 
     # Script line intervals per character — feeds both content-mapping and alignment.
     spans_by_char: dict[str, list[tuple[float, float]]] = {}
@@ -243,9 +248,13 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
         mapping, mapped_by, naming_issues = verify_mapping(
             characters, list(channel_wavs), name_mapping, spans_by_char, region_cache,
         )
+        # Bit-parts delivered inside a group stem (walla/crowd) — expected, not "No audio".
+        grouped_in = {it["character"]: it["channel"] for it in naming_issues
+                      if it.get("kind") == "grouped" and it.get("character")}
         for c in characters:
             c.channel = mapping.get(c.id)
             c.mapped_by = mapped_by.get(c.id)
+            c.grouped_in = grouped_in.get(c.id)
         # After mapping so the bank can also match by track name (informational).
         attach_voices(characters)
 
@@ -324,6 +333,7 @@ def remap(req: RemapRequest) -> dict[str, Any]:
                 c.mapped_by = None
     ent.channel = req.channel
     ent.mapped_by = "manual" if req.channel else None
+    ent.grouped_in = None  # a manual assignment/unassignment supersedes the auto 'grouped' label
     attach_voices(characters)  # channel changed -> the voice-bank match may too
 
     report = align_script_to_channels(
@@ -348,16 +358,26 @@ def remap(req: RemapRequest) -> dict[str, Any]:
     # Retire naming checks this manual action resolves: anything about this
     # character, and (when assigning) anything suggesting the now-taken track —
     # otherwise the panel/report keeps claiming "still counted as no-audio" about
-    # a character the user just mapped.
+    # a character the user just mapped. EXCEPTION: a 'grouped' issue for ANOTHER
+    # character on that track must survive (it explains a different bit-part's
+    # bundling) — pruning it would strand that character between grouped and no-audio.
     kept_issues = [
         it for it in (STATE.get("naming_issues") or [])
         if not (
             it.get("character") == ent.id
             or it.get("labelled_character") == ent.id
-            or (req.channel is not None and it.get("channel") == req.channel)
+            or (req.channel is not None and it.get("channel") == req.channel
+                and it.get("kind") != "grouped")
         )
     ]
     STATE["naming_issues"] = kept_issues
+    # Keep each character's grouped_in in sync with the surviving 'grouped' issues, so a
+    # char is never left with grouped_in set but no issue (limbo: neither list shows it).
+    still_grouped = {it["character"]: it["channel"] for it in kept_issues
+                     if it.get("kind") == "grouped" and it.get("character")}
+    for c in characters:
+        if c.id != ent.id and c.channel is None:
+            c.grouped_in = still_grouped.get(c.id)
 
     return {
         "characters": [c.model_dump() for c in characters],

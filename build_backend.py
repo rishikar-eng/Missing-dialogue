@@ -80,6 +80,8 @@ def main() -> int:
         "--add-data", f"{ROOT / 'backend' / 'models' / 'silero_vad.onnx'}{os.pathsep}backend/models",
         # ElevenLabs voice bank (per-language voice IDs shown in the character table)
         "--add-data", f"{ROOT / 'backend' / 'data' / 'voice_bank.json'}{os.pathsep}backend/data",
+        # Studio character roster (name/track-name mapping aid) — built from the char-list docx
+        "--add-data", f"{ROOT / 'backend' / 'data' / 'char_roster.json'}{os.pathsep}backend/data",
         *_conda_dll_args(),
         str(ROOT / "run.py"),
     ]

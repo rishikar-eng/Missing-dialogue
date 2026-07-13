@@ -193,7 +193,9 @@ export default function App() {
     return {
       r,
       nameById,
-      noAudio: r.characters.filter((c) => !c.channel && c.line_count > 0).sort((a, b) => b.total_speech_s - a.total_speech_s),
+      // Grouped bit-parts (delivered inside a walla/crowd stem) are NOT "No audio".
+      noAudio: r.characters.filter((c) => !c.channel && !c.grouped_in && c.line_count > 0).sort((a, b) => b.total_speech_s - a.total_speech_s),
+      grouped: r.characters.filter((c) => c.grouped_in && c.line_count > 0).sort((a, b) => b.total_speech_s - a.total_speech_s),
       missing: errs.filter((e) => e.type === "MISSING").sort(byStart),
       misaligned: errs.filter((e) => e.type === "MISALIGNED").sort(byStart),
       loud: [...r.loudness_flags].sort((a, b) => a.script_start_s - b.script_start_s),
@@ -223,6 +225,7 @@ export default function App() {
           it.kind === "name_mismatch" ? "NAME != VOICE"
           : it.kind === "possible_match" ? "POSSIBLE MATCH"
           : it.kind === "verified_absent" ? "NO AUDIO (verified)"
+          : it.kind === "grouped" ? "GROUPED (walla)"
           : "RECOVERED";
         row(["", tag, it.character_name ?? it.labelled_character_name ?? "", "", "", "", "", it.message, it.channel ?? ""]);
       }
@@ -326,6 +329,9 @@ export default function App() {
         } else if (it.kind === "name_mismatch") {
           L.push(`[NAME != VOICE] '${it.channel}' (labelled ${it.labelled_character_name})`);
           L.push(wrap(`Voice matches ${it.voice_character_name}, not ${it.labelled_character_name}. Check the labelling.`));
+        } else if (it.kind === "grouped") {
+          block("GROUPED", "", it.character_name ?? "", it.channel ?? "", "bit-part in a walla/crowd stem");
+          L.push(wrap(`No dedicated track; delivered inside the group stem '${it.channel}'. Normal for small parts — expected, not missing.`));
         } else {
           block("NO AUDIO*", "", it.character_name ?? "", "", "verified absent");
           L.push(wrap("No track's voice covers their lines anywhere — audio genuinely not delivered."));
@@ -335,6 +341,10 @@ export default function App() {
     if (d.noAudio.length) {
       sec("UNDELIVERED CHARACTERS", "no audio track supplied");
       for (const c of d.noAudio) L.push(`[NO AUDIO]    ${c.name}`.padEnd(40) + `(${c.line_count} lines, ${Math.round(c.total_speech_s)}s of dialogue)`);
+    }
+    if (d.grouped.length) {
+      sec("GROUPED BIT-PARTS", "delivered inside a walla/crowd stem — expected, not missing");
+      for (const c of d.grouped) L.push(`[GROUPED]     ${c.name}`.padEnd(40) + `(${c.line_count} lines) -> in '${c.grouped_in}'`);
     }
     if (d.missing.length) {
       sec(`MISSING LINES (${d.missing.length})`, "the character's track is silent where the script has a line");
@@ -534,14 +544,22 @@ export default function App() {
                             }
                             title="Assign a different audio track to this character (fixes naming mismatches). Errors and loudness re-score instantly."
                             className={`bg-ink-800 border border-ink-700 rounded px-1.5 py-0.5 text-xs font-mono max-w-[220px] ${
-                              c.channel ? "text-emerald-400" : "text-err"
+                              c.channel ? "text-emerald-400" : c.grouped_in ? "text-ink-300" : "text-err"
                             }`}
                           >
-                            <option value="">no audio ✗</option>
+                            <option value="">{c.grouped_in ? `↳ in ${c.grouped_in}` : "no audio ✗"}</option>
                             {(result?.channels ?? []).map((ch) => (
                               <option key={ch} value={ch}>{ch}</option>
                             ))}
                           </select>
+                          {c.grouped_in && (
+                            <span
+                              className="text-[10px] text-ink-300 bg-ink-700/40 border border-ink-600/50 rounded px-1"
+                              title={`Bit-part with no dedicated track — delivered inside the group stem "${c.grouped_in}" (walla/crowd), which is normal. Treated as delivered, not "No audio". Listen in the checks below to confirm.`}
+                            >
+                              grouped
+                            </span>
+                          )}
                           {c.mapped_by === "content" && (
                             <span
                               className="text-[10px] text-sky-300 bg-sky-400/10 border border-sky-400/30 rounded px-1"
@@ -556,6 +574,14 @@ export default function App() {
                               title="You assigned this track manually."
                             >
                               manual
+                            </span>
+                          )}
+                          {c.roster_name && (
+                            <span
+                              className="text-[10px] text-emerald-300 bg-emerald-400/10 border border-emerald-400/30 rounded px-1"
+                              title={`Character list: "${c.roster_name}"${c.roster_voice_name ? ` · voice name "${c.roster_voice_name}"` : ""}. Used to help match this character to the right track.`}
+                            >
+                              roster: {c.roster_name}
                             </span>
                           )}
                         </span>
@@ -997,6 +1023,8 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
       ? "text-amber border-amber/30 bg-amber/5"
       : iss.kind === "verified_absent"
       ? "text-err border-err/30 bg-err/5"
+      : iss.kind === "grouped"
+      ? "text-ink-300 border-ink-600/40 bg-ink-700/20"
       : "text-sky-300 border-sky-400/30 bg-sky-400/5";
   const tag =
     iss.kind === "name_mismatch"
@@ -1005,6 +1033,8 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
       ? "POSSIBLE MATCH"
       : iss.kind === "verified_absent"
       ? "NO AUDIO (verified)"
+      : iss.kind === "grouped"
+      ? "GROUPED (walla)"
       : "RECOVERED";
   const samples = iss.samples ?? [];
   const canOpen = samples.length > 0;

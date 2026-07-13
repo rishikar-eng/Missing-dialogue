@@ -10,11 +10,15 @@ export type Character = {
   first_start_s: number;
   channel: string | null;
   mapped_by: "name" | "content" | "manual" | null;
+  grouped_in: string | null; // bit-part delivered inside this group stem (walla/crowd); not "No audio"
   level_dbfs: number | null;
   level_min_dbfs: number | null;
   level_max_dbfs: number | null;
   voice_id: string | null;
   voices: VoiceEntry[] | null;
+  // Studio character-list (roster) match — a mapping aid; null when no confident match.
+  roster_name: string | null;
+  roster_voice_name: string | null;
 };
 
 // One ElevenLabs voice for a character in one dub language (from the voice bank).
@@ -49,7 +53,7 @@ export type IssueSample = {
 
 // Content-based (voice-timeline) diagnostics for the name→track mapping.
 export type NamingIssue = {
-  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent";
+  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped";
   message: string;
   character?: string;
   character_name?: string;

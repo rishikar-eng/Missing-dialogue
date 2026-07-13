@@ -41,6 +41,14 @@ class CharacterEntity(BaseModel):
     first_start_s: float
     channel: str | None = None    # mapped audio-channel name (channels mode)
     mapped_by: str | None = None  # "name" | "content" — how the channel was assigned
+    grouped_in: str | None = None # bit-part delivered inside this group stem (walla/crowd);
+                                  # set => "grouped/expected", NOT counted as "No audio"
+    # Extra fuzzy-match targets lent by the studio character list (roster) — canonical
+    # name, aliases and voice-name convention. NOT from the script; used only to help
+    # match the delivered track. See backend/char_list.py.
+    match_terms: list[str] = []
+    roster_name: str | None = None        # canonical name from the character list
+    roster_voice_name: str | None = None  # studio voice/track-name convention
     level_dbfs: float | None = None      # median speech loudness on the mapped track (dBFS)
     level_min_dbfs: float | None = None   # quietest delivered line (dBFS)
     level_max_dbfs: float | None = None   # loudest delivered line (dBFS)
@@ -94,7 +102,9 @@ def _name_score(channel_name: str, entity: CharacterEntity) -> float:
     ch_tokens = [t for t in re.split(r"[^a-z0-9]+", channel_name.lower()) if t and t not in _AFFIX]
     ch = "".join(ch_tokens)
     best = 0.0
-    for label in [entity.name, entity.id, *entity.aliases]:
+    # Include roster-lent match terms (canonical name / voice-name convention) so a
+    # track named the studio's way still matches a tersely-scripted character.
+    for label in [entity.name, entity.id, *entity.aliases, *getattr(entity, "match_terms", [])]:
         b = _squash(label)
         if not ch or not b:
             continue
