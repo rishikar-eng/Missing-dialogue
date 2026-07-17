@@ -58,11 +58,22 @@ def _hhmmss(s: float | None) -> str:
 
 
 def _head(ws: Worksheet, row: int, headers: list[str], widths: list[int]) -> int:
+    """Write a styled header row and widen its columns.
+
+    A language sheet stacks four tables (characters / findings / loudness / checks) that
+    mean different things in the same columns. Assigning width outright made the LAST
+    table win for the whole sheet — the characters table ended up wearing the checks
+    table's widths and its 30-char track names were squashed into 9. So each column takes
+    the WIDEST requirement of any table using it: some columns are roomier than one table
+    needs, but nothing is ever truncated.
+    """
     for i, (h, w) in enumerate(zip(headers, widths), start=1):
         c = ws.cell(row=row, column=i, value=h)
         c.fill, c.font, c.border = _HDR_FILL, _HDR_FONT, _BORDER
         c.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.column_dimensions[get_column_letter(i)].width = w
+        letter = get_column_letter(i)
+        cur = ws.column_dimensions[letter].width or 0
+        ws.column_dimensions[letter].width = max(cur, w)
     return row + 1
 
 
@@ -157,8 +168,9 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
         mc.fill = _FILL["OK"] if c.get("channel") else (_FILL["WARN"] if c.get("grouped_in") else _FILL["MISSING"])
         r += 1
 
-    if r > char_start:
-        ws.auto_filter.ref = f"A{char_start - 1}:{get_column_letter(len(hdr))}{r - 1}"
+    # NB: no autofilter here. Excel/openpyxl allow exactly ONE per worksheet, and the
+    # Findings block below claims it — that's the table worth filtering (90-190 rows vs
+    # ~20 characters). Setting it here too just got silently overwritten.
     r += 1
 
     # ---- findings ----
