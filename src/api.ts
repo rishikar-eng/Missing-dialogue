@@ -1,5 +1,76 @@
-// The Electron shell starts the Python backend on this fixed local port.
-const API = "http://127.0.0.1:8765";
+// Where the backend lives:
+//  - Electron (file://) and Vite dev (port 5173): the local backend on its fixed port.
+//  - Served by the backend itself (hosted via ngrok / LAN / cloud): same origin — "".
+const isLocalShell =
+  typeof window !== "undefined" &&
+  (window.location.protocol === "file:" || window.location.port === "5173");
+const API = isLocalShell ? "http://127.0.0.1:8765" : "";
+// Hosted mode = the backend serves us: no Electron file dialogs, jobs instead of
+// long-blocking requests, server-side file browsing.
+export const isHosted = !isLocalShell;
+
+// ---- API key (hosted only) ----
+// The host shares a link like https://x.ngrok-free.app/?key=SECRET. We capture the key
+// once into (a) an in-memory var — always works this tab, even in private mode; (b) a
+// `dqc_key` cookie — so <audio>/<a download> requests, which can't set headers,
+// authenticate WITHOUT the key ever landing in a URL/log; (c) localStorage — survives a
+// reload. fetch() uses the X-API-Key header.
+let apiKey: string | null = null;
+
+const readCookieKey = (): string | null => {
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)dqc_key=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch { return null; }
+};
+
+// Persist the key to a cookie + localStorage. Returns true if at least one stuck, so the
+// caller knows whether it's safe to strip ?key= from the URL (else a reload would lose it).
+const persistKey = (k: string): boolean => {
+  let ok = false;
+  try { document.cookie = `dqc_key=${encodeURIComponent(k)}; path=/; max-age=31536000; SameSite=Strict`; ok = readCookieKey() === k; } catch { /* */ }
+  try { localStorage.setItem("dqc_api_key", k); ok = true; } catch { /* */ }
+  return ok;
+};
+
+if (typeof window !== "undefined") {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get("key");
+    if (fromUrl) {
+      apiKey = fromUrl; // in-memory first — this tab is authenticated regardless of storage
+      const persisted = persistKey(fromUrl);
+      // Strip ?key= from the address bar ONLY if we managed to persist it; otherwise keep
+      // it so a reload still authenticates (private mode / storage blocked).
+      if (persisted) {
+        params.delete("key");
+        const rest = params.toString();
+        window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
+      }
+    } else {
+      apiKey = readCookieKey() ?? (() => { try { return localStorage.getItem("dqc_api_key"); } catch { return null; } })();
+    }
+  } catch {
+    /* location/URL parsing failed — header auth still works if a key is set later */
+  }
+}
+
+export const setApiKey = (k: string | null) => {
+  apiKey = k;
+  if (k) persistKey(k);
+  else {
+    try { localStorage.removeItem("dqc_api_key"); } catch { /* */ }
+    try { document.cookie = "dqc_key=; path=/; max-age=0; SameSite=Strict"; } catch { /* */ }
+  }
+};
+
+// Sent on every fetch. ngrok-skip-browser-warning stops ngrok's free interstitial HTML
+// from replacing our JSON responses; ignored by every non-ngrok host.
+const baseHeaders = (): Record<string, string> => ({
+  "ngrok-skip-browser-warning": "true",
+  ...(apiKey ? { "X-API-Key": apiKey } : {}),
+});
+const keyHeaders = baseHeaders; // (kept name for the auth headers used by media fetch())
 
 export type Character = {
   id: string;
@@ -107,6 +178,7 @@ export type AlignmentReport = {
 };
 
 export type AnalyzeResult = {
+  mode?: "compare"; // set for scriptless original-vs-dub runs; absent for script-based
   characters: Character[];
   source_format: string | null;
   fps: number | null;
@@ -128,19 +200,33 @@ export type AnalyzeRequest = {
   original_audio_path?: string | null;
 };
 
+// Scriptless QC: compare the ORIGINAL episode audio against the dub (a folder of
+// speaker tracks, combined by speech-union, OR one full-episode dub file).
+export type CompareRequest = {
+  original_audio_path: string;
+  audio_dir?: string | null;
+  dub_audio_path?: string | null;
+  strip_prefix?: string;
+  tol_s?: number;
+};
+
 // The Rian access token for the logged-in session (in memory only — MVP).
 let authToken: string | null = null;
 export const setAuthToken = (t: string | null) => { authToken = t; };
 const authHeaders = (): Record<string, string> => (authToken ? { Authorization: authToken } : {});
 
+const KEY_HINT =
+  "This server needs an access key — open the app through the link that includes ?key=… (ask whoever shared it).";
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...keyHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
+    if (res.status === 401 && String(detail?.detail || "").includes("API key")) throw new Error(KEY_HINT);
     throw new Error(detail?.detail || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
@@ -149,8 +235,12 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 export type Progress = { running: boolean; done: number; total: number; stage: string };
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const res = await fetch(`${API}${path}`, { headers: { ...authHeaders(), ...keyHeaders() } });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    if (res.status === 401 && String(detail?.detail || "").includes("API key")) throw new Error(KEY_HINT);
+    throw new Error(detail?.detail || `HTTP ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -159,8 +249,34 @@ export type LoginBody = { em: string; pw: string; gotp?: number; otp?: string };
 // Rian's envelope: { status, data: { at, rt, userId, firstName, roles, ra, i2wae, ... }, _http }
 export type LoginEnvelope = { status: number; data: Record<string, unknown> | null; message?: string; _http?: number };
 
+// A background analysis on the hosted server (submit -> poll until done/error).
+export type JobInfo = {
+  job_id: string;
+  kind: string;
+  status: "queued" | "running" | "done" | "error";
+  progress: { stage: string; done: number; total: number };
+  result: AnalyzeResult | null;
+  error: string | null;
+};
+
+// One directory level of the server-side shared folder (hosted mode's file picker).
+export type BrowseResult = {
+  path: string; // relative to the shared root ("" at the root)
+  abs: string;  // absolute server path — what analyze endpoints expect
+  dirs: string[];
+  files: { name: string; size: number }[];
+};
+
+export type Healthz = { status: string; auth_required?: boolean; browse_enabled?: boolean };
+
 export const api = {
   analyze: (req: AnalyzeRequest) => post<AnalyzeResult>("/api/analyze", req),
+  // Hosted flavour: returns 202 + a job id immediately (tunnels cut long requests).
+  analyzeJob: (req: AnalyzeRequest) => post<JobInfo>("/api/jobs/analyze", req),
+  jobStatus: (jobId: string) => get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}`),
+  browse: (path: string) => get<BrowseResult>(`/api/browse?path=${encodeURIComponent(path)}`),
+  healthz: () => get<Healthz>("/api/healthz"),
+  compare: (req: CompareRequest) => post<AnalyzeResult>("/api/compare", req),
   realign: (tolS: number) => post<AlignmentReport>("/api/realign", { tol_s: tolS }),
   remap: (characterId: string, channel: string | null, tolS: number) =>
     post<{
@@ -172,10 +288,15 @@ export const api = {
   progress: () => get<Progress>("/api/progress"),
   authLogin: (body: LoginBody) => post<LoginEnvelope>("/api/auth/login", body),
   authLogout: (rt: string, at?: string) => post<LoginEnvelope>("/api/auth/logout", { rt, at }),
+  // Media URLs are used by <audio src> / <a download>, which can't send headers — in
+  // hosted mode the `dqc_key` cookie authenticates them (so the key never appears in a
+  // URL or a log). Desktop mode has no key and points at 127.0.0.1 — bare URLs work there.
   // MISSING lines cut from the ORIGINAL audio, as one WAV. mode "stitch" = clips
   // back-to-back; "timeline" = full episode-length track, silent except at the gaps.
   missingCompilationUrl: (mode: "stitch" | "timeline" = "stitch", padS = 1.0, tolS = 1.0) =>
     `${API}/api/missing-compilation?mode=${mode}&pad_s=${padS}&tol_s=${tolS}`,
+  // All dub tracks summed into ONE full-length WAV — for A/B-ing against the original in an editor.
+  dubMixdownUrl: () => `${API}/api/dub-mixdown`,
   // channel=null + source:"original" slices the original-language reference file.
   audioSliceUrl: (channel: string | null, startS: number, endS: number, padS?: number,
                   opts?: { source?: "dub" | "original" }) =>

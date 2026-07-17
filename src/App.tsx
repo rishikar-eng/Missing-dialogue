@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api, type AlignError, type AnalyzeResult, type Character, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
+import { api, isHosted, type AlignError, type AnalyzeResult, type BrowseResult, type Character, type CompareRequest, type JobInfo, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
 import { useAuth } from "./auth";
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const extractPath = (file: File): string | null =>
   window.electronAPI?.getPathForFile?.(file) ??
@@ -26,15 +28,21 @@ const TYPE_STYLE: Record<string, { dot: string; label: string; fill: string; sof
 const CONTEXT_PAD_S = 2.5;
 
 // One clear sentence telling the reviewer what to listen for, per issue type.
-const listenHint = (e: AlignError): string => {
+const listenHint = (e: AlignError, compare?: boolean): string => {
   if (e.type === "MISSING")
-    return "This track should contain the line during the highlighted slot, but it's silent. Listen for the gap where the voice should be.";
+    return compare
+      ? "The original speaks during the highlighted slot but the dub is silent. Play the original below to hear what should have been dubbed."
+      : "This track should contain the line during the highlighted slot, but it's silent. Listen for the gap where the voice should be.";
   if (e.type === "MISALIGNED") {
     const dir = e.subtype === "late" ? "late" : e.subtype === "early" ? "early" : "off";
     const by = e.drift_s != null ? ` by ${Math.abs(e.drift_s).toFixed(2)}s` : "";
-    return `The line is present but ${dir}${by}. Listen for the voice landing outside the highlighted slot.`;
+    return compare
+      ? `The line IS in the dub but shifted ${dir}${by} — present, just mistimed. Compare the original and dub players.`
+      : `The line is present but ${dir}${by}. Listen for the voice landing outside the highlighted slot.`;
   }
-  return "Unscripted speech here — the track talks during the highlighted slot but no script line covers it. Listen to what was said.";
+  return compare
+    ? "The dub talks here but the original is silent. Listen to what was added."
+    : "Unscripted speech here — the track talks during the highlighted slot but no script line covers it. Listen to what was said.";
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -55,21 +63,98 @@ export default function App() {
   const [audioDir, setAudioDir] = useState("");
   const [originalAudioPath, setOriginalAudioPath] = useState("");
   const [stripPrefix, setStripPrefix] = useState("");
+  // Scriptless mode: compare the original episode audio vs the dub (no script needed).
+  const [mode, setMode] = useState<"script" | "compare">("script");
+  const [dubSource, setDubSource] = useState<"tracks" | "full">("tracks");
+  const [dubAudioPath, setDubAudioPath] = useState("");
   const [tolS, setTolS] = useState(1.0);
   const [filter, setFilter] = useState<"ALL" | "MISSING" | "MISALIGNED" | "EXTRA">("ALL");
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dlOpen, setDlOpen] = useState(false);
+  const [progress, setProgress] = useState<Progress | null>(null);
+
+  // Hosted mode (served by the backend over a tunnel/LAN): no Electron dialogs; analyses
+  // run as server-side jobs; input files are picked from the server's shared folder.
+  const hosted = isHosted;
+  const [srv, setSrv] = useState<{ browse: boolean } | null>(null);
+  useEffect(() => {
+    if (!hosted) return;
+    // Retry the capability probe — one blip at page load must not hide Browse forever.
+    let live = true;
+    (async () => {
+      for (let i = 0; i < 5 && live; i++) {
+        try {
+          const h = await api.healthz();
+          if (live) setSrv({ browse: !!h.browse_enabled });
+          return;
+        } catch {
+          await sleep(1500);
+        }
+      }
+    })();
+    return () => { live = false; };
+  }, [hosted]);
+  // Which input field the server-file browser is currently picking for.
+  const [browse, setBrowse] = useState<null | { kind: "file" | "folder"; accept: "script" | "audio"; set: (p: string) => void }>(null);
 
   const analyze = useMutation({
-    mutationFn: () =>
-      api.analyze({
-        script_path: scriptPath,
-        audio_dir: audioDir,
+    mutationFn: async () => {
+      const req = {
+        script_path: scriptPath.trim(),
+        audio_dir: audioDir.trim(),
         strip_prefix: stripPrefix,
         tol_s: tolS,
         original_audio_path: originalAudioPath.trim() || null,
-      }),
+      };
+      if (!hosted) return api.analyze(req);
+      // Hosted: 202 + poll. Tunnels (ngrok/Cloudflare) cut long-silent requests, so the
+      // run happens server-side and we poll its progress. Tunnels also blip, so we
+      // tolerate a long run of transient failures (~1 min) before giving up — but a
+      // DEFINITIVE answer (bad key, or the job id is gone) stops immediately.
+      const job = await api.analyzeJob(req);
+      let misses = 0;
+      const MAX_MISSES = 40; // ~1 min of continuous failure before surrendering
+      for (;;) {
+        await sleep(misses === 0 ? 1200 : Math.min(5000, 1200 + misses * 400)); // back off on blips
+        let j: JobInfo;
+        try {
+          j = await api.jobStatus(job.job_id);
+          misses = 0;
+        } catch (e) {
+          const msg = (e as Error).message;
+          if (/API key|Unknown or expired job/i.test(msg)) throw e; // definitive — don't retry
+          if (++misses >= MAX_MISSES)
+            throw new Error("Lost contact with the server for a while — the analysis may still be running on it; reload the page in a minute to check.");
+          continue;
+        }
+        setProgress({ running: j.status === "running", ...j.progress });
+        if (j.status === "done" && j.result) return j.result;
+        if (j.status === "error") throw new Error(j.error || "Analysis failed");
+      }
+    },
+    onSuccess: (r) => {
+      setError(null);
+      setResult(r);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  // Snapshot of the last compare request, so "Re-run" (tolerance change) re-scores the
+  // SAME inputs the on-screen result came from — not whatever the form says now.
+  const lastCompareReq = useRef<CompareRequest | null>(null);
+  const compare = useMutation({
+    mutationFn: (override?: CompareRequest) => {
+      const req: CompareRequest = override ?? {
+        original_audio_path: originalAudioPath.trim(),
+        audio_dir: dubSource === "tracks" ? audioDir.trim() : null,
+        dub_audio_path: dubSource === "full" ? dubAudioPath.trim() : null,
+        strip_prefix: stripPrefix,
+        tol_s: tolS,
+      };
+      lastCompareReq.current = req;
+      return api.compare(req);
+    },
     onSuccess: (r) => {
       setError(null);
       setResult(r);
@@ -123,6 +208,12 @@ export default function App() {
     ]);
     if (p) setOriginalAudioPath(p);
   };
+  const pickDubAudio = async () => {
+    const p = await window.electronAPI?.pickFile([
+      { name: "Audio", extensions: ["wav", "flac", "ogg", "aiff", "aif", "mp3", "m4a"] },
+    ]);
+    if (p) setDubAudioPath(p);
+  };
 
   const NO_PATH_MSG = "Drag-and-drop needs the desktop app — in the browser, paste the full path instead.";
   const onDropScript = (file: File) => {
@@ -140,33 +231,44 @@ export default function App() {
     const p = extractPath(file);
     if (p) { setError(null); setOriginalAudioPath(p); } else setError(NO_PATH_MSG);
   };
+  const onDropDubAudio = (file: File) => {
+    const p = extractPath(file);
+    if (p) { setError(null); setDubAudioPath(p); } else setError(NO_PATH_MSG);
+  };
 
-  // Poll real per-track progress while Analyse runs.
-  const [progress, setProgress] = useState<Progress | null>(null);
+  // Poll real per-track progress while Analyse / Compare runs. In hosted mode the job
+  // loop inside the analyze mutation drives setProgress instead (per-job progress).
+  const running = analyze.isPending || compare.isPending;
   useEffect(() => {
-    if (!analyze.isPending) {
+    if (!running) {
       setProgress(null);
       return;
     }
+    if (hosted) return;
     const id = setInterval(() => {
       api.progress().then(setProgress).catch(() => {});
     }, 700);
     return () => clearInterval(id);
-  }, [analyze.isPending]);
+  }, [running, hosted]);
 
   const reset = () => {
     setScriptPath("");
     setAudioDir("");
     setOriginalAudioPath("");
     setStripPrefix("");
+    setDubAudioPath("");
     setResult(null);
     setError(null);
     setFilter("ALL");
     setProgress(null);
+    setDlOpen(false);
+    lastCompareReq.current = null;
   };
 
   // ---- report helpers (shared by CSV + TXT) ----
-  const reportBase = () => (scriptPath.split(/[\\/]/).pop() || "report").replace(/\.[^.]+$/, "");
+  const reportBase = () =>
+    (((result?.mode === "compare" ? originalAudioPath : scriptPath).split(/[\\/]/).pop()) || "report")
+      .replace(/\.[^.]+$/, "");
   const triggerDownload = (content: string, filename: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -245,16 +347,23 @@ export default function App() {
     let n = 1;
     for (const c of d.noAudio)
       row([n++, "NO AUDIO", c.name, "", "", "", "", `No track delivered — ${c.line_count} lines / ${Math.round(c.total_speech_s)}s of dialogue`, ""]);
+    const isCmp = result.mode === "compare";
     for (const e of [...d.missing, ...d.misaligned].sort((a, b) => (a.script_start_s ?? 0) - (b.script_start_s ?? 0))) {
       const detail = e.type === "MISSING"
-        ? `No speech in track (coverage ${Math.round((e.coverage ?? 0) * 100)}%)`
-        : `${(e.subtype ?? "drift").replace("_", " ")} ${e.drift_s != null && e.drift_s > 0 ? "+" : ""}${e.drift_s?.toFixed(2)}s`;
-      row([n++, TYPE_STYLE[e.type].label, d.nameById(e.character), toTimecode(e.script_start_s ?? 0, fps),
-        e.script_start_s ?? "", e.script_end_s ?? "", e.text ?? "", detail, e.channel ?? ""]);
+        ? `${isCmp ? "Original speaks, dub silent" : "No speech in track"} (coverage ${Math.round((e.coverage ?? 0) * 100)}%)`
+        : `${(e.subtype ?? "drift").replace("_", " ")}${e.drift_s != null ? ` ${e.drift_s > 0 ? "+" : ""}${e.drift_s.toFixed(2)}s` : ""}`;
+      // Compare mode has no script text/fps — carry the finding's message and plain
+      // HH:MM:SS instead of fabricating frame timecodes.
+      row([n++, TYPE_STYLE[e.type].label, isCmp ? "original audio" : d.nameById(e.character),
+        isCmp ? hhmmss(e.script_start_s) : toTimecode(e.script_start_s ?? 0, fps),
+        e.script_start_s ?? "", e.script_end_s ?? "", (isCmp ? e.message : e.text) ?? "", detail, e.channel ?? ""]);
     }
     sec(`REVIEW — extra speech >= ${EXTRA_MIN_S}s (${d.extra.length} shown, ${result.alignment.summary.n_extra - d.extra.length} shorter blips hidden)`);
     for (const e of d.extra)
-      row([n++, "Extra", d.nameById(e.character), toTimecode(e.audio_start_s ?? 0, fps), e.audio_start_s ?? "", e.audio_end_s ?? "", "", "Extra speech (no scripted line)", e.channel ?? ""]);
+      row([n++, "Extra", d.nameById(e.character), isCmp ? hhmmss(e.audio_start_s) : toTimecode(e.audio_start_s ?? 0, fps),
+        e.audio_start_s ?? "", e.audio_end_s ?? "",
+        isCmp ? e.message ?? "" : "",
+        isCmp ? "Dub speech where the original is silent" : "Extra speech (no scripted line)", e.channel ?? ""]);
 
     triggerDownload("﻿" + L.join("\r\n"), `dialogue-qc_${reportBase()}.csv`, "text/csv;charset=utf-8");
   };
@@ -286,6 +395,62 @@ export default function App() {
       if (text) L.push(wrap(`"${text}"`));
     };
     const pad3 = (n: number) => String(n).padStart(3);
+
+    // ---- COMPARE (no-script) MODE: a plain timestamp list, built for opening the ----
+    // ---- files in an editor (Audacity) and jumping straight to each finding.     ----
+    if (r.mode === "compare") {
+      const hmsd = (s: number | null | undefined) => {
+        if (s == null) return "?";
+        const neg = s < 0 ? "-" : "";
+        const v = Math.abs(s);
+        const p = (n: number) => String(Math.floor(n)).padStart(2, "0");
+        return `${neg}${p(v / 3600)}:${p((v % 3600) / 60)}:${(v % 60).toFixed(1).padStart(4, "0")}`;
+      };
+      const span = (a?: number | null, b?: number | null) =>
+        `${hmsd(a)} - ${hmsd(b)}   (${(a ?? 0).toFixed(2)}s - ${(b ?? 0).toFixed(2)}s)`;
+      const dubLabel = r.channels.length === 1 ? r.channels[0] : `${r.channels.length} tracks (combined)`;
+
+      L.push(bar, "DIALOGUE QC REPORT — ORIGINAL vs DUB (no script)", bar);
+      L.push(`Original : ${reportBase()}`);
+      L.push(`Dub      : ${dubLabel}`);
+      L.push(`Tolerance: ${r.alignment.tol_s.toFixed(1)}s · speech regions found in original: ${r.n_segments}`);
+      L.push("-".repeat(80), "SUMMARY");
+      L.push(`  Missing    ......... ${pad3(S.n_missing)}   (dub genuinely SILENT where the original speaks)`);
+      L.push(`  Misaligned ......... ${pad3(S.n_misaligned)}   (line present but mistimed, or dub audio VAD couldn't read)`);
+      L.push(`  Extra      ......... ${pad3(S.n_extra)}   (dub speaks, original silent)`);
+      L.push(bar);
+
+      if (d.sync.length) {
+        sec("SYNC", "whole-file shift between original and dub — times below already account for it");
+        for (const w of d.sync) L.push(wrap(w.message, 2));
+      }
+      if (d.missing.length) {
+        sec(`MISSING (${d.missing.length})`, "the dub is genuinely SILENT here — open the ORIGINAL at these times");
+        for (const e of d.missing) L.push(`  ${span(e.script_start_s, e.script_end_s)}`);
+      }
+      if (d.misaligned.length) {
+        sec(`MISALIGNED (${d.misaligned.length})`, "line is present but off — check what kind in the last column");
+        for (const e of d.misaligned) {
+          const tag =
+            e.subtype === "early" || e.subtype === "late"
+              ? `present but shifted ${e.drift_s != null ? Math.abs(e.drift_s).toFixed(1) + "s " : ""}${e.subtype}`
+              : `partly covered (${Math.round((e.coverage ?? 0) * 100)}%${e.drift_s != null ? ", sits " + (e.drift_s > 0 ? "late" : "early") : ""})`;
+          L.push(`  ${span(e.script_start_s, e.script_end_s)}   ${tag}`);
+        }
+      }
+      // ALL extras the backend found (the on-screen list hides <1.5s ones; the plain
+      // report is the full checklist, so nothing is silently dropped here).
+      const allExtra = r.alignment.errors
+        .filter((e) => e.type === "EXTRA" && e.audio_start_s != null)
+        .sort((a, b) => (a.audio_start_s ?? 0) - (b.audio_start_s ?? 0));
+      if (allExtra.length) {
+        sec(`EXTRA (${allExtra.length})`, "dub speech where the original is silent — times are in the NAMED dub file");
+        for (const e of allExtra) L.push(`  ${span(e.audio_start_s, e.audio_end_s)}   ${e.channel ?? ""}`);
+      }
+      L.push("", bar, "End of report.", bar);
+      triggerDownload(L.join("\r\n"), `dialogue-qc_compare_${reportBase()}.txt`, "text/plain;charset=utf-8");
+      return;
+    }
 
     L.push(bar, "DIALOGUE QC REPORT", bar);
     L.push(`Script  : ${reportBase()}`);
@@ -378,7 +543,12 @@ export default function App() {
     [errors, filter],
   );
   const s = report?.summary;
-  const canAnalyze = scriptPath.trim() && audioDir.trim() && !analyze.isPending;
+  const canAnalyze =
+    mode === "script"
+      ? scriptPath.trim() && audioDir.trim() && !running
+      : originalAudioPath.trim() &&
+        (dubSource === "tracks" ? audioDir.trim() : dubAudioPath.trim()) &&
+        !running;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -388,8 +558,8 @@ export default function App() {
             Dialogue QC <span className="text-ink-500 font-normal text-sm">· missing-dialogue detection</span>
           </h1>
           <div className="flex items-center gap-3">
-            {(scriptPath || audioDir || result) && (
-              <button className="btn-ghost" onClick={reset} disabled={analyze.isPending}>
+            {(scriptPath || audioDir || originalAudioPath || dubAudioPath || result) && (
+              <button className="btn-ghost" onClick={reset} disabled={running}>
                 New analysis
               </button>
             )}
@@ -401,7 +571,7 @@ export default function App() {
             <button className="btn-ghost" onClick={signOut} title="Sign out of your Rian session">
               Sign out
             </button>
-            <span className="font-mono text-[10.5px] text-ink-500">offline · local</span>
+            <span className="font-mono text-[10.5px] text-ink-500">{hosted ? "hosted" : "offline · local"}</span>
           </div>
         </div>
       </header>
@@ -412,66 +582,168 @@ export default function App() {
         {/* 1 — inputs */}
         <section className="card space-y-3">
           <div>
-            <div className="section-title">1 · Choose script + audio</div>
+            <div className="section-title">1 · Choose inputs</div>
             <div className="section-sub">
-              Point at the dub script (DOCX / SRT / CSV) and the folder of per-speaker audio tracks. Nothing is
-              uploaded — it all stays on this machine.
+              {hosted
+                ? "Files are read on the QC server — nothing uploads from your machine."
+                : "Nothing is uploaded — it all stays on this machine."}
             </div>
           </div>
+
+          {/* Mode: script-based QC vs scriptless original-vs-dub comparison.
+              Hosted serves the script mode only for now (compare needs long local files). */}
+          {!hosted && (
+            <div className="flex gap-1 bg-ink-900 border border-ink-800 rounded-lg p-1 w-fit">
+              <button
+                className={`px-3 py-1 rounded text-xs ${mode === "script" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+                onClick={() => setMode("script")}
+                title="Check the dub tracks against a timecoded script (DOCX/SRT/CSV)."
+              >
+                Script + tracks
+              </button>
+              <button
+                className={`px-3 py-1 rounded text-xs ${mode === "compare" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+                onClick={() => setMode("compare")}
+                title="No script? Compare the dub against the ORIGINAL episode audio: wherever the original has speech, the dub should too."
+              >
+                No script — compare vs original
+              </button>
+            </div>
+          )}
 
           {!hasElectron() && (
             <div className="text-[11px] text-amber/90 bg-amber/5 border border-amber/20 rounded px-2 py-1">
-              Browser preview — choosing files needs the desktop app. Run <b>npm run dev</b> and
-              use the app window (drag-and-drop / click-to-browse).
+              {hosted ? (
+                srv?.browse ? (
+                  <>Pick the script and audio folder from the server's shared files with <b>Browse…</b>, then Analyse.</>
+                ) : (
+                  <>Paste server-side paths below (or ask the host to set <b>DQC_DATA_ROOT</b> to enable browsing).</>
+                )
+              ) : (
+                <>Browser preview — choosing files needs the desktop app. Run <b>npm run dev</b> and
+                use the app window (drag-and-drop / click-to-browse).</>
+              )}
             </div>
           )}
-          <PathRow
-            label="Script file"
-            value={scriptPath}
-            kind="file"
-            onPick={hasElectron() ? pickScript : undefined}
-            onChange={setScriptPath}
-            onDropFile={onDropScript}
-          />
-          <PathRow
-            label="Audio folder"
-            value={audioDir}
-            kind="folder"
-            onPick={hasElectron() ? pickAudio : undefined}
-            onChange={setAudioDir}
-            onDropFile={onDropAudio}
-          />
-          <PathRow
-            label="Original audio (optional)"
-            value={originalAudioPath}
-            kind="file"
-            onPick={hasElectron() ? pickOriginalAudio : undefined}
-            onChange={setOriginalAudioPath}
-            onDropFile={onDropOriginalAudio}
-          />
-          <div className="text-[11px] text-ink-500 -mt-1">
-            Original audio: one file with the source-language episode (e.g. the original mix).
-            Flagged issues will show it side-by-side with the dub so you can hear what the
-            original had at that moment.
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <label className="flex items-center gap-2 text-xs text-ink-400">
-              <span title="Optional: a common filename prefix to strip from track names (e.g. 'GAVV EPI 16 MAL - ').">
-                Strip prefix
-              </span>
-              <input
-                className="bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs font-mono w-64"
-                value={stripPrefix}
-                onChange={(e) => setStripPrefix(e.target.value)}
-                placeholder="(optional)"
+
+          {mode === "script" ? (
+            <>
+              <PathRow
+                label="Script file"
+                value={scriptPath}
+                kind="file"
+                onPick={
+                  hasElectron() ? pickScript
+                  : hosted && srv?.browse ? () => setBrowse({ kind: "file", accept: "script", set: setScriptPath })
+                  : undefined
+                }
+                onChange={setScriptPath}
+                onDropFile={onDropScript}
               />
-            </label>
-            <button className="btn-primary ml-auto" disabled={!canAnalyze} onClick={() => analyze.mutate()}>
-              {analyze.isPending ? "Analysing…" : "Analyse"}
+              <PathRow
+                label="Audio folder"
+                value={audioDir}
+                kind="folder"
+                onPick={
+                  hasElectron() ? pickAudio
+                  : hosted && srv?.browse ? () => setBrowse({ kind: "folder", accept: "audio", set: setAudioDir })
+                  : undefined
+                }
+                onChange={setAudioDir}
+                onDropFile={onDropAudio}
+              />
+              <PathRow
+                label="Original audio (optional)"
+                value={originalAudioPath}
+                kind="file"
+                onPick={
+                  hasElectron() ? pickOriginalAudio
+                  : hosted && srv?.browse ? () => setBrowse({ kind: "file", accept: "audio", set: setOriginalAudioPath })
+                  : undefined
+                }
+                onChange={setOriginalAudioPath}
+                onDropFile={onDropOriginalAudio}
+              />
+              <div className="text-[11px] text-ink-500 -mt-1">
+                Original audio: one file with the source-language episode (e.g. the original mix).
+                Flagged issues will show it side-by-side with the dub so you can hear what the
+                original had at that moment.
+              </div>
+            </>
+          ) : (
+            <>
+              <PathRow
+                label="Original episode audio"
+                value={originalAudioPath}
+                kind="file"
+                onPick={hasElectron() ? pickOriginalAudio : undefined}
+                onChange={setOriginalAudioPath}
+                onDropFile={onDropOriginalAudio}
+              />
+              <div className="flex items-center gap-4 text-xs text-ink-400">
+                <span>Dub side:</span>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" className="accent-amber" checked={dubSource === "tracks"}
+                         onChange={() => setDubSource("tracks")} />
+                  folder of speaker tracks (combined)
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" className="accent-amber" checked={dubSource === "full"}
+                         onChange={() => setDubSource("full")} />
+                  one full-episode dub file
+                </label>
+              </div>
+              {dubSource === "tracks" ? (
+                <PathRow
+                  label="Dub tracks folder"
+                  value={audioDir}
+                  kind="folder"
+                  onPick={hasElectron() ? pickAudio : undefined}
+                  onChange={setAudioDir}
+                  onDropFile={onDropAudio}
+                />
+              ) : (
+                <PathRow
+                  label="Full dub audio"
+                  value={dubAudioPath}
+                  kind="file"
+                  onPick={hasElectron() ? pickDubAudio : undefined}
+                  onChange={setDubAudioPath}
+                  onDropFile={onDropDubAudio}
+                />
+              )}
+              <div className="text-[11px] text-ink-500 -mt-1">
+                Wherever the <b>original</b> has speech, the dub should too — silence there is flagged
+                Missing (with timestamps you can verify in an editor). No character names or line text
+                in this mode (that needs a script). Vocal efforts (shouts/grunts) in the original may
+                flag even when a dub legitimately skips them — the audio players are the judge.
+              </div>
+            </>
+          )}
+          <div className="flex items-center gap-3 flex-wrap">
+            {(mode === "script" || dubSource === "tracks") && (
+              <label className="flex items-center gap-2 text-xs text-ink-400">
+                <span title="Optional: a common filename prefix to strip from track names (e.g. 'GAVV EPI 16 MAL - ').">
+                  Strip prefix
+                </span>
+                <input
+                  className="bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs font-mono w-64"
+                  value={stripPrefix}
+                  onChange={(e) => setStripPrefix(e.target.value)}
+                  placeholder="(optional)"
+                />
+              </label>
+            )}
+            <button
+              className="btn-primary ml-auto"
+              disabled={!canAnalyze}
+              onClick={() => (mode === "script" ? analyze.mutate() : compare.mutate(undefined))}
+            >
+              {running ? "Analysing…" : mode === "script" ? "Analyse" : "Compare"}
             </button>
           </div>
 
-          {analyze.isPending && (
+          {running && (
             <div className="space-y-1 pt-1">
               <div className="h-1.5 bg-ink-800 rounded-full overflow-hidden">
                 <div
@@ -485,7 +757,7 @@ export default function App() {
                 />
               </div>
               <div className="text-[11px] text-ink-500 font-mono">
-                {progress?.stage || "Parsing script…"}
+                {progress?.stage || (mode === "compare" ? "Reading audio…" : "Parsing script…")}
               </div>
             </div>
           )}
@@ -646,10 +918,31 @@ export default function App() {
                     className="w-32 accent-amber"
                   />
                   <span className="font-mono text-ink-200 w-9 tabular-nums">{tolS.toFixed(1)}s</span>
-                  <button className="btn-ghost" disabled={realign.isPending} onClick={() => realign.mutate()}>
-                    {realign.isPending ? "…" : "Re-run"}
+                  <button
+                    className="btn-ghost"
+                    disabled={running || realign.isPending}
+                    onClick={() =>
+                      result?.mode === "compare"
+                        ? compare.mutate(
+                            lastCompareReq.current ? { ...lastCompareReq.current, tol_s: tolS } : undefined,
+                          )
+                        : realign.mutate()
+                    }
+                    title={result?.mode === "compare" ? "Re-compare the same inputs at this tolerance (audio analysis is cached — fast)." : undefined}
+                  >
+                    {running || realign.isPending ? "…" : "Re-run"}
                   </button>
                 </label>
+                {result?.mode === "compare" && (result?.channels.length ?? 0) > 1 && (
+                  <a
+                    className="btn-ghost"
+                    href={api.dubMixdownUrl()}
+                    download
+                    title="All dub speaker tracks summed into one full-length WAV — drop it into Audacity next to the original to compare. Takes ~a minute to build."
+                  >
+                    ⬇ Combined dub (.wav)
+                  </a>
+                )}
                 <div className="relative">
                   <button
                     className="btn-primary"
@@ -727,7 +1020,7 @@ export default function App() {
                 </div>
                 <div className="max-h-[440px] overflow-y-auto divide-y divide-ink-900/60 border border-ink-800 rounded-lg">
                   {filtered.map((e, i) => (
-                    <ErrorRow key={i} e={e} hasOriginal={!!result?.original_audio} />
+                    <ErrorRow key={i} e={e} hasOriginal={!!result?.original_audio} compare={result?.mode === "compare"} />
                   ))}
                 </div>
               </>
@@ -752,6 +1045,131 @@ export default function App() {
           </section>
         )}
       </main>
+
+      {browse && (
+        <BrowseModal
+          kind={browse.kind}
+          accept={browse.accept}
+          onPick={(p) => {
+            browse.set(p);
+            setBrowse(null);
+          }}
+          onClose={() => setBrowse(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Server-side file picker for HOSTED mode: navigates the folder the host shares via
+// DQC_DATA_ROOT (the browser can't open the server's native file dialogs).
+function BrowseModal({
+  kind,
+  accept,
+  onPick,
+  onClose,
+}: {
+  kind: "file" | "folder";
+  accept: "script" | "audio";
+  onPick: (absPath: string) => void;
+  onClose: () => void;
+}) {
+  const [rel, setRel] = useState("");
+  const [data, setData] = useState<BrowseResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api
+      .browse(rel)
+      .then((d) => { if (live) { setData(d); setErr(null); } })
+      .catch((e) => { if (live) setErr((e as Error).message); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [rel]);
+
+  // Files the picker offers. For a SINGLE audio file (original) mp3/m4a are fine; but the
+  // tracks-FOLDER analyzer only discovers wav/flac/ogg/aiff — so the folder count below
+  // must use the stricter set or it would promise files the analysis then ignores.
+  const match =
+    accept === "script" ? /\.(docx|srt|csv|tsv)$/i
+    : kind === "folder" ? /\.(wav|flac|ogg|aiff?)$/i
+    : /\.(wav|flac|ogg|aiff?|mp3|m4a)$/i;
+  const files = (data?.files ?? []).filter((f) => match.test(f.name));
+  const sep = data?.abs.includes("\\") ? "\\" : "/";
+  const fmtSize = (n: number) =>
+    n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+  const upFrom = (r: string) => r.split("/").slice(0, -1).join("/");
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
+      <div
+        className="bg-ink-900 border border-ink-700 rounded-xl w-full max-w-xl max-h-[70vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-ink-800 flex items-center gap-3">
+          <div className="text-sm font-medium text-ink-100 flex-1 min-w-0">
+            {kind === "folder" ? "Pick a folder" : accept === "script" ? "Pick a script file" : "Pick an audio file"}
+            <span className="block font-mono text-[11px] text-ink-400 truncate">/{data?.path || ""}</span>
+          </div>
+          <button className="btn-ghost" onClick={onClose}>✕ Close</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-2 py-2 text-sm">
+          {err && <div className="text-xs text-err px-2 py-1">{err}</div>}
+          {loading && !err && <div className="text-xs text-ink-400 px-2 py-1">Loading…</div>}
+          {!loading && !err && data && (
+            <>
+              {rel !== "" && (
+                <button
+                  className="block w-full text-left px-2 py-1.5 rounded hover:bg-ink-800 text-ink-300"
+                  onClick={() => setRel(upFrom(rel))}
+                >
+                  ↑ ..
+                </button>
+              )}
+              {data.dirs.map((d) => (
+                <button
+                  key={d}
+                  className="block w-full text-left px-2 py-1.5 rounded hover:bg-ink-800 text-ink-100"
+                  onClick={() => setRel(rel ? `${rel}/${d}` : d)}
+                >
+                  📁 {d}
+                </button>
+              ))}
+              {kind === "file" &&
+                files.map((f) => (
+                  <button
+                    key={f.name}
+                    className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded hover:bg-ink-800"
+                    onClick={() => onPick(`${data.abs}${sep}${f.name}`)}
+                  >
+                    <span className="flex-1 min-w-0 truncate text-ink-100">{accept === "script" ? "📄" : "🎵"} {f.name}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-ink-500">{fmtSize(f.size)}</span>
+                  </button>
+                ))}
+              {data.dirs.length === 0 && (kind !== "file" || files.length === 0) && (
+                <div className="text-xs text-ink-500 px-2 py-2">
+                  {kind === "file" ? "No matching files in this folder." : "No subfolders here."}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {kind === "folder" && data && !err && (
+          <div className="px-4 py-3 border-t border-ink-800 flex items-center justify-between gap-3">
+            <span className="text-[11px] text-ink-400">
+              {files.length} audio file{files.length === 1 ? "" : "s"} in this folder
+            </span>
+            <button className="btn-primary" onClick={() => onPick(data.abs)}>
+              Use this folder
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1089,7 +1507,7 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
   );
 }
 
-function ErrorRow({ e, hasOriginal }: { e: AlignError; hasOriginal?: boolean }) {
+function ErrorRow({ e, hasOriginal, compare }: { e: AlignError; hasOriginal?: boolean; compare?: boolean }) {
   const [open, setOpen] = useState(false);
   const st = TYPE_STYLE[e.type];
   const t = e.script_start_s ?? e.audio_start_s;
@@ -1119,7 +1537,7 @@ function ErrorRow({ e, hasOriginal }: { e: AlignError; hasOriginal?: boolean }) 
         <span className="font-mono text-xs text-ink-200 tabular-nums w-14 shrink-0 pt-0.5">{fmtTime(t)}</span>
         <span className="min-w-0 flex-1">
           <span className="text-sm block">
-            <span className="font-medium text-ink-100">{e.character ?? "?"}</span>
+            <span className="font-medium text-ink-100">{e.character ?? (compare ? (e.type === "EXTRA" ? "dub" : "original") : "?")}</span>
             <span className={st.text}>
               {" · "}
               {st.label}
@@ -1142,7 +1560,7 @@ function ErrorRow({ e, hasOriginal }: { e: AlignError; hasOriginal?: boolean }) 
         <div className="pl-[4.4rem] pr-2 pt-2 pb-1 space-y-3">
           {/* What to listen for */}
           <div className={`text-xs rounded px-2 py-1.5 border ${st.soft} text-ink-100`}>
-            {listenHint(e)}
+            {listenHint(e, compare)}
           </div>
 
           {/* Script line */}
@@ -1199,7 +1617,13 @@ function ErrorRow({ e, hasOriginal }: { e: AlignError; hasOriginal?: boolean }) 
                 </audio>
               </>
             ) : (
-              <div className="text-xs text-ink-300">No audio track mapped for this line.</div>
+              <div className="text-xs text-ink-300">
+                {compare
+                  ? e.type === "MISSING"
+                    ? "The dub (combined tracks) is silent here — the original player below is the evidence; verify at this timestamp in an editor."
+                    : "Combined-tracks mode has no single dub file to slice — use the original player and check the dub at this timestamp in an editor."
+                  : "No audio track mapped for this line."}
+              </div>
             )}
           </div>
 

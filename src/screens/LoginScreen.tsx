@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type LoginEnvelope } from "../api";
+import { api, isHosted, type LoginEnvelope } from "../api";
 import { sessionFromData, useAuth } from "../auth";
 
 // Map Rian status codes to a friendly message. (See AUTH_USER_API doc.)
@@ -142,15 +142,18 @@ export default function LoginScreen() {
           {busy ? "Signing in…" : phase === "creds" ? "Sign in" : "Verify code"}
         </button>
 
-        {/* Testing escape hatch — lets you use the app without a Rian login while
-            auth is being validated. Remove/hide this before enforcing auth for the team. */}
-        <button
-          type="button"
-          className="w-full text-[11px] text-ink-400 hover:text-ink-200 pt-1"
-          onClick={() => signIn({ email: "", name: "Guest (testing)", at: "" })}
-        >
-          Skip sign-in (testing) →
-        </button>
+        {/* Testing escape hatch — lets you use the app without a Rian login on the local
+            desktop build. NEVER shown in the hosted build: that login sits on a public
+            URL and a "skip sign-in" button there would let anyone with the link straight in. */}
+        {!isHosted && (
+          <button
+            type="button"
+            className="w-full text-[11px] text-ink-400 hover:text-ink-200 pt-1"
+            onClick={() => signIn({ email: "", name: "Guest (testing)", at: "" })}
+          >
+            Skip sign-in (testing) →
+          </button>
+        )}
       </form>
     </div>
   );
