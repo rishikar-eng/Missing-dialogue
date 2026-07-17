@@ -16,8 +16,14 @@ uploads. The one dependency is that **your PC stays on** while people use it.
    python -m venv .venv
    .\.venv\Scripts\pip install -r requirements.txt
    ```
-2. **ngrok**: already installed (`winget install Ngrok.Ngrok`). Create a **free** account at
-   <https://dashboard.ngrok.com>, copy your authtoken, and register it once:
+2. **ngrok**: install + **update it** (winget's package is stale — 3.3.1 — and accounts
+   require >= 3.20.0, which fails with a confusing `ERR_NGROK_121`):
+   ```powershell
+   winget install Ngrok.Ngrok
+   ngrok update                       # -> 3.39.x. Don't skip this.
+   ```
+   Then create a **free** account at <https://dashboard.ngrok.com>, copy your authtoken
+   (Dashboard -> Getting Started -> **Your Authtoken**), and register it once:
    ```powershell
    ngrok config add-authtoken <YOUR_TOKEN>
    ```
@@ -95,7 +101,9 @@ https://your-name.ngrok-free.app/?key=Xy7...           ← send THIS to the team
 
 | Symptom | Fix |
 |---|---|
-| "Could not get the ngrok URL … not authenticated" | `ngrok config add-authtoken <TOKEN>` (step 2) |
+| **`ERR_NGROK_121` / "agent version is too old"** | **`ngrok update`.** winget's package ships a stale **3.3.1**; accounts require **>= 3.20.0**. Hit this on first run. |
+| "Could not open the ngrok tunnel …" | The launcher now prints ngrok's own error underneath — read that line, not the guess. |
+| `ERR_NGROK_4018` / "not authenticated" | `ngrok config add-authtoken <TOKEN>` (step 2) |
 | Teammate sees "This server needs an access key" | They opened a bare URL — resend the full `…/?key=…` link |
 | Browse button missing | `-DataRoot` not set or unreadable; check the path exists |
 | URL changed after restart | Use `-Domain your-name.ngrok-free.app` (claim it free, step 3) |
