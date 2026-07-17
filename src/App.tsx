@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api, isHosted, type AlignError, type AnalyzeResult, type BrowseResult, type Character, type CompareRequest, type EpisodeResult, type JobInfo, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
+import { api, isHosted, type AlignError, type AnalyzeResult, type BoxBrowse, type BoxLangSource, type BrowseResult, type Character, type CompareRequest, type EpisodeResult, type JobInfo, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
 import { useAuth } from "./auth";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -68,6 +68,22 @@ export default function App() {
   ]);
   const [episodeName, setEpisodeName] = useState("");
   const [episodeOut, setEpisodeOut] = useState<EpisodeResult | null>(null);
+  // Episode source: local folders on this machine/server, or straight from Box (the
+  // server downloads + extracts + analyses; no bytes touch the browser).
+  const [epSource, setEpSource] = useState<"local" | "box">("local");
+  const [boxReady, setBoxReady] = useState(false);        // server has its own Box connection
+  const [boxDevToken, setBoxDevToken] = useState("");     // 60-min dev token (memory only)
+  type BoxPick = { id: string; name: string };
+  const [boxScript, setBoxScript] = useState<BoxPick | null>(null);
+  const [boxOriginal, setBoxOriginal] = useState<BoxPick | null>(null);
+  const [boxLangs, setBoxLangs] = useState<Record<string, (BoxPick & { kind: "zip" | "folder" }) | null>>({});
+  // Which slot the Box picker is choosing for right now.
+  const [boxPick, setBoxPick] = useState<null | { accept: "script" | "audio" | "tracks"; set: (p: BoxPick & { kind: "zip" | "folder" }) => void }>(null);
+  useEffect(() => {
+    if (mode !== "episode") return;
+    api.boxStatus().then((s) => setBoxReady(!!s.configured)).catch(() => setBoxReady(false));
+  }, [mode]);
+  const boxUsable = boxReady || boxDevToken.trim().length > 0;
   const [dubSource, setDubSource] = useState<"tracks" | "full">("tracks");
   const [dubAudioPath, setDubAudioPath] = useState("");
   const [tolS, setTolS] = useState(1.0);
@@ -170,19 +186,42 @@ export default function App() {
   // hosted analyze uses).
   const episode = useMutation({
     mutationFn: async () => {
-      const languages: Record<string, string> = {};
-      for (const l of langs) {
-        if (l.name.trim() && l.dir.trim()) languages[l.name.trim()] = l.dir.trim();
+      let job: JobInfo;
+      if (epSource === "box") {
+        const languages: Record<string, BoxLangSource> = {};
+        for (const l of langs) {
+          const pick = boxLangs[l.name];
+          if (!l.name.trim() || !pick) continue;
+          languages[l.name.trim()] = pick.kind === "zip"
+            ? { zip_file_id: pick.id, name: pick.name }
+            : { folder_id: pick.id, name: pick.name };
+        }
+        if (!boxScript) throw new Error("Pick the script from Box first.");
+        if (!Object.keys(languages).length) throw new Error("Pick at least one language's zip/folder from Box.");
+        job = await api.boxEpisodeJob({
+          script_file_id: boxScript.id,
+          original_file_id: boxOriginal?.id || null,
+          languages,
+          episode: episodeName.trim(),
+          strip_prefix: stripPrefix,
+          tol_s: tolS,
+          box_token: boxDevToken.trim() || null,
+        });
+      } else {
+        const languages: Record<string, string> = {};
+        for (const l of langs) {
+          if (l.name.trim() && l.dir.trim()) languages[l.name.trim()] = l.dir.trim();
+        }
+        if (!Object.keys(languages).length) throw new Error("Add at least one language and its tracks folder.");
+        job = await api.episodeJob({
+          script_path: scriptPath.trim(),
+          languages,
+          original_audio_path: originalAudioPath.trim() || null,
+          episode: episodeName.trim(),
+          strip_prefix: stripPrefix,
+          tol_s: tolS,
+        });
       }
-      if (!Object.keys(languages).length) throw new Error("Add at least one language and its tracks folder.");
-      const job = await api.episodeJob({
-        script_path: scriptPath.trim(),
-        languages,
-        original_audio_path: originalAudioPath.trim() || null,
-        episode: episodeName.trim(),
-        strip_prefix: stripPrefix,
-        tol_s: tolS,
-      });
       let misses = 0;
       for (;;) {
         await sleep(misses === 0 ? 2000 : Math.min(6000, 2000 + misses * 500));
@@ -312,6 +351,9 @@ export default function App() {
     setEpisodeOut(null);
     setEpisodeName("");
     setLangs((ls) => ls.map((l) => ({ ...l, dir: "" })));
+    setBoxScript(null);
+    setBoxOriginal(null);
+    setBoxLangs({});
   };
 
   // ---- report helpers (used by the TXT report) ----
@@ -538,7 +580,9 @@ export default function App() {
     mode === "script"
       ? scriptPath.trim() && audioDir.trim() && !running
       : mode === "episode"
-      ? scriptPath.trim() && langs.some((l) => l.name.trim() && l.dir.trim()) && !running
+      ? (epSource === "box"
+          ? !!boxScript && langs.some((l) => l.name.trim() && boxLangs[l.name]) && !running
+          : scriptPath.trim() && langs.some((l) => l.name.trim() && l.dir.trim()) && !running)
       : originalAudioPath.trim() &&
         (dubSource === "tracks" ? audioDir.trim() : dubAudioPath.trim()) &&
         !running;
@@ -672,6 +716,43 @@ export default function App() {
             </>
           ) : mode === "episode" ? (
             <>
+              {/* Where the episode's files come from. Box = the server fetches everything. */}
+              <div className="flex items-center gap-4 text-xs text-ink-400">
+                <span>Files from:</span>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" className="accent-amber" checked={epSource === "local"}
+                         onChange={() => setEpSource("local")} />
+                  local folders
+                </label>
+                <label className={`flex items-center gap-1.5 ${boxUsable ? "cursor-pointer" : "opacity-50"}`}
+                       title={boxUsable ? "Pick everything from Box — the server downloads and analyses."
+                                        : "Needs the server's Box connection (OAuth) or a developer token below."}>
+                  <input type="radio" className="accent-amber" checked={epSource === "box"}
+                         disabled={!boxUsable}
+                         onChange={() => setEpSource("box")} />
+                  Box (server-to-server)
+                </label>
+                {!boxReady && (
+                  <input
+                    className="flex-1 min-w-[200px] bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs font-mono placeholder:text-ink-500"
+                    value={boxDevToken}
+                    onChange={(e) => setBoxDevToken(e.target.value)}
+                    placeholder="Box developer token (60 min, for testing — kept in memory only)"
+                    spellCheck={false}
+                  />
+                )}
+              </div>
+
+              {epSource === "box" ? (
+                <>
+                  <BoxFieldRow label="Script file" pick={boxScript}
+                    onBrowse={() => setBoxPick({ accept: "script", set: (p) => setBoxScript({ id: p.id, name: p.name }) })}
+                    onClear={() => setBoxScript(null)} />
+                  <BoxFieldRow label="Original audio (optional)" pick={boxOriginal}
+                    onBrowse={() => setBoxPick({ accept: "audio", set: (p) => setBoxOriginal({ id: p.id, name: p.name }) })}
+                    onClear={() => setBoxOriginal(null)} />
+                </>
+              ) : (
               <PathRow
                 label="Script file"
                 value={scriptPath}
@@ -684,6 +765,8 @@ export default function App() {
                 onChange={setScriptPath}
                 onDropFile={onDropScript}
               />
+              )}
+              {epSource === "local" && (
               <PathRow
                 label="Original audio (optional)"
                 value={originalAudioPath}
@@ -696,6 +779,7 @@ export default function App() {
                 onChange={setOriginalAudioPath}
                 onDropFile={onDropOriginalAudio}
               />
+              )}
               <div className="flex items-start gap-2">
                 <span className="text-xs text-ink-400 w-24 shrink-0 pt-2.5">Episode name</span>
                 <input
@@ -708,7 +792,9 @@ export default function App() {
 
               <div className="border border-ink-700 rounded-lg p-2.5 space-y-1.5">
                 <div className="text-[11px] uppercase tracking-wide text-ink-400">
-                  Dub languages — one sheet each. Leave a folder blank to skip that language.
+                  {epSource === "box"
+                    ? "Dub languages — pick each one's delivered ZIP (or stems folder) in Box. Unpicked = skipped."
+                    : "Dub languages — one sheet each. Leave a folder blank to skip that language."}
                 </div>
                 {langs.map((l, i) => (
                   <div key={i} className="flex items-center gap-2">
@@ -719,6 +805,41 @@ export default function App() {
                         setLangs((ls) => ls.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
                       }
                     />
+                    {epSource === "box" ? (
+                      <>
+                        <div className="flex-1 min-w-0 text-xs font-mono px-2 py-1 border border-ink-700 rounded bg-ink-800/60 truncate">
+                          {boxLangs[l.name] ? (
+                            <span className="text-emerald-400">
+                              {boxLangs[l.name]!.kind === "zip" ? "🗜 " : "📁 "}{boxLangs[l.name]!.name}
+                            </span>
+                          ) : (
+                            <span className="text-ink-500">— not picked (skipped) —</span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="shrink-0 text-[11px] text-amber hover:text-amber/80 border border-amber/30 rounded px-2 py-1"
+                          onClick={() =>
+                            setBoxPick({
+                              accept: "tracks",
+                              set: (p) => setBoxLangs((m) => ({ ...m, [l.name]: p })),
+                            })
+                          }
+                        >
+                          Pick in Box…
+                        </button>
+                        {boxLangs[l.name] && (
+                          <button
+                            type="button"
+                            className="shrink-0 text-[11px] text-ink-400 hover:text-ink-200"
+                            onClick={() => setBoxLangs((m) => ({ ...m, [l.name]: null }))}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
                     <input
                       className="flex-1 min-w-0 bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs font-mono text-ink-200 placeholder:text-ink-500"
                       value={l.dir}
@@ -746,6 +867,8 @@ export default function App() {
                       >
                         Browse…
                       </button>
+                    )}
+                      </>
                     )}
                   </div>
                 ))}
@@ -1215,6 +1338,142 @@ export default function App() {
           onClose={() => setBrowse(null)}
         />
       )}
+      {boxPick && (
+        <BoxPickModal
+          accept={boxPick.accept}
+          devToken={boxDevToken.trim() || null}
+          onPick={(p) => {
+            boxPick.set(p);
+            setBoxPick(null);
+          }}
+          onClose={() => setBoxPick(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// One picked-from-Box field (script / original) with pick + clear.
+function BoxFieldRow({ label, pick, onBrowse, onClear }: {
+  label: string;
+  pick: { id: string; name: string } | null;
+  onBrowse: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-ink-400 w-24 shrink-0">{label}</span>
+      <div className="flex-1 min-w-0 text-xs font-mono px-2 py-1.5 border-2 border-dashed border-ink-700 rounded-lg truncate">
+        {pick ? <span className="text-emerald-400">📦 {pick.name}</span>
+              : <span className="text-ink-500">— pick from Box —</span>}
+      </div>
+      <button type="button" onClick={onBrowse}
+              className="shrink-0 text-[11px] text-amber hover:text-amber/80 border border-amber/30 rounded px-2 py-1">
+        Pick in Box…
+      </button>
+      {pick && (
+        <button type="button" onClick={onClear} className="shrink-0 text-[11px] text-ink-400 hover:text-ink-200">✕</button>
+      )}
+    </div>
+  );
+}
+
+// Box file/folder picker: navigates the server's Box connection (or a dev token) —
+// only names and ids move through the browser, never file bytes.
+function BoxPickModal({ accept, devToken, onPick, onClose }: {
+  accept: "script" | "audio" | "tracks";
+  devToken: string | null;
+  onPick: (p: { id: string; name: string; kind: "zip" | "folder" }) => void;
+  onClose: () => void;
+}) {
+  // Breadcrumbs as a stack of visited folders; Box ids are opaque, root is "0".
+  const [stack, setStack] = useState<{ id: string; name: string }[]>([{ id: "0", name: "All files" }]);
+  const [data, setData] = useState<BoxBrowse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const cur = stack[stack.length - 1];
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api.boxBrowse(cur.id, devToken)
+      .then((d) => { if (live) { setData(d); setErr(null); } })
+      .catch((e) => { if (live) setErr((e as Error).message); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [cur.id, devToken]);
+
+  const match =
+    accept === "script" ? /\.(docx|srt|csv|tsv)$/i
+    : accept === "audio" ? /\.(wav|flac|ogg|aiff?|mp3|m4a)$/i
+    : /\.zip$/i;
+  const files = (data?.files ?? []).filter((f) => match.test(f.name));
+  const fmtSize = (n: number) =>
+    n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-ink-900 border border-ink-700 rounded-xl w-full max-w-xl max-h-[70vh] flex flex-col overflow-hidden"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-ink-800 flex items-center gap-3">
+          <div className="text-sm font-medium text-ink-100 flex-1 min-w-0">
+            {accept === "script" ? "Pick the script from Box"
+             : accept === "audio" ? "Pick the original audio from Box"
+             : "Pick this language's ZIP (or open its stems folder)"}
+            <span className="block font-mono text-[11px] text-ink-400 truncate">
+              📦 {stack.map((s) => s.name).join(" / ")}
+            </span>
+          </div>
+          <button className="btn-ghost" onClick={onClose}>✕ Close</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-2 py-2 text-sm">
+          {err && <div className="text-xs text-err px-2 py-1">{err}</div>}
+          {loading && !err && <div className="text-xs text-ink-400 px-2 py-1">Loading from Box…</div>}
+          {!loading && !err && data && (
+            <>
+              {stack.length > 1 && (
+                <button className="block w-full text-left px-2 py-1.5 rounded hover:bg-ink-800 text-ink-300"
+                        onClick={() => setStack((s) => s.slice(0, -1))}>
+                  ↑ ..
+                </button>
+              )}
+              {data.folders.map((d) => (
+                <button key={d.id}
+                        className="block w-full text-left px-2 py-1.5 rounded hover:bg-ink-800 text-ink-100"
+                        onClick={() => setStack((s) => [...s, { id: d.id, name: d.name }])}>
+                  📁 {d.name}
+                </button>
+              ))}
+              {files.map((f) => (
+                <button key={f.id}
+                        className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded hover:bg-ink-800"
+                        onClick={() => onPick({ id: f.id, name: f.name, kind: accept === "tracks" ? "zip" : "folder" })}>
+                  <span className="flex-1 min-w-0 truncate text-ink-100">
+                    {accept === "tracks" ? "🗜" : "📄"} {f.name}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-ink-500">{fmtSize(f.size)}</span>
+                </button>
+              ))}
+              {data.folders.length === 0 && files.length === 0 && (
+                <div className="text-xs text-ink-500 px-2 py-2">Nothing matching here.</div>
+              )}
+            </>
+          )}
+        </div>
+
+        {accept === "tracks" && data && !err && stack.length > 1 && (
+          <div className="px-4 py-3 border-t border-ink-800 flex items-center justify-between gap-3">
+            <span className="text-[11px] text-ink-400">
+              …or use this folder's loose stems ({(data.files ?? []).length} files listed)
+            </span>
+            <button className="btn-primary"
+                    onClick={() => onPick({ id: cur.id, name: cur.name, kind: "folder" })}>
+              Use this folder
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

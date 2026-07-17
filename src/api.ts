@@ -269,6 +269,32 @@ export type BrowseResult = {
 
 export type Healthz = { status: string; auth_required?: boolean; browse_enabled?: boolean };
 
+// ---- Box (server-side connection; no bytes touch the browser) ----
+export type BoxStatus = {
+  configured: boolean;        // server can mint its own tokens (OAuth refresh present)
+  creds_present: boolean;
+  token_file_present: boolean;
+};
+
+export type BoxBrowse = {
+  id: string;
+  folders: { id: string; name: string }[];
+  files: { id: string; name: string; size: number }[];
+};
+
+// One language's tracks in Box: a delivered zip OR a folder of loose stems.
+export type BoxLangSource = { zip_file_id?: string; folder_id?: string; name?: string };
+
+export type BoxEpisodeRequest = {
+  script_file_id: string;
+  original_file_id?: string | null;
+  languages: Record<string, BoxLangSource>;
+  episode?: string;
+  strip_prefix?: string;
+  tol_s?: number;
+  box_token?: string | null;   // dev-token testing only; omitted => server's own connection
+};
+
 // One episode x N dub languages -> one .xlsx (a sheet per language).
 export type EpisodeRequest = {
   script_path: string;
@@ -293,6 +319,23 @@ export const api = {
   analyzeJob: (req: AnalyzeRequest) => post<JobInfo>("/api/jobs/analyze", req),
   // One episode, every language, one workbook. Always a job (6 languages ~= 10-20 min).
   episodeJob: (req: EpisodeRequest) => post<JobInfo>("/api/jobs/episode", req),
+  // Same, but everything is fetched from Box by the server (downloads + analyses).
+  boxEpisodeJob: (req: BoxEpisodeRequest) => post<JobInfo>("/api/jobs/box-episode", req),
+  boxStatus: () => get<BoxStatus>("/api/box/status"),
+  // devToken: a 60-min developer token for testing before the server is Box-connected.
+  boxBrowse: async (folderId: string, devToken?: string | null): Promise<BoxBrowse> => {
+    const res = await fetch(`${API}/api/box/browse?folder_id=${encodeURIComponent(folderId)}`, {
+      headers: {
+        ...authHeaders(), ...keyHeaders(),
+        ...(devToken ? { "X-Box-Token": devToken } : {}),
+      },
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.detail || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<BoxBrowse>;
+  },
   // The workbook from the last episode run (cookie/desktop auth; see media note below).
   reportXlsxUrl: () => `${API}/api/report.xlsx`,
   jobStatus: (jobId: string) => get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}`),

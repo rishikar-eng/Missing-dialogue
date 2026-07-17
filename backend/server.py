@@ -28,14 +28,14 @@ from typing import Any, Callable
 
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import box_fetch, excel_report, jobs, scriptless
+from . import box_fetch, box_oauth, excel_report, jobs, scriptless
 from .alignment import align_script_to_channels
 from .auth import login as rian_login, logout as rian_logout
 from .char_list import apply_char_list
@@ -178,6 +178,29 @@ class EpisodeRequest(BaseModel):
     strip_prefix: str = ""
     tol_s: float = 1.0
     fps: float | None = None
+
+
+class BoxLangSource(BaseModel):
+    """Where one language's tracks live in Box: a delivered ZIP, or a folder of stems."""
+    zip_file_id: str | None = None
+    folder_id: str | None = None
+    name: str = ""                 # display only (the zip/folder name the user picked)
+
+
+class BoxEpisodeRequest(BaseModel):
+    """One episode fetched STRAIGHT FROM BOX: pick the script + original + each
+    language's zip/folder in the Box picker, and the server does the rest (download,
+    extract, analyse, workbook) — no manual downloading."""
+    script_file_id: str
+    original_file_id: str | None = None
+    languages: dict[str, BoxLangSource]
+    episode: str = ""
+    strip_prefix: str = ""
+    tol_s: float = 1.0
+    fps: float | None = None
+    # A short-lived developer token for testing before OAuth consent is done. Omitted =>
+    # the server's own Box connection (box_oauth). Never logged, never persisted.
+    box_token: str | None = None
 
 
 class RealignRequest(BaseModel):
@@ -592,6 +615,183 @@ def report_xlsx():
         raise HTTPException(status_code=404, detail="No workbook yet — run an episode analysis first")
     return FileResponse(p, filename=Path(p).name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ---- Box: browse + episode-from-Box ----------------------------------------
+
+def _box_token(explicit: str | None = None) -> str:
+    """Resolve a Box bearer token: an explicit one (dev token / VOX) wins, else the
+    server's own OAuth connection. Raises HTTPException with a fix-it message."""
+    if explicit:
+        return explicit
+    try:
+        return box_oauth.get_token()
+    except box_oauth.BoxAuthError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/box/status")
+def box_status() -> dict[str, Any]:
+    """Is the server connected to Box? (Drives whether the UI shows the Box picker.)"""
+    return box_oauth.status()
+
+
+@app.get("/api/box/browse")
+def box_browse(folder_id: str = "0",
+               x_box_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """One level of a Box folder for the picker. A short-lived dev token may be supplied
+    via the X-Box-Token header (testing); otherwise the server's OAuth connection."""
+    token = _box_token(x_box_token)
+    try:
+        return box_fetch.list_folder(token, folder_id)
+    except box_fetch.BoxFetchError as e:
+        raise HTTPException(status_code=502, detail=f"Box browse failed: {e}")
+    except Exception:
+        raise HTTPException(status_code=502, detail="Box browse failed")
+
+
+_BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
+_DISK_HEADROOM = 2 * 1024**3          # always keep 2 GB free
+
+
+def _check_box_episode_inputs(req: BoxEpisodeRequest) -> None:
+    if not req.languages:
+        raise HTTPException(status_code=400, detail="Provide at least one language source")
+    for lang, src in req.languages.items():
+        if bool(src.zip_file_id) == bool(src.folder_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{lang}: provide exactly one of zip_file_id or folder_id")
+    # Auth must be resolvable NOW (fail fast), even though the job re-resolves later.
+    _box_token(req.box_token)
+
+
+def _run_box_episode(req: BoxEpisodeRequest,
+                     on_stage: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
+    """Fetch everything for one episode from Box and run the episode pipeline.
+
+    Sequential per language, deleting as it goes — the deliveries are 3-6 GB zips, so
+    holding more than one language on disk at a time is what fills a small host. The
+    token is re-resolved per step because a 6-language run outlives a 60-min access
+    token (box_oauth caches + auto-refreshes)."""
+    def stage(msg: str, done: int = 0, total: int = 0) -> None:
+        if on_stage:
+            on_stage(msg, done, total)
+
+    total = len(req.languages)
+    work = Path(tempfile.mkdtemp(prefix="dqc-boxep-"))
+    per_lang: dict[str, dict[str, Any]] = {}
+    failed: dict[str, str] = {}
+    try:
+        stage("fetching script from Box", 0, total)
+        script_path = box_fetch.download_file(_box_token(req.box_token), req.script_file_id,
+                                              work / "script")
+        original_path: Path | None = None
+        if req.original_file_id:
+            stage("fetching original audio from Box", 0, total)
+            original_path = box_fetch.download_file(_box_token(req.box_token),
+                                                    req.original_file_id, work / "original")
+
+        for i, (lang, src) in enumerate(req.languages.items()):
+            lang_dir = work / f"lang_{i}"
+            try:
+                token = _box_token(req.box_token)
+                free = shutil.disk_usage(work).free
+                if free < _DISK_HEADROOM:
+                    failed[lang] = f"skipped: only {free / 1e9:.1f} GB free on disk"
+                    continue
+                if src.zip_file_id:
+                    stage(f"{lang}: downloading zip from Box ({i + 1}/{total})", i, total)
+                    zpath = box_fetch.download_file(token, src.zip_file_id, work / "dl")
+                    need = zpath.stat().st_size * 2 + _DISK_HEADROOM
+                    if shutil.disk_usage(work).free < need:
+                        failed[lang] = "skipped: not enough disk to extract the zip"
+                        zpath.unlink(missing_ok=True)
+                        continue
+                    stage(f"{lang}: extracting ({i + 1}/{total})", i, total)
+                    import zipfile as _zipfile
+                    try:
+                        with _zipfile.ZipFile(zpath) as zf:
+                            zf.extractall(lang_dir)
+                    finally:
+                        zpath.unlink(missing_ok=True)   # zip freed before analysis
+                else:
+                    stage(f"{lang}: listing Box folder ({i + 1}/{total})", i, total)
+                    listing = box_fetch.list_folder(token, src.folder_id or "0")
+                    ids = [str(f["id"]) for f in listing["files"]
+                           if Path(str(f["name"])).suffix.lower() in _BOX_AUDIO_EXTS]
+                    if not ids:
+                        failed[lang] = "no audio files in that Box folder"
+                        continue
+                    stage(f"{lang}: downloading {len(ids)} tracks ({i + 1}/{total})", i, total)
+                    box_fetch.download_files(token, ids, lang_dir)
+
+                one = AnalyzeRequest(
+                    script_path=str(script_path), audio_dir=str(lang_dir), fps=req.fps,
+                    strip_prefix=req.strip_prefix, tol_s=req.tol_s,
+                    original_audio_path=str(original_path) if original_path else None,
+                )
+                # No heavy_slot here: this ALREADY runs inside a job worker holding the
+                # slot semaphore — re-acquiring it is the self-deadlock we fixed once.
+                res = _run_analysis(one, *_check_analyze_inputs(one),
+                                    on_stage=(lambda m, d, t, _l=lang, _i=i:
+                                              stage(f"{_l}: {m}", _i, total)))
+                res["_audio_dir"] = f"box:{src.name or src.zip_file_id or src.folder_id}"
+                res["characters"] = [c if isinstance(c, dict) else c.model_dump()
+                                     for c in res["characters"]]
+                per_lang[lang] = res
+            except box_fetch.BoxFetchError as e:
+                failed[lang] = f"Box fetch failed: {e}"
+            except HTTPException as e:
+                failed[lang] = str(e.detail)
+            except Exception as e:
+                failed[lang] = str(e) or "analysis failed"
+            finally:
+                shutil.rmtree(lang_dir, ignore_errors=True)
+
+        if not per_lang:
+            raise HTTPException(status_code=400,
+                                detail="Every language failed: "
+                                       + "; ".join(f"{k}: {v}" for k, v in failed.items()))
+
+        stage("building workbook", total, total)
+        from datetime import datetime, timezone
+        ep = req.episode or script_path.stem
+        out = Path(tempfile.gettempdir()) / f"dialogue-qc_{re.sub(r'[^A-Za-z0-9_.-]+', '_', ep)}.xlsx"
+        excel_report.build_workbook(
+            meta={"episode": ep,
+                  "generated_at": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M"),
+                  "script_path": f"box:{script_path.name}",
+                  "original_audio_path": f"box:{original_path.name}" if original_path else "",
+                  "tol_s": req.tol_s},
+            per_lang=per_lang, out_path=out,
+        )
+        STATE["report_xlsx"] = str(out)
+        return {
+            "episode": ep,
+            "languages": list(per_lang),
+            "failed": failed,
+            "report_ready": True,
+            "summary": {lang: (r.get("alignment") or {}).get("summary")
+                        for lang, r in per_lang.items()},
+        }
+    finally:
+        # NOTE: the original + script live under work/ too — everything Box-fetched is
+        # transient. The audio players won't outlive this cleanup; the workbook is the
+        # deliverable of a Box run.
+        shutil.rmtree(work, ignore_errors=True)
+
+
+@app.post("/api/jobs/box-episode", status_code=202)
+def box_episode_job(req: BoxEpisodeRequest) -> dict[str, Any]:
+    """Pick an episode in Box -> the server downloads, analyses every language, and
+    builds the workbook. Always a job (downloads + 6 analyses = tens of minutes)."""
+    _check_box_episode_inputs(req)
+    try:
+        job = jobs.submit("box-episode", lambda stage: _run_box_episode(req, on_stage=stage))
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    return job.public()
 
 
 @app.post("/api/qc")

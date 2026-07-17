@@ -126,6 +126,40 @@ def download_file(
         return _stream_to(client, file_id, dest_dir / fname, headers)
 
 
+def list_folder(
+    token: str,
+    folder_id: str = "0",
+    *,
+    shared_link: str | None = None,
+) -> dict[str, object]:
+    """One level of a Box folder: {"folders": [{id,name}], "files": [{id,name,size}]}.
+
+    Drives the hosted UI's Box picker (folder_id "0" = the account root). Paginates with
+    usemarker so a 1000+-item episode folder isn't silently truncated.
+    """
+    headers = _headers(token, shared_link)
+    folders: list[dict[str, object]] = []
+    files: list[dict[str, object]] = []
+    params: dict[str, str] = {"limit": "1000", "usemarker": "true",
+                              "fields": "id,type,name,size"}
+    with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as client:
+        while True:
+            r = client.get(f"{_API}/folders/{folder_id}/items", params=params, headers=headers)
+            _raise_status(r, folder_id)
+            data = r.json()
+            for e in data.get("entries", []):
+                if e.get("type") == "folder":
+                    folders.append({"id": e.get("id"), "name": e.get("name")})
+                elif e.get("type") == "file":
+                    files.append({"id": e.get("id"), "name": e.get("name"),
+                                  "size": e.get("size") or 0})
+            marker = data.get("next_marker")
+            if not marker:
+                break
+            params["marker"] = marker
+    return {"id": folder_id, "folders": folders, "files": files}
+
+
 def download_files(
     token: str,
     file_ids: list[str],
