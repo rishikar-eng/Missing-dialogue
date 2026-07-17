@@ -1,8 +1,8 @@
-# Dialogue QC — one-command HOSTED launch (backend + ngrok tunnel).
+# Dialogue QC - one-command HOSTED launch (backend + ngrok tunnel).
 #
 # Serves the built React UI + API from the local Python backend, protected by an API key,
 # and exposes it publicly through an ngrok tunnel so teammates can use it from a browser.
-# Files are read on THIS machine (from -DataRoot) — nothing uploads.
+# Files are read on THIS machine (from -DataRoot) - nothing uploads.
 #
 # Usage:
 #   .\host.ps1 -DataRoot "D:\Episodes"                 # ephemeral ngrok URL (changes each run)
@@ -97,7 +97,7 @@ function Stop-All {
 
 if (-not $publicUrl) {
   Stop-All
-  throw "Could not get the ngrok URL. Most likely ngrok isn't authenticated — run:  ngrok config add-authtoken <YOUR_TOKEN>  (free at https://dashboard.ngrok.com)"
+  throw "Could not get the ngrok URL. Most likely ngrok isn't authenticated - run:  ngrok config add-authtoken <YOUR_TOKEN>  (free at https://dashboard.ngrok.com)"
 }
 
 $shareLink = "$publicUrl/?key=$apiKey"
@@ -109,7 +109,7 @@ Write-Host "   $shareLink" -ForegroundColor White
 Write-Host ""
 Write-Host " (The ?key= authenticates them; after first load it's stored" -ForegroundColor DarkGray
 Write-Host "  in their browser and dropped from the address bar.)" -ForegroundColor DarkGray
-Write-Host " ngrok inspector: http://127.0.0.1:4040   ·   Ctrl+C to stop." -ForegroundColor DarkGray
+Write-Host " ngrok inspector: http://127.0.0.1:4040   |   Ctrl+C to stop." -ForegroundColor DarkGray
 Write-Host "============================================================" -ForegroundColor Green
 
 try {
