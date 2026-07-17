@@ -4,32 +4,32 @@ Shape (what the studio asked for):
     Run info   - which files were actually used, settings, parse coverage
     Summary    - one row per language: the at-a-glance comparison + cross-language flags
     <Language> - one sheet per language, each with:
-                   Characters  : picture, name, id, mapping + confidence, voice, levels
+                   Characters  : name, id, mapping + confidence, voice, levels
                    Findings    : missing/misaligned/extra with timestamps, file, confidence
                    Loudness    : too quiet / too hot lines
                    Checks      : track<->character verification + sync warnings
 
 NOTHING here is hardcoded: every analytical cell comes from an /api/analyze run of that
-language's tracks. Only the character PICTURE and the ElevenLabs VOICE ID are reference
-data, joined by character key from the studio's own 'KAMEN RIDER CHARACTER LIST & VOICES'
-sheet (see backend/tools/build_char_pics.py + build_voice_bank.py). A character absent
-from that sheet simply gets blank cells.
+language's tracks. The only reference data is the ElevenLabs VOICE ID, joined per character
+from the studio's own 'KAMEN RIDER CHARACTER LIST & VOICES' sheet (see
+backend/tools/build_voice_bank.py). A character absent from that sheet gets a blank cell.
+
+(Character pictures were built and then dropped: that sheet only carries portraits for a
+minority of the characters that actually appear in an episode - 3 of 11 on the test data -
+so the column was mostly empty. `voice_bank_name` on the character records which bank row
+was fuzzily matched, which is the useful half of that work and is surfaced below.)
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
-
-_PICS_DIR = Path(__file__).resolve().parent / "data" / "char_pics"
 
 # --- house style -------------------------------------------------------------
 _HDR_FILL = PatternFill("solid", fgColor="0D3B66")
@@ -47,25 +47,6 @@ _FILL = {
     "OK": PatternFill("solid", fgColor="DCEFE0"),
     "WARN": PatternFill("solid", fgColor="FFF3CD"),
 }
-_PIC_ROW_H = 76      # points; fits a ~96px thumbnail
-_PIC_COL_W = 14
-
-
-def _key(name: str) -> str:
-    """Canonical character key — must match characters.py / build_char_pics.py."""
-    first = (name or "").splitlines()[0] if name else ""
-    clean = re.sub(r"\[.*?\]|\(.*?\)", " ", first)
-    return re.sub(r"[^a-z0-9]", "", clean.lower())
-
-
-def _pic_index() -> dict[str, str]:
-    f = _PICS_DIR / "index.json"
-    if not f.is_file():
-        return {}
-    try:
-        return json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
 
 def _hhmmss(s: float | None) -> str:
@@ -94,7 +75,7 @@ def _section(ws: Worksheet, row: int, title: str, note: str = "") -> int:
 
 # --- per-language sheet ------------------------------------------------------
 
-def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str, str]) -> None:
+def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     ws = wb.create_sheet(title=lang[:31])
     chars = res.get("characters") or []
     align = res.get("alignment") or {}
@@ -110,10 +91,10 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str
 
     # ---- characters ----
     r = _section(ws, r, "CHARACTERS", "mapping confidence is voice-timeline agreement, not a guess")
-    hdr = ["Picture", "Character", "ID", "Lines", "Dialogue (s)", "Mapped track (file)",
-           "Mapped by", "Confidence", "Delivered", "ElevenLabs voice", "Voice ID",
-           "Level min…max (dBFS)", "Reviewer verdict"]
-    widths = [_PIC_COL_W, 22, 16, 7, 12, 30, 11, 11, 11, 22, 24, 18, 18]
+    hdr = ["Character", "ID", "Lines", "Dialogue (s)", "Mapped track (file)",
+           "Mapped by", "Confidence", "Delivered", "Voice matched as", "ElevenLabs voice",
+           "Voice ID", "Level min…max (dBFS)", "Reviewer verdict"]
+    widths = [22, 16, 7, 12, 30, 11, 11, 11, 20, 22, 24, 18, 18]
     r = _head(ws, r, hdr, widths)
     char_start = r
 
@@ -133,15 +114,6 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str
             conf_by_char[cid] = prec
 
     for c in chars:
-        # Picture lookup, best source first:
-        #   1. the voice-bank row this character fuzzily matched ('Shoma'->'SHOUMA') —
-        #      bank + pictures come from the same studio sheet, so this is the real key;
-        #   2. the script name, 3. the mapped track name — both EXACT only.
-        # Deliberately no fuzzy match straight to picture keys: a wrong face on a
-        # character is far worse than a blank cell, and the studio sheet simply has no
-        # picture for many characters (Amane, Rakia, Agent...) — blank is the truth.
-        k = next((kk for kk in (_key(c.get("voice_bank_name") or ""), _key(c.get("name", "")),
-                                _key(c.get("channel") or "")) if kk and kk in pics), "")
         lines = c.get("line_count") or 0
         mapped = bool(c.get("channel")) or bool(c.get("grouped_in"))
         missed = miss_by_char.get(c.get("id"), 0)
@@ -153,21 +125,7 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str
         voices = c.get("voices") or []
         v = next((x for x in voices if x.get("id")), voices[0] if voices else None)
 
-        ws.row_dimensions[r].height = _PIC_ROW_H
-        pic = pics.get(k)
-        if pic and (_PICS_DIR / pic).is_file():
-            try:
-                img = XLImage(str(_PICS_DIR / pic))
-                # scale into the cell box (openpyxl sizes in px)
-                scale = min(92 / max(img.width, 1), 92 / max(img.height, 1), 1.0)
-                img.width, img.height = int(img.width * scale), int(img.height * scale)
-                img.anchor = f"A{r}"
-                ws.add_image(img)
-            except Exception:
-                pass  # a bad thumbnail must never sink the whole report
-
         row_vals = [
-            None,                                   # picture cell (image floats over it)
             c.get("name"),
             c.get("id"),
             lines,
@@ -175,7 +133,10 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str
             c.get("channel") or ("↳ in " + c["grouped_in"] if c.get("grouped_in") else "— no audio —"),
             c.get("mapped_by") or "",
             None,                                   # confidence (set below, needs format)
-            delivered,
+            None,                                   # delivered (set below, needs format)
+            # WHICH voice-bank row was fuzzily matched ('Shoma' -> 'SHOUMA'). Shown so a
+            # wrong voice is visible as a wrong match, not just a wrong-looking ID.
+            c.get("voice_bank_name") or "",
             (v or {}).get("name", ""),
             (v or {}).get("id", ""),
             (f"{c['level_min_dbfs']:.0f} … {c['level_max_dbfs']:.0f}"
@@ -185,14 +146,14 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any], pics: dict[str
         for i, val in enumerate(row_vals, start=1):
             cell = ws.cell(row=r, column=i, value=val)
             cell.border = _BORDER
-            cell.alignment = Alignment(vertical="center", wrap_text=(i == 6))
+            cell.alignment = Alignment(vertical="center", wrap_text=(i == 5))
         # confidence: only content-verified mappings have a real number (see above)
-        cc = ws.cell(row=r, column=8, value=conf_by_char.get(c.get("id")))
+        cc = ws.cell(row=r, column=7, value=conf_by_char.get(c.get("id")))
         cc.number_format = "0%"
-        dc = ws.cell(row=r, column=9)
+        dc = ws.cell(row=r, column=8, value=delivered)
         dc.number_format = "0%"
         # colour the mapping cell: green = mapped, amber = grouped, red = nothing
-        mc = ws.cell(row=r, column=6)
+        mc = ws.cell(row=r, column=5)
         mc.fill = _FILL["OK"] if c.get("channel") else (_FILL["WARN"] if c.get("grouped_in") else _FILL["MISSING"])
         r += 1
 
@@ -385,9 +346,8 @@ def build_workbook(meta: dict[str, Any], per_lang: dict[str, dict[str, Any]], ou
     per_lang: {"Malayalam": <analyze result dict + '_audio_dir'>, ...} — insertion-ordered."""
     wb = Workbook()
     wb.remove(wb.active)                       # drop the default sheet
-    pics = _pic_index()
     for lang, res in per_lang.items():
-        _language_sheet(wb, lang, res, pics)
+        _language_sheet(wb, lang, res)
     # Both insert at 0, so the LAST one inserted ends up first:
     #   -> [Run info, Summary, <languages...>]
     # (inserting Summary at index 1 instead lands it *after* the first language.)
