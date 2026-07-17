@@ -73,10 +73,17 @@ foreach ($i in 1..30) {
 if (-not $up) { $backend | Stop-Process -Force -ErrorAction SilentlyContinue; throw "Backend did not come up on port $Port." }
 
 # --- start the tunnel ------------------------------------------------------
+# Capture ngrok's own log: when the tunnel fails we must show ITS reason, not guess.
+# (A stale agent fails with ERR_NGROK_121 "agent too old", which looks nothing like an
+# auth problem -- an earlier version of this script blamed the authtoken and sent us
+# chasing the wrong thing.)
+$ngrokLog = Join-Path $env:TEMP "dqc-ngrok.log"
+if (Test-Path $ngrokLog) { Remove-Item $ngrokLog -Force -ErrorAction SilentlyContinue }
 $ngrokArgs = @("http", "$Port", "--log", "stdout")
 if ($Domain) { $ngrokArgs += @("--url", $Domain) }
 Write-Host "Opening ngrok tunnel..." -ForegroundColor Cyan
-$tunnel = Start-Process -FilePath $ngrok -ArgumentList $ngrokArgs -PassThru -NoNewWindow
+$tunnel = Start-Process -FilePath $ngrok -ArgumentList $ngrokArgs -PassThru -NoNewWindow `
+  -RedirectStandardOutput $ngrokLog -RedirectStandardError "$ngrokLog.err"
 
 # read the public URL from ngrok's local API
 $publicUrl = $null
@@ -87,6 +94,7 @@ foreach ($i in 1..20) {
     $publicUrl = ($t.tunnels | Where-Object { $_.proto -eq "https" } | Select-Object -First 1).public_url
     if ($publicUrl) { break }
   } catch {}
+  if ($tunnel.HasExited) { break }  # ngrok died - stop waiting, report why
 }
 
 function Stop-All {
@@ -97,7 +105,19 @@ function Stop-All {
 
 if (-not $publicUrl) {
   Stop-All
-  throw "Could not get the ngrok URL. Most likely ngrok isn't authenticated - run:  ngrok config add-authtoken <YOUR_TOKEN>  (free at https://dashboard.ngrok.com)"
+  # Surface ngrok's real error verbatim, and map the ones we've actually hit.
+  $errText = @()
+  foreach ($f in @($ngrokLog, "$ngrokLog.err")) {
+    if (Test-Path $f) { $errText += (Select-String -Path $f -Pattern 'ERR_NGROK_\d+|err="[^"]+"|ERROR:' -EA SilentlyContinue | ForEach-Object { $_.Line.Trim() }) }
+  }
+  $joined = ($errText | Select-Object -Unique -First 6) -join "`n  "
+  Write-Host "`nngrok said:" -ForegroundColor Red
+  Write-Host "  $joined" -ForegroundColor DarkGray
+  $hint = "See the ngrok output above."
+  if ($joined -match 'ERR_NGROK_121|too old')  { $hint = "Your ngrok agent is TOO OLD. Fix:  ngrok update" }
+  elseif ($joined -match 'ERR_NGROK_4018|not authenticated') { $hint = "ngrok isn't authenticated. Fix:  ngrok config add-authtoken <YOUR_TOKEN>  (free at https://dashboard.ngrok.com)" }
+  elseif ($joined -match 'ERR_NGROK_(105|108)') { $hint = "Authtoken rejected, or another ngrok agent/session is already running." }
+  throw "Could not open the ngrok tunnel. $hint"
 }
 
 $shareLink = "$publicUrl/?key=$apiKey"
