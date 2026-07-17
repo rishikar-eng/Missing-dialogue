@@ -492,21 +492,28 @@ def job_status(job_id: str) -> dict[str, Any]:
     return job.public()
 
 
-def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
-    """Analyse every language of one episode against the same script, then build the
-    workbook. Sequential on purpose: each language holds several native-rate stems, and
-    running them in parallel is what OOMs a small host."""
+def _check_episode_inputs(req: EpisodeRequest) -> Path:
+    """Validate paths BEFORE the job is queued, so a typo comes back as an immediate 400
+    instead of a 202 the user only discovers is broken by polling a doomed job."""
     script_path = Path(req.script_path)
     if not script_path.is_file():
         raise HTTPException(status_code=400, detail=f"Script not found: {script_path}")
     if not req.languages:
         raise HTTPException(status_code=400, detail="Provide at least one language -> tracks folder")
-    original = Path(req.original_audio_path) if req.original_audio_path else None
-    if original is not None and not original.is_file():
-        raise HTTPException(status_code=400, detail=f"Original audio not found: {original}")
+    if req.original_audio_path and not Path(req.original_audio_path).is_file():
+        raise HTTPException(status_code=400, detail=f"Original audio not found: {req.original_audio_path}")
     for lang, d in req.languages.items():
         if not Path(d).is_dir():
             raise HTTPException(status_code=400, detail=f"Tracks folder for {lang} not found: {d}")
+    return script_path
+
+
+def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
+    """Analyse every language of one episode against the same script, then build the
+    workbook. Sequential on purpose: each language holds several native-rate stems, and
+    running them in parallel is what OOMs a small host."""
+    script_path = _check_episode_inputs(req)   # re-checked here: paths can vanish mid-queue
+    original = Path(req.original_audio_path) if req.original_audio_path else None
 
     total = len(req.languages)
     per_lang: dict[str, dict[str, Any]] = {}
@@ -569,6 +576,7 @@ def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] 
 def episode_job(req: EpisodeRequest) -> dict[str, Any]:
     """One episode x N languages -> one workbook. Always a job: 6 languages x ~20 stems
     is 10-20 minutes, far past any proxy/tunnel request timeout."""
+    _check_episode_inputs(req)   # obvious mistakes 400 now, not 10 minutes from now
     try:
         job = jobs.submit("episode", lambda stage: _run_episode(req, on_stage=stage))
     except RuntimeError as e:

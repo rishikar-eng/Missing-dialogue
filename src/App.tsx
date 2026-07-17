@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { api, isHosted, type AlignError, type AnalyzeResult, type BrowseResult, type Character, type CompareRequest, type JobInfo, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
+import { api, isHosted, type AlignError, type AnalyzeResult, type BrowseResult, type Character, type CompareRequest, type EpisodeResult, type JobInfo, type LoudnessFlag, type NamingIssue, type Progress, type VoiceEntry } from "./api";
 import { useAuth } from "./auth";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -56,8 +56,18 @@ export default function App() {
   const [audioDir, setAudioDir] = useState("");
   const [originalAudioPath, setOriginalAudioPath] = useState("");
   const [stripPrefix, setStripPrefix] = useState("");
-  // Scriptless mode: compare the original episode audio vs the dub (no script needed).
-  const [mode, setMode] = useState<"script" | "compare">("script");
+  // script   — one language against a timecoded script (the classic flow)
+  // compare  — scriptless: original episode audio vs the dub
+  // episode  — one script x every dub language -> ONE .xlsx workbook (the studio deliverable)
+  const [mode, setMode] = useState<"script" | "compare" | "episode">("script");
+  // Episode mode: the six dub languages and where each one's tracks live. Editable —
+  // a language with a blank folder is simply skipped, so you can run 2 or 6.
+  const [langs, setLangs] = useState<{ name: string; dir: string }[]>([
+    { name: "Malayalam", dir: "" }, { name: "Tamil", dir: "" }, { name: "Telugu", dir: "" },
+    { name: "Kannada", dir: "" }, { name: "Bengali", dir: "" }, { name: "Marathi", dir: "" },
+  ]);
+  const [episodeName, setEpisodeName] = useState("");
+  const [episodeOut, setEpisodeOut] = useState<EpisodeResult | null>(null);
   const [dubSource, setDubSource] = useState<"tracks" | "full">("tracks");
   const [dubAudioPath, setDubAudioPath] = useState("");
   const [tolS, setTolS] = useState(1.0);
@@ -155,6 +165,47 @@ export default function App() {
     onError: (e: Error) => setError(e.message),
   });
 
+  // One script x every language -> one workbook. ALWAYS a job: six languages x ~20 stems
+  // is 10-20 minutes, far past any request timeout, so we submit and poll (same shape the
+  // hosted analyze uses).
+  const episode = useMutation({
+    mutationFn: async () => {
+      const languages: Record<string, string> = {};
+      for (const l of langs) {
+        if (l.name.trim() && l.dir.trim()) languages[l.name.trim()] = l.dir.trim();
+      }
+      if (!Object.keys(languages).length) throw new Error("Add at least one language and its tracks folder.");
+      const job = await api.episodeJob({
+        script_path: scriptPath.trim(),
+        languages,
+        original_audio_path: originalAudioPath.trim() || null,
+        episode: episodeName.trim(),
+        strip_prefix: stripPrefix,
+        tol_s: tolS,
+      });
+      let misses = 0;
+      for (;;) {
+        await sleep(misses === 0 ? 2000 : Math.min(6000, 2000 + misses * 500));
+        let j: JobInfo;
+        try {
+          j = await api.jobStatus(job.job_id);
+          misses = 0;
+        } catch (e) {
+          const msg = (e as Error).message;
+          if (/API key|Unknown or expired job/i.test(msg)) throw e;
+          if (++misses >= 40)
+            throw new Error("Lost contact with the server — the episode may still be running; reload in a minute.");
+          continue;
+        }
+        setProgress({ running: j.status === "running", ...j.progress });
+        if (j.status === "done") return j.result as unknown as EpisodeResult;
+        if (j.status === "error") throw new Error(j.error || "Episode run failed");
+      }
+    },
+    onSuccess: (r) => { setError(null); setEpisodeOut(r); },
+    onError: (e: Error) => { setError(e.message); setEpisodeOut(null); },
+  });
+
   const realign = useMutation({
     mutationFn: () => api.realign(tolS),
     onSuccess: (rep) => {
@@ -231,7 +282,7 @@ export default function App() {
 
   // Poll real per-track progress while Analyse / Compare runs. In hosted mode the job
   // loop inside the analyze mutation drives setProgress instead (per-job progress).
-  const running = analyze.isPending || compare.isPending;
+  const running = analyze.isPending || compare.isPending || episode.isPending;
   useEffect(() => {
     if (!running) {
       setProgress(null);
@@ -256,9 +307,14 @@ export default function App() {
     setProgress(null);
     setDlOpen(false);
     lastCompareReq.current = null;
+    // Episode state too, or "New analysis" leaves the previous episode's workbook panel
+    // on screen next to a fresh run's results.
+    setEpisodeOut(null);
+    setEpisodeName("");
+    setLangs((ls) => ls.map((l) => ({ ...l, dir: "" })));
   };
 
-  // ---- report helpers (shared by CSV + TXT) ----
+  // ---- report helpers (used by the TXT report) ----
   const reportBase = () =>
     (((result?.mode === "compare" ? originalAudioPath : scriptPath).split(/[\\/]/).pop()) || "report")
       .replace(/\.[^.]+$/, "");
@@ -481,6 +537,8 @@ export default function App() {
   const canAnalyze =
     mode === "script"
       ? scriptPath.trim() && audioDir.trim() && !running
+      : mode === "episode"
+      ? scriptPath.trim() && langs.some((l) => l.name.trim() && l.dir.trim()) && !running
       : originalAudioPath.trim() &&
         (dubSource === "tracks" ? audioDir.trim() : dubAudioPath.trim()) &&
         !running;
@@ -543,6 +601,13 @@ export default function App() {
               >
                 No script — compare vs original
               </button>
+              <button
+                className={`px-3 py-1 rounded text-xs ${mode === "episode" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+                onClick={() => setMode("episode")}
+                title="One script checked against EVERY dub language, producing one Excel workbook with a sheet per language."
+              >
+                Episode → Excel (all languages)
+              </button>
             </div>
           )}
 
@@ -603,6 +668,93 @@ export default function App() {
                 Original audio: one file with the source-language episode (e.g. the original mix).
                 Flagged issues will show it side-by-side with the dub so you can hear what the
                 original had at that moment.
+              </div>
+            </>
+          ) : mode === "episode" ? (
+            <>
+              <PathRow
+                label="Script file"
+                value={scriptPath}
+                kind="file"
+                onPick={
+                  hasElectron() ? pickScript
+                  : hosted && srv?.browse ? () => setBrowse({ kind: "file", accept: "script", set: setScriptPath })
+                  : undefined
+                }
+                onChange={setScriptPath}
+                onDropFile={onDropScript}
+              />
+              <PathRow
+                label="Original audio (optional)"
+                value={originalAudioPath}
+                kind="file"
+                onPick={
+                  hasElectron() ? pickOriginalAudio
+                  : hosted && srv?.browse ? () => setBrowse({ kind: "file", accept: "audio", set: setOriginalAudioPath })
+                  : undefined
+                }
+                onChange={setOriginalAudioPath}
+                onDropFile={onDropOriginalAudio}
+              />
+              <div className="flex items-start gap-2">
+                <span className="text-xs text-ink-400 w-24 shrink-0 pt-2.5">Episode name</span>
+                <input
+                  className="flex-1 bg-ink-800 border border-ink-700 rounded px-2 py-1.5 text-xs font-mono"
+                  value={episodeName}
+                  onChange={(e) => setEpisodeName(e.target.value)}
+                  placeholder="e.g. EP36  (used for the workbook name + Run info sheet)"
+                />
+              </div>
+
+              <div className="border border-ink-700 rounded-lg p-2.5 space-y-1.5">
+                <div className="text-[11px] uppercase tracking-wide text-ink-400">
+                  Dub languages — one sheet each. Leave a folder blank to skip that language.
+                </div>
+                {langs.map((l, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      className="w-28 shrink-0 bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs"
+                      value={l.name}
+                      onChange={(e) =>
+                        setLangs((ls) => ls.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                      }
+                    />
+                    <input
+                      className="flex-1 min-w-0 bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs font-mono text-ink-200 placeholder:text-ink-500"
+                      value={l.dir}
+                      onChange={(e) =>
+                        setLangs((ls) => ls.map((x, j) => (j === i ? { ...x, dir: e.target.value } : x)))
+                      }
+                      placeholder={`tracks folder for ${l.name || "this language"} (blank = skip)`}
+                      spellCheck={false}
+                    />
+                    {(hasElectron() || (hosted && srv?.browse)) && (
+                      <button
+                        type="button"
+                        className="shrink-0 text-[11px] text-amber hover:text-amber/80 border border-amber/30 rounded px-2 py-1"
+                        onClick={async () => {
+                          if (hasElectron()) {
+                            const p = await window.electronAPI?.pickFolder();
+                            if (p) setLangs((ls) => ls.map((x, j) => (j === i ? { ...x, dir: p } : x)));
+                          } else {
+                            setBrowse({
+                              kind: "folder", accept: "audio",
+                              set: (p) => setLangs((ls) => ls.map((x, j) => (j === i ? { ...x, dir: p } : x))),
+                            });
+                          }
+                        }}
+                      >
+                        Browse…
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <div className="text-[11px] text-ink-500 pt-0.5">
+                  Every language is checked against the <b>same</b> script — that's what makes the sheets
+                  comparable, and lets the workbook tell a script/mapping problem (missing in all
+                  languages) from a real dub gap (missing in one). Runs sequentially: expect roughly
+                  1–2 min per language.
+                </div>
               </div>
             </>
           ) : (
@@ -672,9 +824,13 @@ export default function App() {
             <button
               className="btn-primary ml-auto"
               disabled={!canAnalyze}
-              onClick={() => (mode === "script" ? analyze.mutate() : compare.mutate(undefined))}
+              onClick={() =>
+                mode === "script" ? analyze.mutate()
+                : mode === "episode" ? episode.mutate()
+                : compare.mutate(undefined)
+              }
             >
-              {running ? "Analysing…" : mode === "script" ? "Analyse" : "Compare"}
+              {running ? "Analysing…" : mode === "script" ? "Analyse" : mode === "episode" ? "Run episode → Excel" : "Compare"}
             </button>
           </div>
 
@@ -697,6 +853,66 @@ export default function App() {
             </div>
           )}
         </section>
+
+        {/* Episode run — the workbook + what actually made it in */}
+        {episodeOut && (
+          <section className="card space-y-3">
+            <div>
+              <div className="section-title">Episode workbook — {episodeOut.episode}</div>
+              <div className="section-sub">
+                One sheet per language, plus Run info and a cross-language Summary.
+              </div>
+            </div>
+
+            {/* A workbook of 2 languages must never look like a workbook of 6. */}
+            {Object.keys(episodeOut.failed).length > 0 && (
+              <div className="text-xs text-err bg-err/5 border border-err/30 rounded px-2 py-1.5 space-y-0.5">
+                <div className="font-medium">
+                  ⚠ {Object.keys(episodeOut.failed).length} language(s) were NOT analysed — the
+                  workbook does not cover them:
+                </div>
+                {Object.entries(episodeOut.failed).map(([l, why]) => (
+                  <div key={l} className="font-mono text-[11px]">• {l}: {why}</div>
+                ))}
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-ink-500 border-b border-ink-800">
+                    <th className="py-1.5 pr-3">Language</th>
+                    <th className="py-1.5 pr-3">Missing</th>
+                    <th className="py-1.5 pr-3">Misaligned</th>
+                    <th className="py-1.5 pr-3">Extra</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {episodeOut.languages.map((l) => (
+                    <tr key={l} className="border-b border-ink-900/60">
+                      <td className="py-1.5 pr-3 font-medium">{l}</td>
+                      <td className="py-1.5 pr-3 tabular-nums text-err">{episodeOut.summary[l]?.n_missing ?? "—"}</td>
+                      <td className="py-1.5 pr-3 tabular-nums text-amber">{episodeOut.summary[l]?.n_misaligned ?? "—"}</td>
+                      <td className="py-1.5 pr-3 tabular-nums text-sky-400">{episodeOut.summary[l]?.n_extra ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <a className="btn-primary" href={api.reportXlsxUrl()} download>
+                ↓ Download workbook (.xlsx)
+              </a>
+              {originalAudioPath.trim() && (
+                <span className="text-[11px] text-ink-500">
+                  Reference audio (original, silent except the missing parts) is under Detected
+                  errors after a single-language run.
+                </span>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* 2 — characters */}
         {chars.length > 0 && (
