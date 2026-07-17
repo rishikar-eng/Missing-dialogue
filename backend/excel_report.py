@@ -314,29 +314,64 @@ def _summary(wb: Workbook, per_lang: dict[str, dict[str, Any]]) -> None:
     ws.auto_filter.ref = f"A{start - 1}:I{r - 1}"
     r += 2
 
-    # cross-language consistency — the whole point of one workbook per episode
-    r = _section(ws, r, "CROSS-LANGUAGE CHECK",
-                 "a character missing in ALL languages usually means a script/mapping problem, "
-                 "not a dub problem — missing in ONE is a real dub gap")
-    r = _head(ws, r, ["Character", "Languages missing it", "Count", "Reading"], [24, 40, 8, 54])
+    # Cross-language consistency — the whole point of one workbook per episode.
+    #
+    # Judged on the missing RATE per character, never on "has >=1 missing finding": a lead
+    # with 78 lines and one dropped line appears in every language's missing list, and
+    # calling that "missing everywhere -> script/mapping issue" sends the studio chasing a
+    # phantom. Only a character who is *substantially* absent in EVERY language is
+    # evidence of a script/mapping problem rather than six dub teams failing identically.
     langs = list(per_lang)
-    miss_map: dict[str, list[str]] = {}
+    r = _section(ws, r, "CROSS-LANGUAGE CHECK",
+                 "same character, every language — where a gap repeats, the script/mapping is "
+                 "the more likely cause than the dub")
+    r = _head(ws, r, ["Character", "Missing lines per language", "Languages affected",
+                      "Worst miss rate", "Reading"], [22, 40, 16, 14, 60])
+
+    MOSTLY_ABSENT = 0.5     # >= half a character's lines missing = they're effectively absent
+    stats: dict[str, dict[str, tuple[int, int]]] = {}   # name -> lang -> (missed, lines)
     for lang, res in per_lang.items():
-        chars = {c.get("id"): c.get("name") for c in (res.get("characters") or [])}
-        seen = {e.get("character") for e in ((res.get("alignment") or {}).get("errors") or [])
-                if e.get("type") == "MISSING" and e.get("character")}
-        for cid in seen:
-            miss_map.setdefault(chars.get(cid) or cid, []).append(lang)
-    for name, ls in sorted(miss_map.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        reading = ("likely SCRIPT/MAPPING issue — missing everywhere" if len(ls) == len(langs) and len(langs) > 1
-                   else "likely a real dub gap in these languages")
-        for i, val in enumerate([name, ", ".join(ls), len(ls), reading], start=1):
+        chars = {c.get("id"): c for c in (res.get("characters") or [])}
+        missed: dict[str, int] = {}
+        for e in ((res.get("alignment") or {}).get("errors") or []):
+            if e.get("type") == "MISSING" and e.get("character"):
+                missed[e["character"]] = missed.get(e["character"], 0) + 1
+        for cid, c in chars.items():
+            n = missed.get(cid, 0)
+            lines = c.get("line_count") or 0
+            # a character with no track at all is absent even without per-line findings
+            if not (c.get("channel") or c.get("grouped_in")) and lines:
+                n = lines
+            if n:
+                stats.setdefault(c.get("name") or cid, {})[lang] = (n, lines)
+
+    rows = []
+    for name, per in stats.items():
+        rates = [m / l for m, l in per.values() if l]
+        worst = max(rates) if rates else 0.0
+        everywhere = len(per) == len(langs) and len(langs) > 1
+        if everywhere and all(x >= MOSTLY_ABSENT for x in rates):
+            reading, tone = ("Absent in EVERY language — look at the script/mapping first, "
+                             "not the dub", "WARN")
+        elif everywhere:
+            reading, tone = ("A few lines drop in every language — usually the same hard lines; "
+                             "check those timings in the script", "WARN")
+        else:
+            reading, tone = (f"Gap in {', '.join(per)} only — the other languages delivered these "
+                             f"lines, so it looks like a real dub gap", "MISSING")
+        rows.append((name, per, worst, reading, tone))
+
+    for name, per, worst, reading, tone in sorted(rows, key=lambda x: (-len(x[1]), -x[2], x[0])):
+        detail = ", ".join(f"{lg} {m}/{l}" for lg, (m, l) in per.items())
+        for i, val in enumerate([name, detail, len(per), None, reading], start=1):
             c = ws.cell(row=r, column=i, value=val)
             c.border = _BORDER
-            c.alignment = Alignment(vertical="top", wrap_text=(i == 4))
-        ws.cell(row=r, column=4).fill = _FILL["WARN"] if len(ls) == len(langs) and len(langs) > 1 else _FILL["MISSING"]
+            c.alignment = Alignment(vertical="top", wrap_text=(i in (2, 5)))
+        wc = ws.cell(row=r, column=4, value=worst)
+        wc.number_format = "0%"
+        ws.cell(row=r, column=5).fill = _FILL[tone]
         r += 1
-    if not miss_map:
+    if not rows:
         ws.cell(row=r, column=1, value="No missing lines in any language.").font = _MUTED
     ws.freeze_panes = "A4"
 
