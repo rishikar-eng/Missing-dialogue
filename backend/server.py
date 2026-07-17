@@ -520,10 +520,14 @@ def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] 
             original_audio_path=req.original_audio_path,
         )
         try:
-            with jobs.heavy_slot():
-                res = _run_analysis(one, *_check_analyze_inputs(one),
-                                    on_stage=(lambda m, d, t, _l=lang, _i=i: on_stage(f"{_l}: {m}", _i, total))
-                                    if on_stage else None)
+            # NO heavy_slot here. This runs inside a job, and jobs.submit's worker already
+            # holds that same threading.Semaphore(1) for the whole runner — re-acquiring it
+            # is a self-deadlock (semaphores aren't reentrant) and the episode would hang
+            # forever at "running". Concurrency is already bounded by the job slot; the
+            # languages inside one episode are sequential by construction.
+            res = _run_analysis(one, *_check_analyze_inputs(one),
+                                on_stage=(lambda m, d, t, _l=lang, _i=i: on_stage(f"{_l}: {m}", _i, total))
+                                if on_stage else None)
             res["_audio_dir"] = audio_dir
             per_lang[lang] = res
         except HTTPException as e:
