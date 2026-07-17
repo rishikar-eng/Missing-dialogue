@@ -269,10 +269,32 @@ export type BrowseResult = {
 
 export type Healthz = { status: string; auth_required?: boolean; browse_enabled?: boolean };
 
+// One episode x N dub languages -> one .xlsx (a sheet per language).
+export type EpisodeRequest = {
+  script_path: string;
+  languages: Record<string, string>;   // sheet name -> that language's tracks folder
+  original_audio_path?: string | null;
+  episode?: string;
+  strip_prefix?: string;
+  tol_s?: number;
+};
+
+export type EpisodeResult = {
+  episode: string;
+  languages: string[];
+  failed: Record<string, string>;      // language -> why it was skipped
+  report_ready: boolean;
+  summary: Record<string, { n_missing: number; n_misaligned: number; n_extra: number }>;
+};
+
 export const api = {
   analyze: (req: AnalyzeRequest) => post<AnalyzeResult>("/api/analyze", req),
   // Hosted flavour: returns 202 + a job id immediately (tunnels cut long requests).
   analyzeJob: (req: AnalyzeRequest) => post<JobInfo>("/api/jobs/analyze", req),
+  // One episode, every language, one workbook. Always a job (6 languages ~= 10-20 min).
+  episodeJob: (req: EpisodeRequest) => post<JobInfo>("/api/jobs/episode", req),
+  // The workbook from the last episode run (cookie/desktop auth; see media note below).
+  reportXlsxUrl: () => `${API}/api/report.xlsx`,
   jobStatus: (jobId: string) => get<JobInfo>(`/api/jobs/${encodeURIComponent(jobId)}`),
   browse: (path: string) => get<BrowseResult>(`/api/browse?path=${encodeURIComponent(path)}`),
   healthz: () => get<Healthz>("/api/healthz"),
@@ -293,7 +315,9 @@ export const api = {
   // URL or a log). Desktop mode has no key and points at 127.0.0.1 — bare URLs work there.
   // MISSING lines cut from the ORIGINAL audio, as one WAV. mode "stitch" = clips
   // back-to-back; "timeline" = full episode-length track, silent except at the gaps.
-  missingCompilationUrl: (mode: "stitch" | "timeline" = "stitch", padS = 1.0, tolS = 1.0) =>
+  // padS = context each side of every missing gap (2.5s => the cuts land in room tone
+  // instead of chopping a word; overlapping windows merge into one passage).
+  missingCompilationUrl: (mode: "stitch" | "timeline" = "stitch", padS = 2.5, tolS = 1.0) =>
     `${API}/api/missing-compilation?mode=${mode}&pad_s=${padS}&tol_s=${tolS}`,
   // All dub tracks summed into ONE full-length WAV — for A/B-ing against the original in an editor.
   dubMixdownUrl: () => `${API}/api/dub-mixdown`,

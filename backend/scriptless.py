@@ -148,7 +148,8 @@ def compare_original_to_dub(
         "sync_warnings": sync_warnings,
         "summary": {
             "n_characters_checked": 0,
-            # recomputed AFTER the missing->misaligned reclassification (not ca.n_missing)
+            # counted from the FINAL error list (not ca.n_missing): EXTRA is recomputed
+            # per-track below, so the summary must reflect what's actually reported.
             "n_missing": sum(1 for d in errors if d["type"] == "MISSING"),
             "n_misaligned": sum(1 for d in errors if d["type"] == "MISALIGNED"),
             "n_extra": n_extra,

@@ -7,3 +7,5 @@ soundfile==0.12.1
 onnxruntime==1.19.2
 httpx==0.28.1          # server-to-server call to the Rian auth API (login proxy)
 cryptography==49.0.0   # AES-256-CBC encryption of the Rian login payload
+openpyxl==3.1.5        # the per-episode QC workbook (and the offline voice-bank/roster tools)
+Pillow==12.3.0         # downscale character pictures to thumbnails for the workbook

@@ -45,15 +45,8 @@ const listenHint = (e: AlignError, compare?: boolean): string => {
     : "Unscripted speech here — the track talks during the highlighted slot but no script line covers it. Listen to what was said.";
 };
 
-const pad = (n: number) => String(n).padStart(2, "0");
-// seconds -> HH:MM:SS:FF, matching the script's timecode format
-const toTimecode = (s: number, fps: number): string => {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  const f = Math.round((s - Math.floor(s)) * fps);
-  return `${pad(h)}:${pad(m)}:${pad(sec)}:${pad(f)}`;
-};
+// (frame-accurate HH:MM:SS:FF formatting lived here for the CSV export; the workbook
+//  writes plain HH:MM:SS.s server-side, and the TXT already used its own formatter.)
 
 const hasElectron = () => typeof window !== "undefined" && !!window.electronAPI;
 
@@ -309,64 +302,6 @@ export default function App() {
     };
   };
 
-  const downloadCsv = () => {
-    if (!result) return;
-    const fps = result.fps ?? 25;
-    const d = reportData();
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const L: string[] = [];
-    const HEAD = ["#", "Type", "Character", "Timecode", "Start_s", "End_s", "Script line", "Detail", "Track"];
-    L.push(HEAD.map(esc).join(","));
-    const row = (cells: unknown[]) => L.push(cells.map(esc).join(","));
-    const sec = (title: string) => { L.push(""); row([`== ${title} ==`]); };
-
-    if (d.issues.length) {
-      sec(`TRACK CHECKS — verify by listening (${d.issues.length})`);
-      for (const it of d.issues) {
-        const tag =
-          it.kind === "name_mismatch" ? "NAME != VOICE"
-          : it.kind === "possible_match" ? "POSSIBLE MATCH"
-          : it.kind === "verified_absent" ? "NO AUDIO (verified)"
-          : it.kind === "grouped" ? "GROUPED (walla)"
-          : "RECOVERED";
-        row(["", tag, it.character_name ?? it.labelled_character_name ?? "", "", "", "", "", it.message, it.channel ?? ""]);
-      }
-    }
-    if (d.sync.length) {
-      sec(`WHOLE-TRACK SYNC — tracks that only align after a large shift (${d.sync.length})`);
-      for (const w of d.sync)
-        row(["", "Out of sync", d.nameById(w.character), "", "", "", "", w.message, w.channel]);
-    }
-    if (d.loud.length) {
-      sec(`LOUDNESS — quiet / hot lines (${d.loud.length})`);
-      for (const x of d.loud)
-        row(["", x.type === "LOUD" ? "Too hot" : "Too quiet", d.nameById(x.character), toTimecode(x.script_start_s, fps),
-          x.script_start_s, x.script_end_s, x.text, x.message, x.channel]);
-    }
-    sec("ACTION LIST — fix these (undelivered tracks, missing & misaligned lines)");
-    let n = 1;
-    for (const c of d.noAudio)
-      row([n++, "NO AUDIO", c.name, "", "", "", "", `No track delivered — ${c.line_count} lines / ${Math.round(c.total_speech_s)}s of dialogue`, ""]);
-    const isCmp = result.mode === "compare";
-    for (const e of [...d.missing, ...d.misaligned].sort((a, b) => (a.script_start_s ?? 0) - (b.script_start_s ?? 0))) {
-      const detail = e.type === "MISSING"
-        ? `${isCmp ? "Original speaks, dub silent" : "No speech in track"} (coverage ${Math.round((e.coverage ?? 0) * 100)}%)`
-        : `${(e.subtype ?? "drift").replace("_", " ")}${e.drift_s != null ? ` ${e.drift_s > 0 ? "+" : ""}${e.drift_s.toFixed(2)}s` : ""}`;
-      // Compare mode has no script text/fps — carry the finding's message and plain
-      // HH:MM:SS instead of fabricating frame timecodes.
-      row([n++, TYPE_STYLE[e.type].label, isCmp ? "original audio" : d.nameById(e.character),
-        isCmp ? hhmmss(e.script_start_s) : toTimecode(e.script_start_s ?? 0, fps),
-        e.script_start_s ?? "", e.script_end_s ?? "", (isCmp ? e.message : e.text) ?? "", detail, e.channel ?? ""]);
-    }
-    sec(`REVIEW — extra speech >= ${EXTRA_MIN_S}s (${d.extra.length} shown, ${result.alignment.summary.n_extra - d.extra.length} shorter blips hidden)`);
-    for (const e of d.extra)
-      row([n++, "Extra", d.nameById(e.character), isCmp ? hhmmss(e.audio_start_s) : toTimecode(e.audio_start_s ?? 0, fps),
-        e.audio_start_s ?? "", e.audio_end_s ?? "",
-        isCmp ? e.message ?? "" : "",
-        isCmp ? "Dub speech where the original is silent" : "Extra speech (no scripted line)", e.channel ?? ""]);
-
-    triggerDownload("﻿" + L.join("\r\n"), `dialogue-qc_${reportBase()}.csv`, "text/csv;charset=utf-8");
-  };
 
   const downloadTxt = () => {
     if (!result) return;
@@ -960,13 +895,20 @@ export default function App() {
                         Report (.txt)
                         <span className="block text-[11px] text-ink-400">Readable summary for reviewers</span>
                       </button>
-                      <button
+                      {/* The .xlsx is produced by an EPISODE run (all languages at once),
+                          not by this single-language analysis — so it links to whatever the
+                          last episode run built rather than pretending to export this view. */}
+                      <a
                         className="block w-full text-left px-3 py-2 text-sm hover:bg-ink-700 border-t border-ink-700"
-                        onClick={() => { downloadCsv(); setDlOpen(false); }}
+                        href={api.reportXlsxUrl()}
+                        download
+                        onClick={() => setDlOpen(false)}
                       >
-                        Data (.csv)
-                        <span className="block text-[11px] text-ink-400">Full issue list for Excel / tracking</span>
-                      </button>
+                        Workbook (.xlsx)
+                        <span className="block text-[11px] text-ink-400">
+                          Per-episode, one sheet per language — from the last episode run
+                        </span>
+                      </a>
                     </div>
                   )}
                 </div>
@@ -1294,7 +1236,7 @@ function MissingCompilation({ nMissing, tolS }: { nMissing: number; tolS: number
     setBusy(mode);
     setErr(null);
     try {
-      const res = await fetch(api.missingCompilationUrl(mode, 1.0, tolS));
+      const res = await fetch(api.missingCompilationUrl(mode, CONTEXT_PAD_S, tolS));
       if (!res.ok) {
         const d = await res.json().catch(() => null);
         throw new Error(d?.detail || `HTTP ${res.status}`);
@@ -1328,7 +1270,7 @@ function MissingCompilation({ nMissing, tolS }: { nMissing: number; tolS: number
     <div className="mt-3 border border-ink-700 rounded-lg px-3 py-2.5 bg-ink-800/40">
       <div className="text-sm text-ink-100 font-medium">Missing lines — from the original audio ({nMissing})</div>
       <div className="text-[11px] text-ink-400 mt-0.5">
-        Every missing line taken from the original (±1s context). Build a short listen-through, or a
+        Every missing line taken from the original (±{CONTEXT_PAD_S}s context, so cuts aren't abrupt). Build a short listen-through, or a
         full episode-length track that's silent except at the gaps — to lay over the dub timeline.
       </div>
       <div className="flex items-center gap-2 mt-2 flex-wrap">

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -34,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import box_fetch, jobs, scriptless
+from . import box_fetch, excel_report, jobs, scriptless
 from .alignment import align_script_to_channels
 from .auth import login as rian_login, logout as rian_logout
 from .char_list import apply_char_list
@@ -162,6 +163,23 @@ class CompareRequest(BaseModel):
     tol_s: float = 1.0
 
 
+class EpisodeRequest(BaseModel):
+    """One episode, every dub language, one workbook.
+
+    `languages` maps the sheet name -> that language's tracks folder, e.g.
+        {"Malayalam": "D:/eps/mala/30", "Tamil": "D:/eps/tamil/30", ...}
+    Each language is analysed against the SAME source-timed script (that's what makes
+    them comparable), then written to one .xlsx with a sheet per language.
+    """
+    script_path: str
+    languages: dict[str, str]
+    original_audio_path: str | None = None
+    episode: str = ""
+    strip_prefix: str = ""
+    tol_s: float = 1.0
+    fps: float | None = None
+
+
 class RealignRequest(BaseModel):
     tol_s: float = 1.0
 
@@ -216,7 +234,31 @@ def _auto_prefix(stems: list[str]) -> str:
     return ""
 
 
+def _resolve_tracks_dir(d: Path, max_depth: int = 3) -> Path:
+    """Descend through redundant wrapper folders to the one that holds the stems.
+
+    The studio's zips routinely extract with a duplicated level —
+    'tamil/30/GAVV EPI 30 TAMIL TRACK FOR AI/GAVV EPI 30 TAMIL TRACK FOR AI/*.wav' —
+    so picking the obvious folder used to fail with "No audio tracks found". Only
+    descends when the current folder has NO audio and exactly ONE subfolder, i.e. when
+    there is nothing to choose; anything ambiguous is left exactly as the user picked it.
+    """
+    for _ in range(max_depth):
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            return d
+        if any(p.is_file() and p.suffix.lower() in AUDIO_EXTS for p in entries):
+            return d                                   # stems are right here
+        subs = [p for p in entries if p.is_dir()]
+        if len(subs) != 1:
+            return d                                   # 0 or many -> don't guess
+        d = subs[0]
+    return d
+
+
 def _discover_channels(audio_dir: Path, strip_prefix: str) -> dict[str, Path]:
+    audio_dir = _resolve_tracks_dir(audio_dir)
     files = [
         p for p in sorted(audio_dir.iterdir())
         if p.is_file() and p.suffix.lower() in AUDIO_EXTS
@@ -448,6 +490,96 @@ def job_status(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown or expired job id")
     return job.public()
+
+
+def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
+    """Analyse every language of one episode against the same script, then build the
+    workbook. Sequential on purpose: each language holds several native-rate stems, and
+    running them in parallel is what OOMs a small host."""
+    script_path = Path(req.script_path)
+    if not script_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Script not found: {script_path}")
+    if not req.languages:
+        raise HTTPException(status_code=400, detail="Provide at least one language -> tracks folder")
+    original = Path(req.original_audio_path) if req.original_audio_path else None
+    if original is not None and not original.is_file():
+        raise HTTPException(status_code=400, detail=f"Original audio not found: {original}")
+    for lang, d in req.languages.items():
+        if not Path(d).is_dir():
+            raise HTTPException(status_code=400, detail=f"Tracks folder for {lang} not found: {d}")
+
+    total = len(req.languages)
+    per_lang: dict[str, dict[str, Any]] = {}
+    failed: dict[str, str] = {}
+    for i, (lang, audio_dir) in enumerate(req.languages.items()):
+        if on_stage:
+            on_stage(f"{lang} ({i + 1}/{total})", i, total)
+        one = AnalyzeRequest(
+            script_path=req.script_path, audio_dir=audio_dir, fps=req.fps,
+            strip_prefix=req.strip_prefix, tol_s=req.tol_s,
+            original_audio_path=req.original_audio_path,
+        )
+        try:
+            with jobs.heavy_slot():
+                res = _run_analysis(one, *_check_analyze_inputs(one),
+                                    on_stage=(lambda m, d, t, _l=lang, _i=i: on_stage(f"{_l}: {m}", _i, total))
+                                    if on_stage else None)
+            res["_audio_dir"] = audio_dir
+            per_lang[lang] = res
+        except HTTPException as e:
+            # One bad language must not lose the other five — record and carry on.
+            failed[lang] = str(e.detail)
+        except Exception as e:
+            failed[lang] = str(e) or "analysis failed"
+    if not per_lang:
+        raise HTTPException(status_code=400,
+                            detail="Every language failed: " + "; ".join(f"{k}: {v}" for k, v in failed.items()))
+
+    if on_stage:
+        on_stage("building workbook", total, total)
+    from datetime import datetime, timezone
+    ep = req.episode or script_path.stem
+    out = Path(tempfile.gettempdir()) / f"dialogue-qc_{re.sub(r'[^A-Za-z0-9_.-]+', '_', ep)}.xlsx"
+    excel_report.build_workbook(
+        meta={
+            "episode": ep,
+            "generated_at": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M"),
+            "script_path": str(script_path),
+            "original_audio_path": str(original) if original else "",
+            "tol_s": req.tol_s,
+        },
+        per_lang=per_lang,
+        out_path=out,
+    )
+    STATE["report_xlsx"] = str(out)   # served by GET /api/report.xlsx
+    return {
+        "episode": ep,
+        "languages": list(per_lang),
+        "failed": failed,
+        "report_ready": True,
+        "summary": {lang: (r.get("alignment") or {}).get("summary") for lang, r in per_lang.items()},
+    }
+
+
+@app.post("/api/jobs/episode", status_code=202)
+def episode_job(req: EpisodeRequest) -> dict[str, Any]:
+    """One episode x N languages -> one workbook. Always a job: 6 languages x ~20 stems
+    is 10-20 minutes, far past any proxy/tunnel request timeout."""
+    try:
+        job = jobs.submit("episode", lambda stage: _run_episode(req, on_stage=stage))
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    return job.public()
+
+
+@app.get("/api/report.xlsx")
+def report_xlsx():
+    """Download the workbook built by the last /api/jobs/episode run."""
+    p = STATE.get("report_xlsx")
+    if not p or not Path(p).is_file():
+        raise HTTPException(status_code=404, detail="No workbook yet — run an episode analysis first")
+    return FileResponse(p, filename=Path(p).name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.post("/api/qc")
@@ -814,14 +946,19 @@ def _missing_windows(st: dict[str, Any], tol_s: float, pad_s: float) -> list[tup
 
 
 @app.get("/api/missing-compilation")
-def missing_compilation(pad_s: float = 1.0, gap_s: float = 0.6, tol_s: float = 1.0, mode: str = "stitch"):
+def missing_compilation(pad_s: float = 2.5, gap_s: float = 0.6, tol_s: float = 1.0, mode: str = "stitch"):
     """A WAV of every MISSING line cut from the ORIGINAL audio (±pad_s context).
     Requires the original-language file. Two modes:
       mode="stitch"   — the clips back-to-back with a short silence between them
                         (a short re-record worklist to play straight through).
       mode="timeline" — a full episode-length track, silent everywhere EXCEPT at the
                         missing lines, where the original plays at its real timecode
-                        (drop it onto the episode/dub timeline in an editor)."""
+                        (drop it onto the episode/dub timeline in an editor).
+
+    pad_s defaults to 2.5 s each side (5 s of context per gap) so the cuts land in
+    silence/room-tone rather than chopping a word mid-syllable — abrupt cuts made the
+    clips hard to judge. Overlapping padded windows are merged (see _missing_windows),
+    so neighbouring gaps become one continuous passage instead of stuttering."""
     st = _state_snapshot()
     # scriptless_errors is a LIST after a compare run (possibly empty — that's a valid
     # "no findings" state, which falls through to the 404 below), None otherwise.

@@ -81,4 +81,10 @@ def attach_voices(characters: list[CharacterEntity]) -> None:
                     _channel_score(entry["character"], ent.channel))
             if s > best_score:
                 best_score, best_entry = s, entry
-        ent.voices = best_entry["voices"] if (best_entry is not None and best_score >= threshold) else None
+        matched = best_entry if (best_entry is not None and best_score >= threshold) else None
+        ent.voices = matched["voices"] if matched else None
+        # Record WHICH bank row matched. The bank and the character PICTURES come from
+        # the same studio sheet, so this fuzzy result ('Shoma' -> 'SHOUMA') is exactly
+        # the key the workbook needs to find the picture — re-deriving it from the
+        # script name with an exact match silently finds nothing.
+        ent.voice_bank_name = matched["character"] if matched else None

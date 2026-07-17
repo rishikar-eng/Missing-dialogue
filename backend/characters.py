@@ -53,6 +53,10 @@ class CharacterEntity(BaseModel):
     level_min_dbfs: float | None = None   # quietest delivered line (dBFS)
     level_max_dbfs: float | None = None   # loudest delivered line (dBFS)
     voice_id: str | None = None   # assigned bank voice (legacy single-voice field)
+    # The voice-bank row this character fuzzily matched ('Shoma' -> 'SHOUMA'). Set by
+    # voices.attach_voices; the QC workbook uses it to look up the character's picture,
+    # since bank + pictures come from the same studio sheet and are spelled its way.
+    voice_bank_name: str | None = None
     # ElevenLabs voices across dub languages, from the production voice bank:
     # [{lang: "hi"|"ta"|..., name, id, form: "normal"|"granute"}]
     voices: list[dict[str, Any]] | None = None
