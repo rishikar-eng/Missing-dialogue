@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -160,6 +161,13 @@ def list_folder(
     return {"id": folder_id, "folders": folders, "files": files}
 
 
+# How many stems to pull from Box at once. Episodes are ~16-20 files of ~150 MB, and
+# downloading them one-at-a-time was the batch's real bottleneck (the VAD was idle waiting
+# on the network). Box's rate limit (1000 req/min) is far above this, so parallelism is
+# safe; each worker uses its own client. Tunable via env for a bigger/smaller host.
+_DL_PARALLEL = max(1, int(os.environ.get("DQC_BOX_DL_PARALLEL", "6")))
+
+
 def download_files(
     token: str,
     file_ids: list[str],
@@ -167,15 +175,34 @@ def download_files(
     *,
     shared_link: str | None = None,
 ) -> list[Path]:
-    """Download several Box files into one directory (e.g. the per-speaker dub tracks),
-    disambiguating any same-named files so none is silently overwritten."""
+    """Download several Box files into one directory (e.g. the per-speaker dub tracks) in
+    PARALLEL, disambiguating any same-named files so none is silently overwritten.
+
+    Names are resolved first (cheap sequential metadata calls, so the collision-safe
+    uniquify stays deterministic); then the byte streams are fetched concurrently."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     headers = _headers(token, shared_link)
+
     used: set[str] = set()
-    out: list[Path] = []
-    with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as client:
+    plan: list[tuple[str, Path]] = []
+    with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as meta:
         for fid in file_ids:
-            fname = _uniquify(_fetch_name(client, fid, headers), used)
-            out.append(_stream_to(client, fid, dest_dir / fname, headers))
+            plan.append((fid, dest_dir / _uniquify(_fetch_name(meta, fid, headers), used)))
+
+    if len(plan) <= 1 or _DL_PARALLEL == 1:
+        with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as c:
+            return [_stream_to(c, fid, path, headers) for fid, path in plan]
+
+    def _one(fid: str, path: Path) -> Path:
+        # A client per download — httpx streaming responses aren't meant to be shared
+        # across threads, and per-call clients keep connections cleanly isolated.
+        with httpx.Client(follow_redirects=True, timeout=_TIMEOUT) as c:
+            return _stream_to(c, fid, path, headers)
+
+    out: list[Path] = [Path()] * len(plan)
+    with ThreadPoolExecutor(max_workers=min(_DL_PARALLEL, len(plan))) as ex:
+        futs = {ex.submit(_one, fid, path): i for i, (fid, path) in enumerate(plan)}
+        for f in as_completed(futs):
+            out[futs[f]] = f.result()   # a failed download raises -> propagates, as before
     return out
