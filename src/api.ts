@@ -282,6 +282,15 @@ export type BoxBrowse = {
   files: { id: string; name: string; size: number }[];
 };
 
+// Auto-detect result: the parts of one episode the scanner found in a Box folder.
+export type BoxScan = {
+  episode: string;
+  script: { id: string; name: string } | null;
+  original: { id: string; name: string } | null;
+  languages: Record<string, { kind: "zip" | "folder"; id: string; name: string }>;
+  notes: string[];   // anything it couldn't place (shown so nothing fails silently)
+};
+
 // One language's tracks in Box: a delivered zip OR a folder of loose stems.
 export type BoxLangSource = { zip_file_id?: string; folder_id?: string; name?: string };
 
@@ -322,6 +331,18 @@ export const api = {
   // Same, but everything is fetched from Box by the server (downloads + analyses).
   boxEpisodeJob: (req: BoxEpisodeRequest) => post<JobInfo>("/api/jobs/box-episode", req),
   boxStatus: () => get<BoxStatus>("/api/box/status"),
+  // Auto-detect an episode's script/original/dub-zips inside a Box folder.
+  boxScan: async (folderId: string, episode: string, devToken?: string | null): Promise<BoxScan> => {
+    const res = await fetch(
+      `${API}/api/box/scan?folder_id=${encodeURIComponent(folderId)}&episode=${encodeURIComponent(episode)}`,
+      { headers: { ...authHeaders(), ...keyHeaders(), ...(devToken ? { "X-Box-Token": devToken } : {}) } },
+    );
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.detail || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<BoxScan>;
+  },
   // devToken: a 60-min developer token for testing before the server is Box-connected.
   boxBrowse: async (folderId: string, devToken?: string | null): Promise<BoxBrowse> => {
     const res = await fetch(`${API}/api/box/browse?folder_id=${encodeURIComponent(folderId)}`, {

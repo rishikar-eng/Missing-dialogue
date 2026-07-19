@@ -78,7 +78,37 @@ export default function App() {
   const [boxOriginal, setBoxOriginal] = useState<BoxPick | null>(null);
   const [boxLangs, setBoxLangs] = useState<Record<string, (BoxPick & { kind: "zip" | "folder" }) | null>>({});
   // Which slot the Box picker is choosing for right now.
-  const [boxPick, setBoxPick] = useState<null | { accept: "script" | "audio" | "tracks"; set: (p: BoxPick & { kind: "zip" | "folder" }) => void }>(null);
+  const [boxPick, setBoxPick] = useState<null | { accept: "script" | "audio" | "tracks" | "folder"; set: (p: BoxPick & { kind: "zip" | "folder" }) => void }>(null);
+  // Auto-detect: point at the episode's parent folder + give the number, and the server
+  // finds the script / original / per-language zips. Manual pick stays available.
+  const [boxFillMode, setBoxFillMode] = useState<"auto" | "manual">("auto");
+  const [boxRoot, setBoxRoot] = useState<BoxPick | null>(null);
+  const [scanEp, setScanEp] = useState("");
+  const [scanNotes, setScanNotes] = useState<string[] | null>(null);
+  const boxScan = useMutation({
+    mutationFn: async () => {
+      if (!boxRoot) throw new Error("Pick the folder that contains the episode first.");
+      if (!scanEp.trim()) throw new Error("Enter the episode number to auto-detect.");
+      return api.boxScan(boxRoot.id, scanEp.trim(), boxDevToken.trim() || null);
+    },
+    onSuccess: (r) => {
+      setError(null);
+      setScanNotes(r.notes);
+      if (r.script) setBoxScript(r.script);
+      if (r.original) setBoxOriginal(r.original);
+      // match detected languages onto the existing rows by name (case-insensitive)
+      setBoxLangs((prev) => {
+        const next = { ...prev };
+        for (const [lang, src] of Object.entries(r.languages)) {
+          const row = langs.find((l) => l.name.trim().toLowerCase() === lang.toLowerCase());
+          if (row) next[row.name] = { id: src.id, name: src.name, kind: src.kind };
+        }
+        return next;
+      });
+      if (!episodeName.trim()) setEpisodeName(`EP${scanEp.trim()}`);
+    },
+    onError: (e: Error) => { setError(e.message); setScanNotes(null); },
+  });
   useEffect(() => {
     if (mode !== "episode") return;
     api.boxStatus().then((s) => setBoxReady(!!s.configured)).catch(() => setBoxReady(false));
@@ -354,6 +384,9 @@ export default function App() {
     setBoxScript(null);
     setBoxOriginal(null);
     setBoxLangs({});
+    setBoxRoot(null);
+    setScanEp("");
+    setScanNotes(null);
   };
 
   // ---- report helpers (used by the TXT report) ----
@@ -745,6 +778,47 @@ export default function App() {
 
               {epSource === "box" ? (
                 <>
+                  {/* Auto-detect vs pick-each-file. Auto just PRE-FILLS the same fields, so
+                      you can always fix what it guessed. */}
+                  <div className="flex gap-1 bg-ink-900 border border-ink-800 rounded-lg p-1 w-fit text-xs">
+                    <button className={`px-3 py-1 rounded ${boxFillMode === "auto" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+                            onClick={() => setBoxFillMode("auto")}>🔍 Auto-detect episode</button>
+                    <button className={`px-3 py-1 rounded ${boxFillMode === "manual" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+                            onClick={() => setBoxFillMode("manual")}>✋ Pick each file</button>
+                  </div>
+
+                  {boxFillMode === "auto" && (
+                    <div className="border border-amber/30 bg-amber/5 rounded-lg p-2.5 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex-1 min-w-[220px] text-xs font-mono px-2 py-1.5 border border-ink-700 rounded truncate">
+                          {boxRoot ? <span className="text-emerald-400">📦 {boxRoot.name}</span>
+                                   : <span className="text-ink-500">— folder that contains the episode —</span>}
+                        </div>
+                        <button type="button"
+                                className="shrink-0 text-[11px] text-amber hover:text-amber/80 border border-amber/30 rounded px-2 py-1"
+                                onClick={() => setBoxPick({ accept: "folder", set: (p) => setBoxRoot({ id: p.id, name: p.name }) })}>
+                          Browse Box…
+                        </button>
+                        <input className="w-24 bg-ink-800 border border-ink-700 rounded px-2 py-1 text-xs"
+                               value={scanEp} onChange={(e) => setScanEp(e.target.value)} placeholder="episode #" />
+                        <button type="button" className="btn-primary text-xs py-1"
+                                disabled={!boxRoot || !scanEp.trim() || boxScan.isPending}
+                                onClick={() => boxScan.mutate()}>
+                          {boxScan.isPending ? "Scanning…" : "Auto-detect"}
+                        </button>
+                      </div>
+                      {scanNotes && scanNotes.length > 0 && (
+                        <div className="text-[11px] text-amber/90 space-y-0.5">
+                          {scanNotes.map((n, i) => <div key={i}>⚠ {n}</div>)}
+                        </div>
+                      )}
+                      <div className="text-[11px] text-ink-500">
+                        Fills the fields below from what it finds — <b>review and fix anything</b> before running.
+                        (Detection is still being tuned to your Box's layout.)
+                      </div>
+                    </div>
+                  )}
+
                   <BoxFieldRow label="Script file" pick={boxScript}
                     onBrowse={() => setBoxPick({ accept: "script", set: (p) => setBoxScript({ id: p.id, name: p.name }) })}
                     onClear={() => setBoxScript(null)} />
@@ -1381,7 +1455,7 @@ function BoxFieldRow({ label, pick, onBrowse, onClear }: {
 // Box file/folder picker: navigates the server's Box connection (or a dev token) —
 // only names and ids move through the browser, never file bytes.
 function BoxPickModal({ accept, devToken, onPick, onClose }: {
-  accept: "script" | "audio" | "tracks";
+  accept: "script" | "audio" | "tracks" | "folder";
   devToken: string | null;
   onPick: (p: { id: string; name: string; kind: "zip" | "folder" }) => void;
   onClose: () => void;
@@ -1406,6 +1480,7 @@ function BoxPickModal({ accept, devToken, onPick, onClose }: {
   const match =
     accept === "script" ? /\.(docx|srt|csv|tsv)$/i
     : accept === "audio" ? /\.(wav|flac|ogg|aiff?|mp3|m4a)$/i
+    : accept === "folder" ? /^$/  // folder mode: navigate only, don't list files
     : /\.zip$/i;
   const files = (data?.files ?? []).filter((f) => match.test(f.name));
   const fmtSize = (n: number) =>
@@ -1419,6 +1494,7 @@ function BoxPickModal({ accept, devToken, onPick, onClose }: {
           <div className="text-sm font-medium text-ink-100 flex-1 min-w-0">
             {accept === "script" ? "Pick the script from Box"
              : accept === "audio" ? "Pick the original audio from Box"
+             : accept === "folder" ? "Open the folder that contains this episode"
              : "Pick this language's ZIP (or open its stems folder)"}
             <span className="block font-mono text-[11px] text-ink-400 truncate">
               📦 {stack.map((s) => s.name).join(" / ")}
@@ -1462,10 +1538,12 @@ function BoxPickModal({ accept, devToken, onPick, onClose }: {
           )}
         </div>
 
-        {accept === "tracks" && data && !err && stack.length > 1 && (
+        {((accept === "tracks" && stack.length > 1) || accept === "folder") && data && !err && (
           <div className="px-4 py-3 border-t border-ink-800 flex items-center justify-between gap-3">
             <span className="text-[11px] text-ink-400">
-              …or use this folder's loose stems ({(data.files ?? []).length} files listed)
+              {accept === "folder"
+                ? `Use “${cur.name}” (${data.folders.length} subfolders, ${(data.files ?? []).length} files)`
+                : `…or use this folder's loose stems (${(data.files ?? []).length} files listed)`}
             </span>
             <button className="btn-primary"
                     onClick={() => onPick({ id: cur.id, name: cur.name, kind: "folder" })}>

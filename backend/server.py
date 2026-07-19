@@ -650,6 +650,112 @@ def box_browse(folder_id: str = "0",
         raise HTTPException(status_code=502, detail="Box browse failed")
 
 
+# ---- episode auto-detection --------------------------------------------------
+# Language folders/filenames -> canonical sheet name. Longer keys first so 'kannada'
+# wins over 'kan'. Matched with letter boundaries so 'tel' doesn't fire inside 'hotel'.
+_LANG_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("Malayalam", ("malayalam", "mala", "mal")),
+    ("Tamil", ("tamil", "tam")),
+    ("Telugu", ("telugu", "tel")),
+    ("Kannada", ("kannada", "kann", "kan")),
+    ("Bengali", ("bengali", "bengoli", "beng", "bng", "ben")),
+    ("Marathi", ("marathi", "mar")),
+    ("Hindi", ("hindi", "hin")),        # the source language — treated as the original, not a dub
+]
+
+
+def _lang_of(name: str) -> str | None:
+    n = (name or "").strip().lower()
+    for lang, keys in _LANG_KEYWORDS:
+        for k in keys:
+            if re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", n):
+                return lang
+    return None
+
+
+def _ep_re(episode: str) -> re.Pattern[str]:
+    """Match the episode number as a whole number: '36' in 'E36', '#36', 'EPI 36',
+    'EP 36', tolerating zero-padding, but NOT inside '360'."""
+    num = re.sub(r"\D", "", str(episode)) or str(episode)
+    return re.compile(rf"(?<!\d)0*{re.escape(num)}(?!\d)")
+
+
+def _is_original_audio(name: str) -> bool:
+    n = (name or "").lower()
+    return any(k in n for k in ("premix", "hindi", "original", "master", "_st_", "_st ", "source_audio"))
+
+
+@app.get("/api/box/scan")
+def box_scan(folder_id: str, episode: str,
+             x_box_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Look inside a Box folder and guess an episode's parts: the script, the original
+    audio, and each dub language's zip/folder — matched by the episode number and the
+    language in the folder/file names. Best-effort: everything it returns is a SUGGESTION
+    the UI pre-fills and the user can correct; `notes` lists what it couldn't place."""
+    token = _box_token(x_box_token)
+    ep_re = _ep_re(episode)
+    try:
+        top = box_fetch.list_folder(token, folder_id)
+    except box_fetch.BoxFetchError as e:
+        raise HTTPException(status_code=502, detail=f"Box scan failed: {e}")
+
+    script: dict[str, Any] | None = None
+    original: dict[str, Any] | None = None
+    languages: dict[str, dict[str, Any]] = {}
+    notes: list[str] = []
+
+    def take_files(files: list[dict[str, Any]]) -> None:
+        nonlocal script, original
+        for f in files:
+            nm = str(f["name"])
+            ext = Path(nm).suffix.lower()
+            if not ep_re.search(nm):
+                continue                       # only this episode's files
+            if ext in _SCRIPT_EXTS and script is None:
+                script = {"id": str(f["id"]), "name": nm}
+            elif ext in _BOX_AUDIO_EXTS and _is_original_audio(nm) and original is None:
+                original = {"id": str(f["id"]), "name": nm}
+            elif ext == ".zip":
+                lang = _lang_of(nm)
+                if lang and lang != "Hindi":
+                    languages.setdefault(lang, {"kind": "zip", "id": str(f["id"]), "name": nm})
+
+    take_files(top["files"])                   # per-episode layout: files sit directly here
+
+    for d in top["folders"]:                   # per-language layout: one subfolder per language
+        lang = _lang_of(d["name"])
+        try:
+            sub = box_fetch.list_folder(token, str(d["id"]))
+        except box_fetch.BoxFetchError:
+            notes.append(f"could not open subfolder '{d['name']}'")
+            continue
+        if lang and lang != "Hindi":
+            zips = [f for f in sub["files"]
+                    if str(f["name"]).lower().endswith(".zip") and ep_re.search(str(f["name"]))]
+            eps = [x for x in sub["folders"] if ep_re.search(str(x["name"]))]
+            if lang in languages:
+                pass                           # already found directly above
+            elif zips:
+                languages[lang] = {"kind": "zip", "id": str(zips[0]["id"]), "name": str(zips[0]["name"])}
+            elif eps:
+                languages[lang] = {"kind": "folder", "id": str(eps[0]["id"]), "name": str(eps[0]["name"])}
+            else:
+                notes.append(f"{lang}: no episode {episode} zip/folder inside '{d['name']}'")
+        else:
+            # an 'original' / 'scripts' / source-language folder -> mine it for script+original
+            take_files(sub["files"])
+
+    if not script:
+        notes.append(f"no script (.docx/.srt) for episode {episode} found")
+    if not original:
+        notes.append(f"no original/premix audio for episode {episode} found (optional)")
+    if not languages:
+        notes.append("no dub-language zips/folders matched — check the folder or pick manually")
+
+    return {"episode": str(episode), "script": script, "original": original,
+            "languages": languages, "notes": notes}
+
+
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
 _DISK_HEADROOM = 2 * 1024**3          # always keep 2 GB free
 
