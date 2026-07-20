@@ -44,27 +44,61 @@ def idx_keys(d: dict) -> set:
     return set(d.keys())
 
 
+def _flattened_rows(root) -> list[list[str]]:
+    """Fallback for scripts that AREN'T a Word table — the same Sr.No/Start/End/Character/
+    Dialogue columns flattened into ordinary paragraphs (one value per paragraph, seen on
+    some episodes). Rebuild logical rows [start, end, character, text] using each consecutive
+    pair of START/END timecodes as an anchor: the paragraph after the pair is the character,
+    and everything up to the next row's Sr.No is the dialogue. Dialogue almost never contains
+    an HH:MM:SS:FF token, so anchoring on timecodes is reliable; the header paragraphs carry
+    no timecodes so they're skipped naturally."""
+    cells: list[str] = []
+    for p in root.iter(_W + "p"):
+        txt = "".join(t.text or "" for t in p.iter(_W + "t")).strip()
+        if txt:
+            cells.append(txt)
+    anchors = [i for i in range(len(cells) - 1)
+               if _TC_RE.match(cells[i]) and _TC_RE.match(cells[i + 1])]
+    rows: list[list[str]] = []
+    for k, i in enumerate(anchors):
+        start_c, end_c = cells[i], cells[i + 1]
+        char_c = cells[i + 2] if i + 2 < len(cells) else ""
+        nxt = anchors[k + 1] if k + 1 < len(anchors) else len(cells)
+        text_cells = cells[i + 3:nxt]
+        # the value right before the NEXT row's start timecode is that row's Sr.No — drop it
+        if text_cells and re.fullmatch(r"\d{1,6}", text_cells[-1]):
+            text_cells = text_cells[:-1]
+        rows.append([start_c, end_c, char_c, " ".join(text_cells)])
+    return rows
+
+
 def parse(path: Path, fps: float | None = None) -> ScriptDoc:
     root = ET.fromstring(zipfile.ZipFile(path).read("word/document.xml"))
 
-    rows: list[list[str]] = []
+    table_rows: list[list[str]] = []
     for tr in root.iter(_W + "tr"):
-        rows.append([_cell_text(tc) for tc in tr.findall(_W + "tc")])
-    if not rows:
-        raise ValueError("No table rows found in DOCX")
+        table_rows.append([_cell_text(tc) for tc in tr.findall(_W + "tc")])
 
-    # Locate header (row that names Character + a time column); fall back to row 0.
-    header_i = 0
-    for i, r in enumerate(rows[:5]):
-        joined = " ".join(r).lower()
-        if "character" in joined and ("start" in joined or "time" in joined):
-            header_i = i
-            break
-    cols = _find_columns(rows[header_i])
+    if table_rows:
+        # Locate header (row that names Character + a time column); fall back to row 0.
+        header_i = 0
+        for i, r in enumerate(table_rows[:5]):
+            joined = " ".join(r).lower()
+            if "character" in joined and ("start" in joined or "time" in joined):
+                header_i = i
+                break
+        cols = _find_columns(table_rows[header_i])
+        data_rows = table_rows[header_i + 1:]
+    else:
+        # No Word table — the script flattened its rows into paragraphs. Rebuild them.
+        data_rows = _flattened_rows(root)
+        cols = {}
+        if not data_rows:
+            raise ValueError("No table rows or timecoded paragraphs found in DOCX")
 
     # Detect max frame value to infer fps if not given.
     max_frame = 0
-    for r in rows[header_i + 1:]:
+    for r in data_rows:
         for cell in r:
             if _TC_RE.match(cell):
                 max_frame = max(max_frame, int(re.split(r"[:;]", cell)[-1]))
@@ -75,8 +109,8 @@ def parse(path: Path, fps: float | None = None) -> ScriptDoc:
     # A row with >=2 timecode cells IS a dialogue row (every parsed row must have
     # both). Count them so callers can see how many dialogue-looking rows were
     # dropped — a dropped row is a scripted line the QC pass never checks.
-    candidates = sum(1 for r in rows[header_i + 1:] if sum(1 for c in r if _TC_RE.match(c)) >= 2)
-    for r in rows[header_i + 1:]:
+    candidates = sum(1 for r in data_rows if sum(1 for c in r if _TC_RE.match(c)) >= 2)
+    for r in data_rows:
         # Resolve start/end either by header columns or by "two timecode cells".
         if {"start", "end", "character"} <= idx_keys(cols) and len(r) > max(cols["start"], cols["end"], cols["character"]):
             start_cell, end_cell = r[cols["start"]], r[cols["end"]]
