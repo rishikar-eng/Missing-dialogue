@@ -124,7 +124,7 @@ export type IssueSample = {
 
 // Content-based (voice-timeline) diagnostics for the name→track mapping.
 export type NamingIssue = {
-  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped";
+  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped" | "reassigned";
   message: string;
   character?: string;
   character_name?: string;

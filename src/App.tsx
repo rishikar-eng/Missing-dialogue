@@ -563,6 +563,9 @@ export default function App() {
         } else if (it.kind === "grouped") {
           block("GROUPED", "", it.character_name ?? "", it.channel ?? "", "bit-part in a walla/crowd stem");
           L.push(wrap(`No dedicated track; delivered inside the group stem '${it.channel}'. Normal for small parts — expected, not missing.`));
+        } else if (it.kind === "reassigned") {
+          block("REASSIGNED", "", it.character_name ?? "", it.channel ?? "", "track handed to the voice that owns it");
+          L.push(wrap(it.message ?? `'${it.channel}' was reassigned to ${it.character_name} because its voice matches them, not the name it was labelled with.`));
         } else {
           block("NO AUDIO*", "", it.character_name ?? "", "", "verified absent");
           L.push(wrap("No track's voice covers their lines anywhere — audio genuinely not delivered."));
@@ -1949,6 +1952,8 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
       ? "NO AUDIO (verified)"
       : iss.kind === "grouped"
       ? "GROUPED (walla)"
+      : iss.kind === "reassigned"
+      ? "REASSIGNED"
       : "RECOVERED";
   const samples = iss.samples ?? [];
   const canOpen = samples.length > 0;
