@@ -70,7 +70,7 @@ export default function App() {
   const [episodeOut, setEpisodeOut] = useState<EpisodeResult | null>(null);
   // Episode source: local folders on this machine/server, or straight from Box (the
   // server downloads + extracts + analyses; no bytes touch the browser).
-  const [epSource, setEpSource] = useState<"local" | "box">("local");
+  const [epSource, setEpSource] = useState<"local" | "box">(isHosted ? "box" : "local");
   const [boxReady, setBoxReady] = useState(false);        // server has its own Box connection
   const [boxDevToken, setBoxDevToken] = useState("");     // 60-min dev token (memory only)
   type BoxPick = { id: string; name: string };
@@ -660,17 +660,18 @@ export default function App() {
             </div>
           </div>
 
-          {/* Mode: script-based QC vs scriptless original-vs-dub comparison.
-              Hosted serves the script mode only for now (compare needs long local files). */}
-          {!hosted && (
-            <div className="flex gap-1 bg-ink-900 border border-ink-800 rounded-lg p-1 w-fit">
-              <button
-                className={`px-3 py-1 rounded text-xs ${mode === "script" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
-                onClick={() => setMode("script")}
-                title="Check the dub tracks against a timecoded script (DOCX/SRT/CSV)."
-              >
-                Script + tracks
-              </button>
+          {/* Mode: script-based QC vs scriptless original-vs-dub comparison vs episode→Excel.
+              Hosted hides only Compare (it needs long local files); episode-from-Box is the
+              whole point of the server-side deployment, so it's offered when hosted. */}
+          <div className="flex gap-1 bg-ink-900 border border-ink-800 rounded-lg p-1 w-fit">
+            <button
+              className={`px-3 py-1 rounded text-xs ${mode === "script" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+              onClick={() => setMode("script")}
+              title="Check the dub tracks against a timecoded script (DOCX/SRT/CSV)."
+            >
+              Script + tracks
+            </button>
+            {!hosted && (
               <button
                 className={`px-3 py-1 rounded text-xs ${mode === "compare" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
                 onClick={() => setMode("compare")}
@@ -678,15 +679,15 @@ export default function App() {
               >
                 No script — compare vs original
               </button>
-              <button
-                className={`px-3 py-1 rounded text-xs ${mode === "episode" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
-                onClick={() => setMode("episode")}
-                title="One script checked against EVERY dub language, producing one Excel workbook with a sheet per language."
-              >
-                Episode → Excel (all languages)
-              </button>
-            </div>
-          )}
+            )}
+            <button
+              className={`px-3 py-1 rounded text-xs ${mode === "episode" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
+              onClick={() => setMode("episode")}
+              title="One script checked against EVERY dub language, producing one Excel workbook with a sheet per language."
+            >
+              Episode → Excel (all languages)
+            </button>
+          </div>
 
           {!hasElectron() && (
             <div className="text-[11px] text-amber/90 bg-amber/5 border border-amber/20 rounded px-2 py-1">
