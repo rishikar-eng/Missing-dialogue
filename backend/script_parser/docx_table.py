@@ -45,30 +45,25 @@ def idx_keys(d: dict) -> set:
 
 
 def _flattened_rows(root) -> list[list[str]]:
-    """Fallback for scripts that AREN'T a Word table — the same Sr.No/Start/End/Character/
-    Dialogue columns flattened into ordinary paragraphs (one value per paragraph, seen on
-    some episodes). Rebuild logical rows [start, end, character, text] using each consecutive
-    pair of START/END timecodes as an anchor: the paragraph after the pair is the character,
-    and everything up to the next row's Sr.No is the dialogue. Dialogue almost never contains
-    an HH:MM:SS:FF token, so anchoring on timecodes is reliable; the header paragraphs carry
-    no timecodes so they're skipped naturally."""
-    cells: list[str] = []
-    for p in root.iter(_W + "p"):
-        txt = "".join(t.text or "" for t in p.iter(_W + "t")).strip()
-        if txt:
-            cells.append(txt)
-    anchors = [i for i in range(len(cells) - 1)
-               if _TC_RE.match(cells[i]) and _TC_RE.match(cells[i + 1])]
+    """Fallback for scripts that AREN'T a Word table — each row is a single PARAGRAPH with the
+    Sr.No/Start/End/Character/Dialogue fields TAB-separated (seen on e.g. EP44). Split every
+    paragraph on its tab stops into cells (joining runs within a field, since Word splits text
+    into arbitrary runs); the normal two-timecode row logic then reads them like table cells.
+    The header paragraph carries no timecodes, so it's skipped by that logic."""
     rows: list[list[str]] = []
-    for k, i in enumerate(anchors):
-        start_c, end_c = cells[i], cells[i + 1]
-        char_c = cells[i + 2] if i + 2 < len(cells) else ""
-        nxt = anchors[k + 1] if k + 1 < len(anchors) else len(cells)
-        text_cells = cells[i + 3:nxt]
-        # the value right before the NEXT row's start timecode is that row's Sr.No — drop it
-        if text_cells and re.fullmatch(r"\d{1,6}", text_cells[-1]):
-            text_cells = text_cells[:-1]
-        rows.append([start_c, end_c, char_c, " ".join(text_cells)])
+    for p in root.iter(_W + "p"):
+        cells: list[str] = []
+        cur: list[str] = []
+        for el in p.iter():                       # document order: text runs interleaved with tabs
+            if el.tag == _W + "t":
+                cur.append(el.text or "")
+            elif el.tag == _W + "tab":
+                cells.append("".join(cur).strip())
+                cur = []
+        cells.append("".join(cur).strip())
+        cells = [c for c in cells if c]           # drop empties from padding/alignment tabs
+        if len(cells) >= 3:                        # need at least start, end, character
+            rows.append(cells)
     return rows
 
 
