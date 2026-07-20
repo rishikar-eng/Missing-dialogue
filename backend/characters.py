@@ -102,19 +102,28 @@ def _squash(s: str) -> str:
 
 def _name_score(channel_name: str, entity: CharacterEntity) -> float:
     """Fuzzy name similarity between a channel filename and a character (+aliases),
-    ignoring studio affixes/role words."""
+    ignoring studio affixes/role words.
+
+    Containment is judged on whole TOKENS, not raw substrings: a short name like 'Man'
+    matches a standalone 'MAN' track (or 'Random Man') but NOT the middle of a different
+    name ('Sachike AMANe' — the letters m-a-n sit inside 'Amane'). The old raw-substring
+    rule gave that false 0.85 and let 'Man' steal the 'Sachike Amane' track. A genuine
+    near-spelling (e.g. 'Sachika' vs 'Sachike') still scores via the fuzzy ratio below."""
     ch_tokens = [t for t in re.split(r"[^a-z0-9]+", channel_name.lower()) if t and t not in _AFFIX]
+    ch_set = set(ch_tokens)
     ch = "".join(ch_tokens)
     best = 0.0
     # Include roster-lent match terms (canonical name / voice-name convention) so a
     # track named the studio's way still matches a tersely-scripted character.
     for label in [entity.name, entity.id, *entity.aliases, *getattr(entity, "match_terms", [])]:
+        lab_set = {t for t in re.split(r"[^a-z0-9]+", label.lower()) if t}
         b = _squash(label)
         if not ch or not b:
             continue
         if ch == b:
             return 1.0
-        if ch in b or b in ch:
+        # whole-token containment (one name's tokens are all tokens of the other)
+        if lab_set and ch_set and (lab_set <= ch_set or ch_set <= lab_set):
             best = max(best, 0.85)
         best = max(best, difflib.SequenceMatcher(None, ch, b).ratio())
     return best

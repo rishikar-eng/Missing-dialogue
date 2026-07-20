@@ -231,6 +231,50 @@ def verify_mapping(
             del mapping[cid]
             mapped_by.pop(cid, None)
 
+    # 0.5) REASSIGN — a track name-matched to a WEAK claimant whose voice overwhelmingly
+    # belongs to a DIFFERENT, still-unmapped character is handed to that dominant speaker.
+    # The name match can't see who actually speaks, so a 1-line namesake ('Sachika') or a
+    # generic word can win the track of the real 25-line lead ('Amane'), leaving the lead
+    # falsely "No audio". Content proves ownership, so here we let it TAKE THE TRACK BACK
+    # (the old code only FLAGGED this and trusted the name). Conservative: only when the
+    # other character clearly OWNS the track (high precision), COVERS their lines (recall),
+    # decisively beats the current holder, and isn't a smaller part than them. Runs BEFORE
+    # rescue so the displaced claimant is re-handled (rescued elsewhere or reported absent).
+    for cid, ch in list(mapping.items()):
+        mapped_prec = scores.get((ch, cid), {}).get("precision", 0.0)
+        best_cid, best_prec = None, 0.0
+        for e in speaking:
+            p = scores.get((ch, e.id), {}).get("precision", 0.0)
+            if p > best_prec:
+                best_cid, best_prec = e.id, p
+        if not best_cid or best_cid == cid or best_cid in mapping:
+            continue
+        best_rec = scores.get((ch, best_cid), {}).get("recall", 0.0)
+        dominant, claimant = ent_by_id.get(best_cid), ent_by_id.get(cid)
+        if not (dominant and claimant):
+            continue
+        if (
+            best_prec >= RESCUE_STRONG_PREC                    # the track is really theirs
+            and best_rec >= RESCUE_RECALL                      # ...and carries their lines
+            and best_prec - mapped_prec >= FLAG_MARGIN         # clearly beats the name-holder
+            and dominant.line_count >= claimant.line_count     # and isn't a smaller part
+        ):
+            del mapping[cid]
+            mapped_by.pop(cid, None)
+            mapping[best_cid] = ch
+            mapped_by[best_cid] = "content"
+            issues.append({
+                "kind": "reassigned", "channel": ch,
+                "character": best_cid, "character_name": dominant.name,
+                "from_character": cid, "from_character_name": claimant.name,
+                "precision": round(best_prec, 3), "recall": round(best_rec, 3),
+                "message": f"Track '{ch}' was name-matched to '{claimant.name}' "
+                           f"({claimant.line_count} line{'s' if claimant.line_count != 1 else ''}), "
+                           f"but its voice is '{dominant.name}'s — {best_prec:.0%} of the track is "
+                           f"their speech, covering {best_rec:.0%} of their {dominant.line_count} "
+                           f"lines. Reassigned to '{dominant.name}'.",
+            })
+
     # 1) RESCUE — unmapped speaking characters, best free track by recall. A group-NAMED
     # track a bit-part actually dominates ('LADY BIT 02' = only Agent) IS a valid rescue
     # target; only genuinely shared bundles are skipped (the GROUPED pass handles those).
