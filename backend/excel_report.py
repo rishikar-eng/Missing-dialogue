@@ -179,8 +179,12 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             "Coverage", "Drift (s)", "Track (file)", "Severity", "Reviewer verdict"]
     r = _head(ws, r, hdr2, [5, 12, 20, 10, 10, 10, 10, 46, 10, 9, 28, 10, 18])
     f_start = r
-    by_start = sorted(errors, key=lambda e: (e.get("script_start_s") if e.get("script_start_s") is not None
-                                             else e.get("audio_start_s") or 0))
+    # Group by type first — MISSING, then MISALIGNED, then EXTRA — and by timeline within
+    # each type. Reviewers work missing lines first (the real gaps), so they lead the table.
+    _type_rank = {"MISSING": 0, "MISALIGNED": 1, "EXTRA": 2}
+    by_start = sorted(errors, key=lambda e: (
+        _type_rank.get(e.get("type"), 3),
+        e.get("script_start_s") if e.get("script_start_s") is not None else e.get("audio_start_s") or 0))
     for n, e in enumerate(by_start, start=1):
         t = e.get("type")
         st = e.get("script_start_s") if e.get("script_start_s") is not None else e.get("audio_start_s")
