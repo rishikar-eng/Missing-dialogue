@@ -376,13 +376,28 @@ def _summary(wb: Workbook, per_lang: dict[str, dict[str, Any]]) -> None:
 
     rows = []
     for name, per in stats.items():
-        rates = [m / l for m, l in per.values() if l]
-        worst = max(rates) if rates else 0.0
-        everywhere = len(per) == len(langs) and len(langs) > 1
-        if everywhere and all(x >= MOSTLY_ABSENT for x in rates):
+        rated = {lg: m / l for lg, (m, l) in per.items() if l}      # language -> miss rate
+        worst = max(rated.values()) if rated else 0.0
+        absent = [lg for lg in langs if rated.get(lg, 0) >= MOSTLY_ABSENT]  # ~fully missing
+        partial = [lg for lg in langs if 0 < rated.get(lg, 0) < MOSTLY_ABSENT]  # a few lines
+        delivered = [lg for lg in langs if lg not in per]           # no missing at all
+        n = len(langs)
+        if len(absent) == n:
             reading, tone = ("Absent in EVERY language — look at the script/mapping first, "
                              "not the dub", "WARN")
-        elif everywhere:
+        elif absent:
+            # Fully missing in SOME languages but not others: the languages that DID deliver
+            # prove the line exists, so the fully-missing ones are a delivery/mapping gap
+            # there — not a script problem. Name them explicitly (the imprecise old wording
+            # called this "a few lines drop in every language").
+            bits = [f"fully missing in {', '.join(absent)}"]
+            if partial:
+                bits.append(f"a few lines in {', '.join(partial)}")
+            if delivered:
+                bits.append(f"delivered in {', '.join(delivered)}")
+            reading = "; ".join(bits) + f" — check delivery/mapping for {', '.join(absent)}"
+            tone = "MISSING"
+        elif len(per) == n and n > 1:
             reading, tone = ("A few lines drop in every language — usually the same hard lines; "
                              "check those timings in the script", "WARN")
         else:
