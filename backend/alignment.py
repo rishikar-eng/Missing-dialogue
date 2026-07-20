@@ -91,18 +91,20 @@ def _coverage(span: Interval, regions: list[Interval]) -> tuple[float, Interval 
 
 
 def _best_sibling(
-    span: Interval, sibling_regions: dict[str, list[Interval]] | None, pad_s: float
+    span: Interval, sibling_regions: dict[str, list[Interval]] | None
 ) -> tuple[str | None, float, Interval | None]:
-    """Among OTHER speaker tracks, the one whose speech best covers `span` (padded ±pad_s
-    to absorb small per-track capture jitter — sibling stems share the render timeline but
-    not the exact per-track offset). Returns (channel, coverage, merged_matched_span) for
-    the best-covering sibling, or (None, 0.0, None) when no sibling has speech there."""
+    """Among OTHER speaker tracks, the one whose speech best covers `span` (the character's
+    offset-corrected line window). Coverage is measured over the line window ITSELF — NOT a
+    padded window — so a neighbour merely bleeding speech into the gap just after the line
+    isn't mistaken for delivering it. (`_coverage` already credits a sibling region that
+    extends beyond the window, and tolerates small onset/offset shifts, so no pad is needed.)
+    Returns (channel, coverage, merged_matched_span), or (None, 0.0, None) when no sibling
+    speaks within the window."""
     if not sibling_regions:
         return None, 0.0, None
-    padded = (span[0] - pad_s, span[1] + pad_s)
     best_ch, best_cov, best_span = None, 0.0, None
     for ch, regs in sibling_regions.items():
-        cov, matched = _coverage(padded, regs)
+        cov, matched = _coverage(span, regs)
         if matched is not None and cov > best_cov:
             best_ch, best_cov, best_span = ch, cov, matched
     return best_ch, best_cov, best_span
@@ -173,7 +175,7 @@ def align_channel(
             # The character's OWN track is silent here. Before calling it MISSING, check
             # whether ANOTHER speaker's track delivered the line — a wrong-speaker MISMATCH,
             # not a dropped line. Only truly-absent lines (no track speaks) stay MISSING.
-            alt_ch, alt_cov, alt_span = _best_sibling(span, sibling_regions, tol_s)
+            alt_ch, alt_cov, alt_span = _best_sibling(span, sibling_regions)
             if alt_ch is not None and alt_cov >= mismatch_coverage:
                 n_mismatch += 1
                 by = (sibling_owner or {}).get(alt_ch)

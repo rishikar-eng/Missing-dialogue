@@ -1249,10 +1249,13 @@ def _missing_windows(st: dict[str, Any], tol_s: float, pad_s: float) -> list[tup
         errors = report["errors"]
     else:
         errors = st.get("scriptless_errors") or []
+    # MISMATCH counts too: the line is still absent from THIS character's track (another
+    # speaker delivered it), so it belongs in the reference/redub compilation just like a
+    # MISSING line — the character still needs to record it.
     wins = sorted(
         (max(0.0, e["script_start_s"] - pad_s), (e["script_end_s"] or e["script_start_s"]) + pad_s)
         for e in errors
-        if e["type"] == "MISSING" and e.get("script_start_s") is not None
+        if e["type"] in ("MISSING", "MISMATCH") and e.get("script_start_s") is not None
     )
     merged: list[tuple[float, float]] = []
     for s, en in wins:
