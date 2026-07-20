@@ -86,6 +86,13 @@ def _section(ws: Worksheet, row: int, title: str, note: str = "") -> int:
 
 # --- per-language sheet ------------------------------------------------------
 
+# Sheet language name -> the voice bank's 2-letter code, so each sheet shows THAT
+# language's ElevenLabs voice. Without this, every sheet showed whichever voice was first
+# in the bank (Hindi), i.e. a Bengali report carried the Hindi voice id.
+_LANG_CODE = {"hindi": "hi", "tamil": "ta", "telugu": "te", "malayalam": "ml",
+              "marathi": "mr", "bengali": "bn", "kannada": "kn"}
+
+
 def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     ws = wb.create_sheet(title=lang[:31])
     chars = res.get("characters") or []
@@ -108,6 +115,7 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     widths = [22, 16, 7, 12, 30, 11, 11, 11, 20, 22, 24, 18, 18]
     r = _head(ws, r, hdr, widths)
     char_start = r
+    lang_code = _LANG_CODE.get(lang.lower())     # which language's voice id this sheet shows
 
     # per-character delivered% = lines with no MISSING finding / total lines
     miss_by_char: dict[str, int] = {}
@@ -134,7 +142,12 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
         # possible error here: it would tell the studio an undelivered character is fine.
         delivered = None if not lines else (0.0 if not mapped else 1 - missed / lines)
         voices = c.get("voices") or []
-        v = next((x for x in voices if x.get("id")), voices[0] if voices else None)
+        # THIS language's voice only — never fall back to another language's id, or a
+        # Bengali sheet would show the Hindi voice. Prefer the normal form; blank when the
+        # bank has no entry for this language (we show nothing rather than a wrong id).
+        lang_voices = [x for x in voices if x.get("lang") == lang_code and x.get("id")]
+        v = next((x for x in lang_voices if x.get("form") == "normal"),
+                 lang_voices[0] if lang_voices else None)
 
         row_vals = [
             c.get("name"),
