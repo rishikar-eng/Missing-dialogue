@@ -42,6 +42,7 @@ _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 # severity tints: missing = red, misaligned = amber, extra = blue, ok = green
 _FILL = {
     "MISSING": PatternFill("solid", fgColor="FBE3E1"),
+    "MISMATCH": PatternFill("solid", fgColor="E9D8FD"),   # light purple: delivered, wrong speaker
     "MISALIGNED": PatternFill("solid", fgColor="FDF0D5"),
     "EXTRA": PatternFill("solid", fgColor="E2E8F4"),
     "OK": PatternFill("solid", fgColor="DCEFE0"),
@@ -117,10 +118,13 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     char_start = r
     lang_code = _LANG_CODE.get(lang.lower())     # which language's voice id this sheet shows
 
-    # per-character delivered% = lines with no MISSING finding / total lines
+    # per-character delivered% = fraction of the character's lines actually on THEIR own
+    # track. A line that's MISSING (nobody said it) OR MISMATCH (another speaker said it)
+    # is not on this character's track, so both count against their delivery rate; the
+    # separate Mismatch count shows how many went to the wrong speaker.
     miss_by_char: dict[str, int] = {}
     for e in errors:
-        if e.get("type") == "MISSING" and e.get("character"):
+        if e.get("type") in ("MISSING", "MISMATCH") and e.get("character"):
             miss_by_char[e["character"]] = miss_by_char.get(e["character"], 0) + 1
 
     # Mapping confidence comes from content_map's voice-timeline verification, which
@@ -187,31 +191,37 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     r += 1
 
     # ---- findings ----
-    r = _section(ws, r, "FINDINGS", "timestamps are the script/original timeline; EXTRA is the dub file's own")
-    hdr2 = ["#", "Type", "Character", "Start", "End", "Start (s)", "End (s)", "Script line",
-            "Coverage", "Drift (s)", "Track (file)", "Severity", "Reviewer verdict"]
-    r = _head(ws, r, hdr2, [5, 12, 20, 10, 10, 10, 10, 46, 10, 9, 28, 10, 18])
+    r = _section(ws, r, "FINDINGS", "timestamps are the script/original timeline; MISMATCH = another speaker delivered the line; EXTRA is the dub file's own")
+    hdr2 = ["#", "Type", "Character", "Start", "End", "Script line", "Start (s)", "End (s)",
+            "Coverage", "Drift (s)", "Track (file)", "Delivered by", "Severity", "Reviewer verdict"]
+    r = _head(ws, r, hdr2, [5, 12, 20, 10, 10, 46, 10, 10, 10, 9, 28, 22, 10, 18])
     f_start = r
-    # Group by type first — MISSING, then MISALIGNED, then EXTRA — and by timeline within
+    # Group by type first — MISSING, MISMATCH, MISALIGNED, EXTRA — and by timeline within
     # each type. Reviewers work missing lines first (the real gaps), so they lead the table.
-    _type_rank = {"MISSING": 0, "MISALIGNED": 1, "EXTRA": 2}
+    _type_rank = {"MISSING": 0, "MISMATCH": 1, "MISALIGNED": 2, "EXTRA": 3}
     by_start = sorted(errors, key=lambda e: (
-        _type_rank.get(e.get("type"), 3),
+        _type_rank.get(e.get("type"), 4),
         e.get("script_start_s") if e.get("script_start_s") is not None else e.get("audio_start_s") or 0))
     for n, e in enumerate(by_start, start=1):
         t = e.get("type")
         st = e.get("script_start_s") if e.get("script_start_s") is not None else e.get("audio_start_s")
         en = e.get("script_end_s") if e.get("script_end_s") is not None else e.get("audio_end_s")
         name = next((c.get("name") for c in chars if c.get("id") == e.get("character")), e.get("character") or "")
+        deliv = e.get("delivered_by_channel") or ""
+        if deliv and e.get("delivered_by_character"):
+            by_name = next((c.get("name") for c in chars if c.get("id") == e.get("delivered_by_character")),
+                           e.get("delivered_by_character"))
+            deliv += f"  ({by_name})"
         vals = [n, t, name, _hhmmss(st), _hhmmss(en),
+                e.get("text") or e.get("message") or "",
                 round(st, 3) if st is not None else None, round(en, 3) if en is not None else None,
-                e.get("text") or e.get("message") or "", None,
+                None,                                        # Coverage (col 9, set below)
                 round(e["drift_s"], 2) if e.get("drift_s") is not None else None,
-                e.get("channel") or "", e.get("severity") or "", ""]
+                e.get("channel") or "", deliv, e.get("severity") or "", ""]
         for i, val in enumerate(vals, start=1):
             cell = ws.cell(row=r, column=i, value=val)
             cell.border = _BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=(i == 8))
+            cell.alignment = Alignment(vertical="top", wrap_text=(i == 6))
         cov = ws.cell(row=r, column=9, value=e.get("coverage"))
         cov.number_format = "0%"
         ws.cell(row=r, column=2).fill = _FILL.get(t, _FILL["WARN"])
@@ -321,26 +331,26 @@ def _summary(wb: Workbook, per_lang: dict[str, dict[str, Any]]) -> None:
     ws = wb.create_sheet("Summary", 0)
     ws.cell(row=1, column=1, value="Summary — all languages").font = _TITLE_FONT
     r = 3
-    r = _head(ws, r, ["Language", "Tracks", "Characters", "Missing", "Misaligned", "Extra",
-                      "No audio", "Loudness", "Sync warnings"],
-              [16, 8, 12, 10, 12, 9, 10, 10, 14])
+    r = _head(ws, r, ["Language", "Tracks", "Characters", "Missing", "Mismatch", "Misaligned",
+                      "Extra", "No audio", "Loudness", "Sync warnings"],
+              [16, 8, 12, 10, 10, 12, 9, 10, 10, 14])
     start = r
     for lang, res in per_lang.items():
         s = (res.get("alignment") or {}).get("summary") or {}
         chars = res.get("characters") or []
         no_audio = sum(1 for c in chars if not c.get("channel") and not c.get("grouped_in") and (c.get("line_count") or 0) > 0)
         vals = [lang, len(res.get("channels") or []), len(chars), s.get("n_missing", 0),
-                s.get("n_misaligned", 0), s.get("n_extra", 0), no_audio,
+                s.get("n_mismatch", 0), s.get("n_misaligned", 0), s.get("n_extra", 0), no_audio,
                 len(res.get("loudness_flags") or []),
                 len((res.get("alignment") or {}).get("sync_warnings") or [])]
         for i, val in enumerate(vals, start=1):
             c = ws.cell(row=r, column=i, value=val)
             c.border = _BORDER
-        for col, tone in ((4, "MISSING"), (5, "MISALIGNED"), (7, "MISSING")):
+        for col, tone in ((4, "MISSING"), (5, "MISMATCH"), (6, "MISALIGNED"), (8, "MISSING")):
             if (ws.cell(row=r, column=col).value or 0) > 0:
                 ws.cell(row=r, column=col).fill = _FILL[tone]
         r += 1
-    ws.auto_filter.ref = f"A{start - 1}:I{r - 1}"
+    ws.auto_filter.ref = f"A{start - 1}:J{r - 1}"
     r += 2
 
     # Cross-language consistency — the whole point of one workbook per episode.

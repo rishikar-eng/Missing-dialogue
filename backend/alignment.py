@@ -23,6 +23,7 @@ from typing import Any, Callable
 from pydantic import BaseModel
 
 from .characters import CharacterEntity
+from .content_map import _is_group_stem
 from .script_parser import ScriptDoc
 from .vad import detect_speech_regions
 
@@ -36,7 +37,7 @@ SYNC_WARN_OFFSET_S = 0.75
 
 
 class AlignError(BaseModel):
-    type: str                       # MISSING | MISALIGNED | EXTRA
+    type: str                       # MISSING | MISMATCH | MISALIGNED | EXTRA
     subtype: str | None = None      # onset_drift | offset_drift | truncated
     severity: str                   # error | warn | info
     character: str | None = None
@@ -49,6 +50,10 @@ class AlignError(BaseModel):
     drift_s: float | None = None
     coverage: float | None = None   # fraction of the scripted span covered by speech
     text: str | None = None         # the scripted dialogue line (for MISSING/MISALIGNED)
+    # MISMATCH only: the line was silent in the character's OWN track but delivered on
+    # another speaker's track (wrong-speaker delivery) — record which one.
+    delivered_by_channel: str | None = None
+    delivered_by_character: str | None = None
     message: str = ""
 
 
@@ -58,6 +63,7 @@ class ChannelAlignment(BaseModel):
     offset_s: float                 # estimated script->audio offset applied
     n_lines: int
     n_missing: int
+    n_mismatch: int = 0
     n_misaligned: int
     n_extra: int
     errors: list[AlignError]
@@ -82,6 +88,24 @@ def _coverage(span: Interval, regions: list[Interval]) -> tuple[float, Interval 
             hi = r[1] if hi is None else max(hi, r[1])
     dur = max(1e-9, span[1] - span[0])
     return covered / dur, (None if lo is None else (lo, hi))
+
+
+def _best_sibling(
+    span: Interval, sibling_regions: dict[str, list[Interval]] | None, pad_s: float
+) -> tuple[str | None, float, Interval | None]:
+    """Among OTHER speaker tracks, the one whose speech best covers `span` (padded ±pad_s
+    to absorb small per-track capture jitter — sibling stems share the render timeline but
+    not the exact per-track offset). Returns (channel, coverage, merged_matched_span) for
+    the best-covering sibling, or (None, 0.0, None) when no sibling has speech there."""
+    if not sibling_regions:
+        return None, 0.0, None
+    padded = (span[0] - pad_s, span[1] + pad_s)
+    best_ch, best_cov, best_span = None, 0.0, None
+    for ch, regs in sibling_regions.items():
+        cov, matched = _coverage(padded, regs)
+        if matched is not None and cov > best_cov:
+            best_ch, best_cov, best_span = ch, cov, matched
+    return best_ch, best_cov, best_span
 
 
 def estimate_offset(
@@ -119,6 +143,9 @@ def align_channel(
     aligned_coverage: float = 0.5,
     min_extra_s: float = 0.6,
     offset_s: float | None = None,
+    sibling_regions: dict[str, list[Interval]] | None = None,
+    sibling_owner: dict[str, str] | None = None,
+    mismatch_coverage: float = 0.15,
 ) -> ChannelAlignment:
     """Score one character's scripted lines against their channel's VAD regions.
 
@@ -136,13 +163,33 @@ def align_channel(
         offset_s = estimate_offset(spans, regions)
 
     errors: list[AlignError] = []
-    n_missing = n_misaligned = 0
+    n_missing = n_mismatch = n_misaligned = 0
 
     for idx, a, b in script_spans:
         span = (a + offset_s, b + offset_s)
         cov, matched = _coverage(span, regions)
 
         if cov < missing_coverage or matched is None:
+            # The character's OWN track is silent here. Before calling it MISSING, check
+            # whether ANOTHER speaker's track delivered the line — a wrong-speaker MISMATCH,
+            # not a dropped line. Only truly-absent lines (no track speaks) stay MISSING.
+            alt_ch, alt_cov, alt_span = _best_sibling(span, sibling_regions, tol_s)
+            if alt_ch is not None and alt_cov >= mismatch_coverage:
+                n_mismatch += 1
+                by = (sibling_owner or {}).get(alt_ch)
+                errors.append(AlignError(
+                    type="MISMATCH", severity="warn", character=character, channel=channel,
+                    script_index=idx, script_start_s=round(a, 3), script_end_s=round(b, 3),
+                    audio_start_s=round(alt_span[0] - offset_s, 3),
+                    audio_end_s=round(alt_span[1] - offset_s, 3),
+                    coverage=round(alt_cov, 3),
+                    delivered_by_channel=alt_ch, delivered_by_character=by,
+                    message=f"Line {idx} ({a:.2f}-{b:.2f}s) is silent in '{channel}' but "
+                            f"delivered on '{alt_ch}'"
+                            f"{f' ({by})' if by else ''} — wrong speaker? "
+                            f"(coverage {alt_cov:.0%} there).",
+                ))
+                continue
             n_missing += 1
             errors.append(AlignError(
                 type="MISSING", severity="error", character=character, channel=channel,
@@ -186,7 +233,7 @@ def align_channel(
 
     return ChannelAlignment(
         character=character, channel=channel, offset_s=offset_s,
-        n_lines=len(script_spans), n_missing=n_missing,
+        n_lines=len(script_spans), n_missing=n_missing, n_mismatch=n_mismatch,
         n_misaligned=n_misaligned, n_extra=n_extra, errors=errors,
     )
 
@@ -231,8 +278,31 @@ def align_script_to_channels(
     total = sum(1 for ch in to_vad if ch not in region_cache)
     done = 0
 
+    # VAD every mapped track FIRST — the cross-track "was this line delivered by ANOTHER
+    # speaker?" check below needs every track's regions available, not just the ones
+    # scored so far. (Cheap: skips tracks already in a passed-in region_cache.)
+    for ch in to_vad:
+        if ch not in region_cache:
+            regs = detect_speech_regions(channel_wavs[ch], **(vad_kwargs or {}))
+            region_cache[ch] = [(r["start"], r["end"]) for r in regs]
+            done += 1
+            if on_progress:
+                on_progress(done, total, ch)
+
+    # channel -> character-id for every real single-character track (the eligible "other
+    # speaker" siblings for MISMATCH). Group/walla stems are excluded — they chatter across
+    # many characters and would false-flag a MISMATCH on every quiet line of every character.
+    speaker_channels = {
+        ent.channel: ent.id
+        for ent in characters
+        if ent.channel and ent.channel in region_cache and not _is_group_stem(ent.channel)
+    }
+
     channel_reports: list[ChannelAlignment] = []
     unmapped: list[str] = []
+    # Map the tolerance slider to the coverage threshold: higher tol = more
+    # lenient = a line only needs less of its slot covered to count as aligned.
+    aligned_cov = max(0.2, min(0.8, 1.0 - tol_s * 0.5))
 
     for ent in characters:
         spans = spans_by_char.get(ent.id, [])
@@ -245,17 +315,12 @@ def align_script_to_channels(
                 unmapped.append(ent.id)
             continue
         if ent.channel not in region_cache:
-            regs = detect_speech_regions(channel_wavs[ent.channel], **(vad_kwargs or {}))
-            region_cache[ent.channel] = [(r["start"], r["end"]) for r in regs]
-            done += 1
-            if on_progress:
-                on_progress(done, total, ent.channel)
-        # Map the tolerance slider to the coverage threshold: higher tol = more
-        # lenient = a line only needs less of its slot covered to count as aligned.
-        aligned_cov = max(0.2, min(0.8, 1.0 - tol_s * 0.5))
+            continue
+        siblings = {ch: region_cache[ch] for ch in speaker_channels if ch != ent.channel}
         channel_reports.append(align_channel(
             ent.id, ent.channel, spans, region_cache[ent.channel],
             tol_s=tol_s, aligned_coverage=aligned_cov, offset_s=offset_s,
+            sibling_regions=siblings, sibling_owner=speaker_channels,
         ))
 
     # Attach the scripted dialogue line to each error that references a script index.
@@ -297,6 +362,7 @@ def align_script_to_channels(
         "summary": {
             "n_characters_checked": len(channel_reports),
             "n_missing": sum(cr.n_missing for cr in channel_reports),
+            "n_mismatch": sum(cr.n_mismatch for cr in channel_reports),
             "n_misaligned": sum(cr.n_misaligned for cr in channel_reports),
             "n_extra": sum(cr.n_extra for cr in channel_reports),
             "n_unmapped": len(unmapped),
