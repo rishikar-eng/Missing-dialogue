@@ -377,6 +377,11 @@ def verify_mapping(
 
     # 2) FLAG — a name-mapped track whose voice best matches a different character.
     for cid, ch in list(name_mapping.items()):
+        # Skip tracks whose name-holder no longer holds them — DEMOTE removed the mapping
+        # or REASSIGN (0.5) already handed the track to the dominant speaker. Re-flagging
+        # "labelled X, check labelling" would contradict the resolution just made.
+        if mapping.get(cid) != ch:
+            continue
         mapped_prec = scores.get((ch, cid), {}).get("precision", 0.0)
         # Who does this track's voice look most like?
         best_cid, best_prec = None, 0.0

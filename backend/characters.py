@@ -125,6 +125,12 @@ def _name_score(channel_name: str, entity: CharacterEntity) -> float:
         # whole-token containment (one name's tokens are all tokens of the other)
         if lab_set and ch_set and (lab_set <= ch_set or ch_set <= lab_set):
             best = max(best, 0.85)
+        # Contiguous whole-name containment as a fallback for GLUED names where the affix
+        # words aren't separated ('ShomaStomachKaijin' -> no 'shoma' token). Length floor of
+        # 4 on the shorter side keeps a short generic word ('man' inside 'amane') from
+        # re-triggering the false match this whole change was made to stop.
+        elif (ch in b or b in ch) and len(min(ch, b, key=len)) >= 4:
+            best = max(best, 0.75)
         best = max(best, difflib.SequenceMatcher(None, ch, b).ratio())
     return best
 
