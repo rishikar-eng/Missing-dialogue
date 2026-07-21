@@ -566,6 +566,9 @@ export default function App() {
         } else if (it.kind === "reassigned") {
           block("REASSIGNED", "", it.character_name ?? "", it.channel ?? "", "track handed to the voice that owns it");
           L.push(wrap(it.message ?? `'${it.channel}' was reassigned to ${it.character_name} because its voice matches them, not the name it was labelled with.`));
+        } else if (it.kind === "twin_merged") {
+          block("TWIN MERGED", "", it.character_name ?? "", it.channel ?? "", "split delivery — stems checked together");
+          L.push(wrap(it.message ?? `'${it.channel}' also carries ${it.character_name}'s dialogue; checked together with their main stem.`));
         } else {
           block("NO AUDIO*", "", it.character_name ?? "", "", "verified absent");
           L.push(wrap("No track's voice covers their lines anywhere — audio genuinely not delivered."));
@@ -1954,6 +1957,8 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
       ? "GROUPED (walla)"
       : iss.kind === "reassigned"
       ? "REASSIGNED"
+      : iss.kind === "twin_merged"
+      ? "TWIN MERGED"
       : "RECOVERED";
   const samples = iss.samples ?? [];
   const canOpen = samples.length > 0;

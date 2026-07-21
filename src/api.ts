@@ -82,6 +82,9 @@ export type Character = {
   channel: string | null;
   mapped_by: "name" | "content" | "manual" | null;
   grouped_in: string | null; // bit-part delivered inside this group stem (walla/crowd); not "No audio"
+  // Twin/pickup stems that also carry this character (split deliveries like 'X' + 'X 02');
+  // lines are checked against the UNION of primary + these.
+  extra_channels?: string[];
   level_dbfs: number | null;
   level_min_dbfs: number | null;
   level_max_dbfs: number | null;
@@ -124,7 +127,7 @@ export type IssueSample = {
 
 // Content-based (voice-timeline) diagnostics for the name→track mapping.
 export type NamingIssue = {
-  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped" | "reassigned";
+  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped" | "reassigned" | "twin_merged";
   message: string;
   character?: string;
   character_name?: string;

@@ -158,7 +158,11 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             c.get("id"),
             lines,
             round(c.get("total_speech_s") or 0, 1),
-            c.get("channel") or ("↳ in " + c["grouped_in"] if c.get("grouped_in") else "— no audio —"),
+            # Twin/pickup stems merged into this character (split deliveries) are listed
+            # after the primary — their lines are checked as a UNION of all these stems.
+            ((c.get("channel") or "") + "".join(f"  + {x}" for x in (c.get("extra_channels") or []))
+             if c.get("channel")
+             else ("↳ in " + c["grouped_in"] if c.get("grouped_in") else "— no audio —")),
             c.get("mapped_by") or "",
             None,                                   # confidence (set below, needs format)
             None,                                   # delivered (set below, needs format)

@@ -47,6 +47,11 @@ PROMISCUOUS_MIN_CHARS = 3   # ...and covering this many characters marks it wall
 FLAG_PREC = 0.35       # a track whose best-matching character reaches this precision...
 FLAG_MARGIN = 0.15     # ...and beats the name-mapped character by this margin is flagged
 VERIFIED_ABSENT_RECALL = 0.15  # below this best-recall, a character's audio is "verified absent"
+# An unclaimed track needs this strong a NAME match to an already-mapped character to be
+# merged as their twin/pickup stem (union-checked). 0.75 = the guarded glued-name tier;
+# token-subset scores 0.85. The plain fuzzy ratio tops out lower, so a merely similar
+# name ('Rakia' vs 'Rakla' typo track) can't glue two different speakers together.
+TWIN_NAME_SCORE = 0.75
 
 # Group stems (WALLA / GIRL CROWD / LADY BIT …) can bundle several small parts into one
 # track. A bit-part with no dedicated track whose lines fall inside a genuinely SHARED
@@ -180,6 +185,9 @@ def verify_mapping(
                      kind="possible_match"  weak candidate — NOT mapped, human confirms
                      kind="grouped"         bit-part with no own track, delivered inside a
                                             group stem (walla/crowd) — expected, not missing
+                     kind="twin_merged"     an unclaimed stem that strongly name-matches an
+                                            already-mapped character (split delivery, e.g.
+                                            'X' + 'X 02') — checked together with theirs
                      kind="verified_absent" char with no track AND no voice match anywhere
     """
     ent_by_id = {e.id: e for e in characters}
@@ -422,6 +430,54 @@ def verify_mapping(
                            f"voice timeline matches '{other_name}' more "
                            f"closely ({best_prec:.0%} vs {mapped_prec:.0%}). Check the labelling.",
             })
+
+    # 2.5) TWIN MERGE — deliveries sometimes split ONE speaker across several stems
+    # ('Hanto Karakida' + 'Hanto Karakida 02'). One-track-per-character mapping binds the
+    # character to a single twin and ORPHANS the other; every line recorded in the orphan
+    # then reads as MISSING (EP42 Tamil/Telugu: 52 false missing on Hanto alone — the
+    # mapper picked the 16-second pickup stem and ignored the 206-second main stem).
+    # Any still-unclaimed track whose name STRONGLY matches an already-mapped character
+    # is attached as an extra channel of that character; alignment scores lines against
+    # the UNION of their stems. Guards: strong name evidence only (>=TWIN_NAME_SCORE,
+    # the token-subset/glued tiers — never the fuzzy ratio); real group stems excluded
+    # (walla bundles are handled by GROUPED, not merged into one speaker); and the
+    # orphan's voice must not clearly belong to some OTHER character (mirrors FLAG) —
+    # unioning a stranger's stem would mask that character's real findings. Runs after
+    # RESCUE/GROUPED so unmapped characters get first claim on free tracks by content.
+    claimed = set(mapping.values())
+    for ch in channel_names:
+        if ch in claimed or _is_real_group_stem(ch):
+            continue
+        best_cid, best_name = None, 0.0
+        for cid in mapping:
+            ent = ent_by_id.get(cid)
+            if not ent:
+                continue
+            s = _name_score(ch, ent)
+            if s > best_name:
+                best_cid, best_name = cid, s
+        if not best_cid or best_name < TWIN_NAME_SCORE:
+            continue
+        own_prec = scores.get((ch, best_cid), {}).get("precision", 0.0)
+        other = max(
+            (e for e in speaking if e.id != best_cid),
+            key=lambda e: scores.get((ch, e.id), {}).get("precision", 0.0),
+            default=None,
+        )
+        other_prec = scores.get((ch, other.id), {}).get("precision", 0.0) if other else 0.0
+        if other_prec >= FLAG_PREC and other_prec - own_prec >= FLAG_MARGIN:
+            continue  # voice evidence says the orphan is someone else's — leave it
+        ent = ent_by_id[best_cid]
+        claimed.add(ch)
+        issues.append({
+            "kind": "twin_merged", "character": best_cid, "character_name": ent.name,
+            "channel": ch, "primary_channel": mapping[best_cid],
+            "name_score": round(best_name, 2), "precision": round(own_prec, 3),
+            "message": f"'{ent.name}' is split across several stems: '{ch}' also carries "
+                       f"their dialogue (name match {best_name:.0%}) alongside "
+                       f"'{mapping[best_cid]}'. Both are checked together, so lines "
+                       f"recorded in either stem count as delivered.",
+        })
 
     # 3) VERIFIED ABSENT — still-unmapped speaking chars: is their voice anywhere?
     # (grouped bit-parts are accounted for above — don't also call them absent.)

@@ -366,10 +366,17 @@ def _analyze_pipeline(
     )
     grouped_in = {it["character"]: it["channel"] for it in naming_issues
                   if it.get("kind") == "grouped" and it.get("character")}
+    # Twin/pickup stems merged into an already-mapped character (split deliveries like
+    # 'Hanto Karakida' + 'Hanto Karakida 02') — alignment unions their speech.
+    extra_by_char: dict[str, list[str]] = {}
+    for it in naming_issues:
+        if it.get("kind") == "twin_merged" and it.get("character"):
+            extra_by_char.setdefault(it["character"], []).append(it["channel"])
     for c in characters:
         c.channel = mapping.get(c.id)
         c.mapped_by = mapped_by.get(c.id)
         c.grouped_in = grouped_in.get(c.id)
+        c.extra_channels = extra_by_char.get(c.id, [])
     attach_voices(characters)
 
     report = align_script_to_channels(
@@ -1137,15 +1144,19 @@ def remap(req: RemapRequest) -> dict[str, Any]:
     if req.channel is not None and req.channel not in channel_wavs:
         raise HTTPException(status_code=404, detail=f"No track '{req.channel}'")
 
-    # Keep the mapping one-to-one: taking a track releases its previous owner.
+    # Keep the mapping one-to-one: taking a track releases its previous owner —
+    # whether it was their primary channel or one of their merged twin stems.
     if req.channel is not None:
         for c in characters:
             if c.id != ent.id and c.channel == req.channel:
                 c.channel = None
                 c.mapped_by = None
+            if c.id != ent.id and req.channel in (c.extra_channels or []):
+                c.extra_channels = [x for x in c.extra_channels if x != req.channel]
     ent.channel = req.channel
     ent.mapped_by = "manual" if req.channel else None
     ent.grouped_in = None  # a manual assignment/unassignment supersedes the auto 'grouped' label
+    ent.extra_channels = []  # manual override supersedes any auto twin merge too
     attach_voices(characters)  # channel changed -> the voice-bank match may too
 
     report = align_script_to_channels(

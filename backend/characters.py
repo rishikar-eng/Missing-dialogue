@@ -41,6 +41,11 @@ class CharacterEntity(BaseModel):
     first_start_s: float
     channel: str | None = None    # mapped audio-channel name (channels mode)
     mapped_by: str | None = None  # "name" | "content" — how the channel was assigned
+    # Twin/pickup stems that ALSO carry this character's dialogue (e.g. 'Hanto Karakida'
+    # + 'Hanto Karakida 02'). Deliveries sometimes split one speaker across several
+    # files; alignment scores lines against the UNION of all these tracks' speech, so
+    # lines recorded in the twin aren't reported missing. See content_map twin merge.
+    extra_channels: list[str] = []
     grouped_in: str | None = None # bit-part delivered inside this group stem (walla/crowd);
                                   # set => "grouped/expected", NOT counted as "No audio"
     # Extra fuzzy-match targets lent by the studio character list (roster) — canonical

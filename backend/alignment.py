@@ -265,16 +265,16 @@ def align_script_to_channels(
         for key in seg.characters:
             spans_by_char.setdefault(key, []).append((seg.index, seg.start_s, seg.end_s))
 
-    # Distinct tracks we'll actually VAD — drives the progress total.
+    # Distinct tracks we'll actually VAD — drives the progress total. A character's
+    # twin/pickup stems (extra_channels — split deliveries like 'X' + 'X 02') are VAD'd
+    # too: their lines are scored against the UNION of all their stems' speech.
     to_vad: list[str] = []
     for ent in characters:
-        if (
-            spans_by_char.get(ent.id)
-            and ent.channel
-            and ent.channel in channel_wavs
-            and ent.channel not in to_vad
-        ):
-            to_vad.append(ent.channel)
+        if not spans_by_char.get(ent.id):
+            continue
+        for ch in [ent.channel, *(getattr(ent, "extra_channels", []) or [])]:
+            if ch and ch in channel_wavs and ch not in to_vad:
+                to_vad.append(ch)
     if region_cache is None:
         region_cache = {}
     total = sum(1 for ch in to_vad if ch not in region_cache)
@@ -294,10 +294,13 @@ def align_script_to_channels(
     # channel -> character-id for every real single-character track (the eligible "other
     # speaker" siblings for MISMATCH). Group/walla stems are excluded — they chatter across
     # many characters and would false-flag a MISMATCH on every quiet line of every character.
+    # A character's twin stems map to the SAME id, so a line delivered in their own twin is
+    # never mis-called a wrong-speaker MISMATCH.
     speaker_channels = {
-        ent.channel: ent.id
+        ch: ent.id
         for ent in characters
-        if ent.channel and ent.channel in region_cache and not _is_group_stem(ent.channel)
+        for ch in [ent.channel, *(getattr(ent, "extra_channels", []) or [])]
+        if ch and ch in region_cache and not _is_group_stem(ch)
     }
 
     channel_reports: list[ChannelAlignment] = []
@@ -318,9 +321,17 @@ def align_script_to_channels(
             continue
         if ent.channel not in region_cache:
             continue
-        siblings = {ch: region_cache[ch] for ch in speaker_channels if ch != ent.channel}
+        # Union of this character's stems: primary + any twin/pickup stems (split
+        # deliveries). A line recorded in EITHER stem counts as delivered.
+        own_channels = [ent.channel] + [
+            ch for ch in (getattr(ent, "extra_channels", []) or []) if ch in region_cache
+        ]
+        regions = sorted(r for ch in own_channels for r in region_cache[ch])
+        # Siblings = other CHARACTERS' tracks only — never this character's own twins.
+        siblings = {ch: region_cache[ch] for ch, owner in speaker_channels.items()
+                    if owner != ent.id}
         channel_reports.append(align_channel(
-            ent.id, ent.channel, spans, region_cache[ent.channel],
+            ent.id, ent.channel, spans, regions,
             tol_s=tol_s, aligned_coverage=aligned_cov, offset_s=offset_s,
             sibling_regions=siblings, sibling_owner=speaker_channels,
         ))
