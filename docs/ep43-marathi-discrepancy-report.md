@@ -1,6 +1,6 @@
 # EP 43 (Marathi) — QC discrepancy report
 
-**TL;DR:** QC flagged **28 missing lines** in the EP 43 Marathi delivery. On investigation, only **~9 are genuinely missing**. The rest trace back to **how the speaker stems are named and packaged**, not to undubbed dialogue. The audio itself is largely fine — the delivery format is what breaks speaker matching (for our tool *and* for any human sorting the files). Audio proof for every claim is in the attached clips (`01–08_*.wav`, timecodes in `cue_sheet.txt`).
+**TL;DR:** QC initially flagged **28 missing lines** in the EP 43 Marathi delivery. On investigation, **every one of them traces back to how the speaker stems are named and packaged — zero lines are actually missing** from the tracks that were delivered. After teaching the QC tool to see through the packaging (re-matching the ambiguous filenames and joining the split Bocha tracks), the episode re-scores at **0 missing**. The real, outstanding gap is the **four characters with no stem at all** (52 scripted lines, table below). Audio proof for every packaging claim is in the attached clips (`01–08_*.wav`, timecodes in `cue_sheet.txt`).
 
 ---
 
@@ -24,23 +24,25 @@ Nyelv Stomach_01.wav
 | 3 | **Bundle track.** `Rakia_Vraam_Laage9_01` is one file named for three parts. | clip 08 | Only one character can be verified against it; the others' lines can't be attributed |
 | 4 | **Four characters have no stem at all:** Lizel (**28 lines**), Amane (15), Michiru (5), Jiib (4). | no clip — nothing to play | 52 scripted lines cannot be QC'd or delivered; largest single gap in the episode |
 
-## What is genuinely missing (~9 lines, all short reactions)
+## What is genuinely missing
 
-Absent from **every** delivered track:
+**From the delivered tracks: nothing.** Once the packaging issues above are seen through
+(the ambiguous Masaru/Shoma filenames re-matched, Bocha's two form tracks joined), all
+28 originally-flagged lines are found, delivered, on the correct voices — the episode
+re-scores at **0 missing lines**. (An earlier draft listed ~9 short reaction lines as
+missing; those were an artifact of the mis-matching itself — with the tracks correctly
+paired they are all present.)
 
-| Timecode | Character | Line |
-|---|---|---|
-| 00:06:44 | Masaru | "Yes." |
-| 00:06:49 | Masaru | "Thank you." |
-| 00:08:56 | Masaru | "I figured." |
-| 00:12:30 | Shoma | "Eh?" |
-| 00:16:27 | Shoma | "Eh?" |
-| 00:16:41 | Masaru | "I'm home!" |
-| 00:17:37 | Masaru | "What's wrong?" |
-| 00:18:52 | Shoma | "Yes?" |
-| 00:23:42 | Shoma | "Yep." |
+**The real gap:** the **52 scripted lines of the four characters with no stem**
+(issue 4 above). If those were recorded, the files were never delivered; if not,
+they need a session:
 
-(Plus the 52 lines of the four characters with no stems, if those were never recorded.)
+| Character | Scripted lines |
+|---|---|
+| Lizel | 28 |
+| Amane | 15 |
+| Michiru | 5 |
+| Jiib | 4 |
 
 ## Ask — delivery convention going forward
 
