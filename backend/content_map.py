@@ -562,9 +562,15 @@ def verify_mapping(
         toks = {t for t in re.split(r"[^a-z0-9]+", ch.lower()) if t}
         named = []
         for e in speaking:
-            ids = {e.id} | {re.sub(r"[^a-z0-9]+", "", a.lower()) for a in (e.aliases or [])}
-            name_toks = {t for label in [e.name, *(e.aliases or [])]
+            # Clean labels only: strip bracket/paren stage directions ('Shoma [to Hanto]'
+            # would leak ANOTHER character's name) and skip combined-speaker labels
+            # ('Hanto/Suga' is an alias of both, so it would tag every co-speaker's
+            # track). Without this the lint flags perfectly clean stems.
+            labels = [e.name] + [re.sub(r"\[.*?\]|\(.*?\)", "", a)
+                                 for a in (e.aliases or []) if "/" not in a]
+            name_toks = {t for label in labels
                          for t in re.split(r"[^a-z0-9]+", label.lower()) if len(t) >= 4}
+            ids = {e.id}
             if (name_toks & toks) or (ids & toks):
                 named.append(e.name)
         segs = [s for s in re.split(r"_+", ch)
