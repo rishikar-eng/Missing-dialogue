@@ -108,6 +108,57 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     )).font = _MUTED
     r = 3
 
+    # ---- delivery health ----
+    # A packaging summary BEFORE the findings: when the stems themselves are the problem
+    # (unclaimed tracks, characters with no stem, ambiguous names, repaired mappings), a
+    # big missing count is a delivery issue, not N recording gaps — say so up front so
+    # the studio fixes the right thing.
+    issues_all = res.get("naming_issues") or []
+    channels_all = [str(c) for c in (res.get("channels") or [])]
+    owned_tracks = {c.get("channel") for c in chars if c.get("channel")} | {
+        x for c in chars for x in (c.get("extra_channels") or [])}
+    unclaimed_tracks = [ch for ch in channels_all if ch not in owned_tracks]
+    no_track = [c for c in chars
+                if not c.get("channel") and not c.get("grouped_in") and (c.get("line_count") or 0) > 0]
+    n_twin = sum(1 for i in issues_all if i.get("kind") == "twin_merged")
+    n_swap = sum(1 for i in issues_all if i.get("kind") == "swap_repaired")
+    n_ambig = sum(1 for i in issues_all if i.get("kind") == "ambiguous_name")
+    n_reass = sum(1 for i in issues_all if i.get("kind") == "reassigned")
+    miss_all = [e for e in errors if e.get("type") == "MISSING"]
+    n_check = sum(1 for e in miss_all if e.get("possibly_in_channel"))
+    health: list[tuple[str, bool]] = []   # (text, is_warning)
+    health.append((
+        f"Tracks delivered: {len(channels_all)} · mapped: {len(owned_tracks)}"
+        + (f" · UNCLAIMED: {', '.join(unclaimed_tracks[:4])}"
+           + ("…" if len(unclaimed_tracks) > 4 else "") if unclaimed_tracks else ""),
+        bool(unclaimed_tracks)))
+    if no_track:
+        health.append((
+            "Characters with NO stem: "
+            + ", ".join(f"{c.get('name')} ({c.get('line_count')} lines)" for c in no_track[:6])
+            + ("…" if len(no_track) > 6 else ""), True))
+    if n_twin or n_swap or n_reass or n_ambig:
+        bits = []
+        if n_twin: bits.append(f"{n_twin} split stem{'s' if n_twin != 1 else ''} merged")
+        if n_swap: bits.append(f"{n_swap} label swap{'s' if n_swap != 1 else ''} repaired")
+        if n_reass: bits.append(f"{n_reass} track{'s' if n_reass != 1 else ''} reassigned by voice")
+        if n_ambig: bits.append(f"{n_ambig} ambiguous filename{'s' if n_ambig != 1 else ''}")
+        health.append(("Mapping repairs: " + " · ".join(bits) + "  (details under CHECKS)", True))
+    if miss_all:
+        health.append((
+            f"Missing lines: {len(miss_all)} — {len(miss_all) - n_check} confirmed"
+            + (f" · {n_check} CHECK-DELIVERY (speech found on an unclaimed track at that slot)"
+               if n_check else ""), n_check > 0))
+    if any(w for _, w in health) or unclaimed_tracks:
+        r = _section(ws, r, "DELIVERY HEALTH", "packaging state of this language's stems")
+        for text, warn in health:
+            cell = ws.cell(row=r, column=1, value=text)
+            cell.alignment = Alignment(vertical="center")
+            if warn:
+                ws.cell(row=r, column=1).fill = _FILL["WARN"]
+            r += 1
+        r += 1
+
     # ---- characters ----
     r = _section(ws, r, "CHARACTERS", "mapping confidence is voice-timeline agreement, not a guess")
     hdr = ["Character", "ID", "Lines", "Dialogue (s)", "Mapped track (file)",
@@ -216,6 +267,10 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             by_name = next((c.get("name") for c in chars if c.get("id") == e.get("delivered_by_character")),
                            e.get("delivered_by_character"))
             deliv += f"  ({by_name})"
+        # MISSING tier: speech on an UNCLAIMED track at this slot → the line may exist
+        # under a bad label. Point at the track; the row is amber (below), not red.
+        if t == "MISSING" and e.get("possibly_in_channel"):
+            deliv = f"? check '{e['possibly_in_channel']}'"
         vals = [n, t, name, _hhmmss(st), _hhmmss(en),
                 e.get("text") or e.get("message") or "",
                 round(st, 3) if st is not None else None, round(en, 3) if en is not None else None,
@@ -228,7 +283,11 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             cell.alignment = Alignment(vertical="top", wrap_text=(i == 6))
         cov = ws.cell(row=r, column=9, value=e.get("coverage"))
         cov.number_format = "0%"
-        ws.cell(row=r, column=2).fill = _FILL.get(t, _FILL["WARN"])
+        # check-delivery missing rows render amber (packaging suspicion), confirmed red
+        if t == "MISSING" and e.get("possibly_in_channel"):
+            ws.cell(row=r, column=2).fill = _FILL["WARN"]
+        else:
+            ws.cell(row=r, column=2).fill = _FILL.get(t, _FILL["WARN"])
         r += 1
     if r > f_start:
         ws.auto_filter.ref = f"A{f_start - 1}:{get_column_letter(len(hdr2))}{r - 1}"

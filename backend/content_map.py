@@ -52,6 +52,14 @@ VERIFIED_ABSENT_RECALL = 0.15  # below this best-recall, a character's audio is 
 # token-subset scores 0.85. The plain fuzzy ratio tops out lower, so a merely similar
 # name ('Rakia' vs 'Rakla' typo track) can't glue two different speakers together.
 TWIN_NAME_SCORE = 0.75
+# Weaker-name twin path: when the NAME evidence is only fuzzy (a re-spelled/form-variant
+# track like 'Bocca Jaldak' for the script's 'Bocha'), CONTENT must prove the merge —
+# the track's speech is dominated by that character's scripted lines (rescue-strength
+# precision) and carries a real share of them. The name floor only rules out gluing a
+# completely unrelated track that happens to time-overlap.
+TWIN_FUZZY_NAME = 0.40
+TWIN_FUZZY_PREC = RESCUE_STRONG_PREC   # 0.5 — most of the track's speech is their lines
+TWIN_FUZZY_RECALL = 0.15               # ...and it carries a meaningful share of them
 
 # Group stems (WALLA / GIRL CROWD / LADY BIT …) can bundle several small parts into one
 # track. A bit-part with no dedicated track whose lines fall inside a genuinely SHARED
@@ -187,7 +195,12 @@ def verify_mapping(
                                             group stem (walla/crowd) — expected, not missing
                      kind="twin_merged"     an unclaimed stem that strongly name-matches an
                                             already-mapped character (split delivery, e.g.
-                                            'X' + 'X 02') — checked together with theirs
+                                            'X' + 'X 02'), or a re-spelled form-variant twin
+                                            proven by content — checked together with theirs
+                     kind="swap_repaired"   two characters held EACH OTHER's tracks (ambiguous
+                                            filenames cross-wired the name match) — swapped back
+                     kind="ambiguous_name"  a filename naming several characters / bundle-style
+                                            multi-segment name — packaging lint for the studio
                      kind="verified_absent" char with no track AND no voice match anywhere
     """
     ent_by_id = {e.id: e for e in characters}
@@ -281,6 +294,43 @@ def verify_mapping(
                            f"but its voice is '{dominant.name}'s — {best_prec:.0%} of the track is "
                            f"their speech, covering {best_rec:.0%} of their {dominant.line_count} "
                            f"lines. Reassigned to '{dominant.name}'.",
+            })
+
+    # 0.6) SWAP-REPAIR — two name-mapped characters holding EACH OTHER's tracks.
+    # REASSIGN (0.5) can't fix this: it only hands a track to an UNMAPPED character, and
+    # in a swap both are mapped — to the wrong tracks. Cause seen in the wild (EP43
+    # Marathi): an ambiguous filename ('Sweets Shopkeeper_Inoi Masaru_Shoma's Uncle')
+    # contains ANOTHER character's name, the greedy name match latches onto it, and the
+    # two leads cross-wire (dozens of false MISMATCH rows). Content sees it plainly —
+    # each track's voice matches the OTHER character decisively — so swap them back.
+    # Same evidence bar as FLAG (which would otherwise flag both tracks anyway).
+    pairs = [(a, b) for i, a in enumerate(list(mapping)) for b in list(mapping)[i + 1:]]
+    for a, b in pairs:
+        if mapping.get(a) is None or mapping.get(b) is None:
+            continue
+        cha, chb = mapping[a], mapping[b]
+        a_on_own = scores.get((cha, a), {}).get("precision", 0.0)
+        a_on_b = scores.get((chb, a), {}).get("precision", 0.0)
+        b_on_own = scores.get((chb, b), {}).get("precision", 0.0)
+        b_on_a = scores.get((cha, b), {}).get("precision", 0.0)
+        if (
+            a_on_b >= FLAG_PREC and a_on_b - b_on_own >= FLAG_MARGIN     # A's voice owns B's track
+            and b_on_a >= FLAG_PREC and b_on_a - a_on_own >= FLAG_MARGIN  # B's voice owns A's track
+        ):
+            mapping[a], mapping[b] = chb, cha
+            mapped_by[a] = mapped_by[b] = "content"
+            ea, eb = ent_by_id.get(a), ent_by_id.get(b)
+            issues.append({
+                "kind": "swap_repaired", "character": a,
+                "character_name": ea.name if ea else a, "channel": chb,
+                "other_character": b, "other_character_name": eb.name if eb else b,
+                "other_channel": cha,
+                "message": f"'{ea.name if ea else a}' and '{eb.name if eb else b}' were "
+                           f"name-matched to each other's tracks (each track's voice "
+                           f"timeline matches the other character — "
+                           f"{a_on_b:.0%}/{b_on_a:.0%} vs {b_on_own:.0%}/{a_on_own:.0%}). "
+                           f"Swapped back: '{ea.name if ea else a}' → '{chb}', "
+                           f"'{eb.name if eb else b}' → '{cha}'.",
             })
 
     # 1) RESCUE — unmapped speaking characters, best free track by recall. A group-NAMED
@@ -456,8 +506,26 @@ def verify_mapping(
             s = _name_score(ch, ent)
             if s > best_name:
                 best_cid, best_name = cid, s
+        via = "name"
         if not best_cid or best_name < TWIN_NAME_SCORE:
-            continue
+            # Fuzzy/content path: the name evidence alone is weak (a re-spelled or
+            # form-variant twin like 'Bocca Jaldak' for the script's 'Bocha' — fuzzy
+            # only), so demand CONTENT proof instead: among mapped characters, the one
+            # whose lines dominate this track's speech, at rescue-strength precision.
+            best_cid, best_prec_c = None, 0.0
+            for cid in mapping:
+                p = scores.get((ch, cid), {}).get("precision", 0.0)
+                if p > best_prec_c:
+                    best_cid, best_prec_c = cid, p
+            if not best_cid:
+                continue
+            ent = ent_by_id.get(best_cid)
+            best_name = _name_score(ch, ent) if ent else 0.0
+            best_rec_c = scores.get((ch, best_cid), {}).get("recall", 0.0)
+            if not (best_name >= TWIN_FUZZY_NAME and best_prec_c >= TWIN_FUZZY_PREC
+                    and best_rec_c >= TWIN_FUZZY_RECALL):
+                continue
+            via = "content"
         own_prec = scores.get((ch, best_cid), {}).get("precision", 0.0)
         other = max(
             (e for e in speaking if e.id != best_cid),
@@ -469,15 +537,53 @@ def verify_mapping(
             continue  # voice evidence says the orphan is someone else's — leave it
         ent = ent_by_id[best_cid]
         claimed.add(ch)
+        why = (f"name match {best_name:.0%}" if via == "name" else
+               f"voice-timeline proof: {own_prec:.0%} of its speech is their lines "
+               f"(name only {best_name:.0%} — re-spelled/form-variant twin)")
         issues.append({
             "kind": "twin_merged", "character": best_cid, "character_name": ent.name,
-            "channel": ch, "primary_channel": mapping[best_cid],
+            "channel": ch, "primary_channel": mapping[best_cid], "via": via,
             "name_score": round(best_name, 2), "precision": round(own_prec, 3),
             "message": f"'{ent.name}' is split across several stems: '{ch}' also carries "
-                       f"their dialogue (name match {best_name:.0%}) alongside "
+                       f"their dialogue ({why}) alongside "
                        f"'{mapping[best_cid]}'. Both are checked together, so lines "
                        f"recorded in either stem count as delivered.",
         })
+
+    # 2.7) DELIVERY LINT — filenames that break speaker matching for humans and tools
+    # alike, reported so the studio can fix the packaging at the source:
+    #   * a filename containing MORE THAN ONE known character's name — e.g.
+    #     'Sweets Shopkeeper_Inoi Masaru_Shoma's Uncle_01' names Masaru AND Shoma; the
+    #     stray second name is exactly what mis-mapped EP43 (see swap_repaired above);
+    #   * a filename with 3+ worded segments ('Rakia_Vraam_Laage9_01') — usually a
+    #     multi-speaker bundle, which can't be attributed to one character.
+    # Informational: nothing is remapped here.
+    for ch in channel_names:
+        toks = {t for t in re.split(r"[^a-z0-9]+", ch.lower()) if t}
+        named = []
+        for e in speaking:
+            ids = {e.id} | {re.sub(r"[^a-z0-9]+", "", a.lower()) for a in (e.aliases or [])}
+            name_toks = {t for label in [e.name, *(e.aliases or [])]
+                         for t in re.split(r"[^a-z0-9]+", label.lower()) if len(t) >= 4}
+            if (name_toks & toks) or (ids & toks):
+                named.append(e.name)
+        segs = [s for s in re.split(r"_+", ch)
+                if re.search(r"[A-Za-z]{3,}", s) and not re.fullmatch(r"\d+", s.strip())]
+        if len(named) >= 2:
+            issues.append({
+                "kind": "ambiguous_name", "channel": ch,
+                "message": f"Track filename '{ch}' contains more than one character's "
+                           f"name ({', '.join(sorted(set(named))[:4])}) — ambiguous "
+                           f"labels mis-route speaker matching. Ask the studio for "
+                           f"exactly ONE speaker name per filename.",
+            })
+        elif len(segs) >= 3:
+            issues.append({
+                "kind": "ambiguous_name", "channel": ch,
+                "message": f"Track filename '{ch}' has {len(segs)} name segments — "
+                           f"possibly a multi-speaker bundle file. One speaker per "
+                           f"file is required for per-character QC.",
+            })
 
     # 3) VERIFIED ABSENT — still-unmapped speaking chars: is their voice anywhere?
     # (grouped bit-parts are accounted for above — don't also call them absent.)

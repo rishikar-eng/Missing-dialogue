@@ -127,7 +127,7 @@ export type IssueSample = {
 
 // Content-based (voice-timeline) diagnostics for the name→track mapping.
 export type NamingIssue = {
-  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped" | "reassigned" | "twin_merged";
+  kind: "rescued" | "possible_match" | "name_mismatch" | "verified_absent" | "grouped" | "reassigned" | "twin_merged" | "swap_repaired" | "ambiguous_name";
   message: string;
   character?: string;
   character_name?: string;
@@ -141,7 +141,7 @@ export type NamingIssue = {
 };
 
 export type AlignError = {
-  type: "MISSING" | "MISALIGNED" | "EXTRA";
+  type: "MISSING" | "MISMATCH" | "MISALIGNED" | "EXTRA";
   subtype: string | null;
   severity: "error" | "warn" | "info";
   character: string | null;
@@ -154,6 +154,12 @@ export type AlignError = {
   drift_s: number | null;
   coverage: number | null;
   text: string | null;
+  // MISMATCH: the other speaker's track that actually delivered the line.
+  delivered_by_channel?: string | null;
+  delivered_by_character?: string | null;
+  // MISSING: an unclaimed track has speech at this slot — may hold the line
+  // under a wrong label ("check delivery" tier rather than confirmed missing).
+  possibly_in_channel?: string | null;
   message: string;
 };
 

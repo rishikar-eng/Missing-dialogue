@@ -569,6 +569,12 @@ export default function App() {
         } else if (it.kind === "twin_merged") {
           block("TWIN MERGED", "", it.character_name ?? "", it.channel ?? "", "split delivery — stems checked together");
           L.push(wrap(it.message ?? `'${it.channel}' also carries ${it.character_name}'s dialogue; checked together with their main stem.`));
+        } else if (it.kind === "swap_repaired") {
+          block("SWAP REPAIRED", "", it.character_name ?? "", it.channel ?? "", "two characters held each other's tracks");
+          L.push(wrap(it.message ?? `'${it.character_name}' and another character were name-matched to each other's tracks; swapped back by voice-timeline evidence.`));
+        } else if (it.kind === "ambiguous_name") {
+          block("AMBIGUOUS NAME", "", "", it.channel ?? "", "filename names several characters / bundle-style");
+          L.push(wrap(it.message ?? `Track filename '${it.channel}' is ambiguous — one speaker name per file is required.`));
         } else {
           block("NO AUDIO*", "", it.character_name ?? "", "", "verified absent");
           L.push(wrap("No track's voice covers their lines anywhere — audio genuinely not delivered."));
@@ -1959,6 +1965,10 @@ function NamingIssueRow({ iss, onAssign }: { iss: NamingIssue; onAssign?: () => 
       ? "REASSIGNED"
       : iss.kind === "twin_merged"
       ? "TWIN MERGED"
+      : iss.kind === "swap_repaired"
+      ? "SWAP REPAIRED"
+      : iss.kind === "ambiguous_name"
+      ? "AMBIGUOUS NAME"
       : "RECOVERED";
   const samples = iss.samples ?? [];
   const canOpen = samples.length > 0;

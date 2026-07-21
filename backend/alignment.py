@@ -54,6 +54,10 @@ class AlignError(BaseModel):
     # another speaker's track (wrong-speaker delivery) — record which one.
     delivered_by_channel: str | None = None
     delivered_by_character: str | None = None
+    # MISSING only: an UNCLAIMED track (delivered but mapped to nobody) has speech right
+    # at this line's slot — the line may live there under a bad label. Downgrades the
+    # finding from "confirmed missing" to "check delivery" in the report.
+    possibly_in_channel: str | None = None
     message: str = ""
 
 
@@ -342,6 +346,38 @@ def align_script_to_channels(
         for e in cr.errors:
             if e.script_index is not None:
                 e.text = text_by_index.get(e.script_index)
+
+    # Confidence tier for MISSING: if an UNCLAIMED delivered track (VAD'd but mapped to
+    # no character — e.g. a mislabelled or oddly-spelled stem) has speech right at the
+    # line's slot, the line may exist there under a bad label. Mark it so the report can
+    # say "check delivery" instead of a hard "missing" — the studio then fixes packaging
+    # rather than re-recording a line that exists. Group/walla stems are excluded (their
+    # chatter would tag everything); requires the pre-populated region cache (the server
+    # pipeline VADs every delivered track before mapping).
+    owned = {
+        ch
+        for ent in characters
+        for ch in [ent.channel, *(getattr(ent, "extra_channels", []) or [])]
+        if ch
+    }
+    unclaimed = [ch for ch in region_cache
+                 if ch in channel_wavs and ch not in owned and not _is_group_stem(ch)]
+    if unclaimed:
+        for cr in channel_reports:
+            for e in cr.errors:
+                if e.type != "MISSING" or e.script_start_s is None:
+                    continue
+                win = (e.script_start_s, e.script_end_s or e.script_start_s)
+                best_ch, best_cov = None, 0.0
+                for ch in unclaimed:
+                    cov, _ = _coverage(win, region_cache[ch])
+                    if cov > best_cov:
+                        best_ch, best_cov = ch, cov
+                if best_ch and best_cov >= 0.3:
+                    e.possibly_in_channel = best_ch
+                    e.message += (f" NOTE: the unclaimed track '{best_ch}' has speech at "
+                                  f"this slot ({best_cov:.0%}) — the line may be there "
+                                  f"under a wrong label; check the delivery.")
 
     all_errors = [e for cr in channel_reports for e in cr.errors]
 
