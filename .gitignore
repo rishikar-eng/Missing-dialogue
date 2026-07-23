@@ -40,3 +40,7 @@ e[0-9]*_*.txt
 
 # Local machine settings
 .claude/settings.local.json
+
+# Local secrets — NEVER commit (Teams webhook token, etc.)
+secrets.local.*
+*.secret
