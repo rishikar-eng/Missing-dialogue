@@ -247,14 +247,24 @@ rewriting L1.
 
 ---
 
-## 12. Open decisions for the team
+## 12. Decisions
 
-1. **Router model** — Sonnet 5 (cost-fit) vs Opus 4.8 (max capability). *(Workers fixed at Haiku 4.5.)*
-2. **File delivery** — [Download] button (A) vs real file in Files tab (B) vs just a link. *(Rec: A→B.)*
-3. **Location resolution** — registry lookup only, or add Box-search discovery in v1.
-4. **Target channel / who can trigger** — the Teams channel + whether to restrict to members.
-5. **Approval step** — keep the Run/Cancel confirmation, or auto-run when all assets are present.
-6. **Series scope** — Gavv only for v1 (agreed), plus which show is next (for the 2nd registry record).
+DECIDED (2026-07-23):
+- **Router model = Claude Sonnet 5** (`claude-sonnet-5`); workers = Haiku 4.5. ✅
+- **Anthropic key = an existing Rian key**, added to the QC server's `.env` as `ANTHROPIC_API_KEY`. ✅
+- **Series scope = Kamen Rider Gavv only** for v1. ✅
+- **NL parsing = LLM** (natural language). ✅
+
+BUILD STATUS:
+- **Phase 1 (engine availability) — DONE & DEPLOYED.** series_registry.json + box_discovery.py +
+  `/api/agent/series` + `/api/agent/availability`; proven on real Box (EP42). ⚠ char-list Box location
+  still a registry TODO (its `search_folders` guess was wrong / it may only exist on Desktop).
+
+STILL OPEN (team):
+- **File delivery** — [Download] button (A) vs real file in the Files tab (B) vs just a link. *(Rec: A→B.)*
+- **Target channel / who can trigger** — the Teams channel + whether to restrict to members.
+- **Approval step** — keep the Run/Cancel confirmation, or auto-run when all assets are present.
+- **Next series** — which show gets the 2nd registry record.
 
 ---
 
