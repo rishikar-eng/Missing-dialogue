@@ -1,0 +1,24 @@
+{
+  "kamen-rider-gavv": {
+    "display_name": "Kamen Rider Gavv",
+    "aliases": ["gavv", "krg", "kamen rider gavv", "kamen rider", "kr gavv"],
+    "languages": ["Malayalam", "Tamil", "Telugu", "Kannada", "Bengali", "Marathi"],
+    "box": {
+      "scripts_folder": "375861426771",
+      "premix_folder": "377097256586",
+      "voiceover": {
+        "Malayalam": "383066346413",
+        "Tamil": "379646596612",
+        "Telugu": "379644054186",
+        "Kannada": "383065684153",
+        "Bengali": "384071908590",
+        "Marathi": "384071995189"
+      },
+      "char_list": {
+        "name_contains": ["character list", "char list", "characters"],
+        "search_folders": ["375861426771"]
+      }
+    },
+    "_notes": "Box folder ids for Kamen Rider Gavv. char_list.search_folders is a best-guess (the scripts folder); if the character-list workbook lives elsewhere in Box, drop its folder id (or a direct file_id) here. Adding another series = another top-level entry; no code change."
+  }
+}

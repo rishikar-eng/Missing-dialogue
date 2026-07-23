@@ -763,6 +763,43 @@ def box_scan(folder_id: str, episode: str,
             "languages": languages, "notes": notes}
 
 
+# ---- QC agent: engine API ----------------------------------------------------
+# Layer 1 of the QC agent (see docs/teams-qc-agent-plan.md): a small, reusable REST
+# surface the per-series worker agents call. Availability first; /run + /result follow.
+# Auto-gated by the API-key middleware like every other /api/* route.
+@app.get("/api/agent/series")
+def agent_series() -> dict[str, Any]:
+    """Registered series and the aliases/languages each supports (drives the router)."""
+    from . import series_registry
+    return {"series": [
+        {"key": s["key"], "display_name": s.get("display_name", s["key"]),
+         "aliases": s.get("aliases", []), "languages": s.get("languages", [])}
+        for s in series_registry.all_series()
+    ]}
+
+
+@app.get("/api/agent/availability")
+def agent_availability(series: str, episode: int) -> dict[str, Any]:
+    """What's in Box for one series+episode: the English script, the original audio, the
+    character list, and each dub language (present + track count). The worker agent's
+    `check_availability` tool wraps this."""
+    from . import box_discovery, series_registry
+    r = series_registry.resolve(series)
+    if not r:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown series '{series}'. Known: {', '.join(series_registry.series_names())}")
+    key, cfg = r
+    try:
+        token = box_oauth.get_token()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Box is not connected on the server")
+    try:
+        return box_discovery.check_episode(token, key, cfg, int(episode))
+    except box_fetch.BoxFetchError as e:
+        raise HTTPException(status_code=502, detail=f"Box lookup failed: {e}")
+
+
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
 _DISK_HEADROOM = 2 * 1024**3          # always keep 2 GB free
 
