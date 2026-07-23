@@ -1,228 +1,265 @@
-# Teams QC Agent — full plan
+# QC Agent — full plan (API-first, multi-agent)
 
 *Updated 2026-07-21. For team review.*
 
-**Goal:** turn dub QC into a conversation inside a Teams channel. Someone asks for a series +
-episode; the bot checks Box for the required assets, reports what's available, runs the QC tool, and
-delivers the Excel report + the timeline "missing-audio" files back into the channel — no one has to
-touch the server, Box, or a browser.
+**Goal:** turn dub QC into a conversation. Someone names a **series + episode** in natural language;
+the system checks the source (Box) for the required assets, reports what's available, runs the QC
+tool, and delivers the Excel report + the timeline "missing-audio" files back to the requester —
+first in a **Teams channel**, but built so the same brain can back a Slack bot, a web widget, or
+another internal tool without change.
 
-This reuses everything already built (Box discovery, VAD/alignment, mapping fixes, the per-episode
-workbook, the timeline ref-audio, the live HTTPS server, the shared Box-token cache). The genuinely
-new work is a thin "agent" layer plus the Teams-side wiring.
-
----
-
-## 1. The conversation (what the user sees)
-
-```
-User (in a Teams channel):   @QC run episode 42 of Kamen Rider Gavv
-
-QC bot (availability card):   EP 42 — Kamen Rider Gavv
-                              ✅ English script        Kamen_Rider_Gavv_S1_E42.DOCX
-                              ✅ Original audio         Gavv_#42_..._PREMIX.wav (Hindi premix)
-                              ✅ Character list         KAMEN RIDER CHARACTER LIST & VOICES.xlsx
-                              Dub stems:
-                                ✅ Tamil (15)   ✅ Kannada (14)   ✅ Bengali (13)  ✅ Marathi (14)
-                                ❌ Malayalam · ❌ Telugu — not delivered yet
-                              → 4 of 6 languages ready. Run QC on those 4?
-                              [ Run QC ]   [ Cancel ]
-
-User:                         (clicks Run QC)
-
-QC bot:                       ▶ Running EP 42 (4 languages)… ~8 min. I'll post here when done.
-   … (async) …
-QC bot (results card):        EP 42 QC complete ✅
-                              Tamil    5 missing · 29 mismatch · 93 extra
-                              Telugu   —        Kannada  5 missing · …
-                              Bengali  2 missing · …     Marathi  0 missing
-                              ⚠ Delivery note: 1 label swap repaired, 1 split stem merged (Marathi)
-                              📎 EP42_QC.zip  — workbook + timeline missing-audio per language
-                              (posted as a real file in the channel's Files tab)
-```
-
-Two bot turns: an **availability card** (with Run/Cancel), then a **results card** (with the file).
+Reuses the QC engine we already have (Box discovery, VAD/alignment + mapping fixes, per-episode
+workbook, timeline ref-audio, live HTTPS, shared Box-token cache). The new work is a thin, layered
+**agent** stack on top plus the Teams wiring.
 
 ---
 
-## 2. What already exists (≈ 80% of the work)
+## 1. Design principles (from the team's direction)
 
-| Capability | Where | Role in the agent |
-|---|---|---|
-| Box discovery | `box_batch.find_script / find_stems / find_original` | the availability check |
-| Analysis + per-episode multi-language workbook | `box_batch.run_episode`, `excel_report` | the QC run |
-| Timeline + stitched missing-audio | `box_batch._write_ref_audio` | the audio deliverables |
-| Async episode job | `/api/jobs/box-episode` (202 + poll) | run without blocking the webhook |
-| Shared Box-token cache | `box_oauth` (flock) | agent + web UI + batches coexist |
-| **Public HTTPS** | Caddy + Let's Encrypt, `https://13-205-42-228.sslip.io` | Teams can POST to us / fetch files |
-| Outbound Teams posting | `PRD-generator/.../teams.js` (Adaptive Card v1.5 via Power Automate) | post the cards |
-
-**Status change since the first draft:** the public-HTTPS endpoint — previously flagged as "the one
-true blocker" — is **live as of 2026-07-21**, so this project is unblocked.
-
----
-
-## 3. Architecture
-
-```
-Teams channel
-   │  "@QC run episode 42 of Gavv"
-   ▼
-Power Automate  INBOUND flow ── HTTPS POST ─▶  QC Agent  (new endpoints on the existing FastAPI service)
-                                                 │  POST /api/teams/check
-   ◀── availability card + [Run]/[Cancel] ──────┤    1. LLM parse → {series, episode}
-Teams channel                                    │    2. Box availability (script/original/char-list/6 langs)
-   │  click "Run QC"                             │    3. build availability Adaptive Card
-   ▼                                             │  POST /api/teams/run   (on Run)
-Power Automate  INBOUND flow ─────────────────▶ │    4. async QC (reuse box-episode job)
-                                                 │    5. zip workbook + timeline FLACs
-   ◀── results card + EP42_QC.zip ──────────────┤    6. results card + file
-Teams channel  (Files tab)                       ▼
-                                          workbook.xlsx + *_MISSING_timeline.flac  →  EP42_QC.zip
-```
+1. **API-first / embeddable.** Every layer is an HTTP API. The QC engine is provider-neutral; the
+   agent is reachable as a single `/agent/chat` endpoint. Teams is just the first client — because
+   it's all APIs, "use this as an extension to something else" works for free.
+2. **Right-size the model per layer — smallest that meets the bar.** Not tied to a specific model:
+   each layer uses the lowest-resource model that does its job. The per-series workers do only
+   parse + structured tool-calls, so the smallest tier fits (**Haiku 4.5** today); the **router**
+   steps up one tier because intent/series disambiguation is the harder call. A given worker can be
+   bumped up later if its series proves to need more reasoning — the tiering is per-role, not fixed.
+3. **Natural language.** Requests are plain English ("QC episode 42 of Gavv"), parsed by the model,
+   not a fixed command syntax.
+4. **No hardcoded file locations.** Where a series' assets live is **data, not code** — a series
+   registry the agents read (and, where possible, Box *search* discovery) — so adding a show is a
+   config entry, never a code change.
+5. **One agent per series.** Kamen Rider gets its own agent; each other show gets its own Haiku
+   agent; the router points at the right one.
 
 ---
 
-## 4. The two halves of Teams integration
+## 2. Architecture — three layers + clients
 
-Teams integration is directional and needs both:
+```
+        Teams  ·  (later) Slack / web widget / other internal tools
+                    │  natural-language message  ("QC ep 42 of Gavv")
+                    ▼
+        ┌─────────────────────────────────────────────────────────┐
+   L3   │  ROUTER agent  (bigger model — Sonnet 5 or Opus 4.8)     │
+        │  parse intent + identify series → dispatch to its worker │
+        └───────────────┬──────────────────────┬──────────────────┘
+                        │                       │
+        ┌───────────────▼──────┐   ┌────────────▼───────────────┐   … one per series
+   L2   │ Kamen Rider agent    │   │ <Series B> agent           │
+        │ (Haiku 4.5)          │   │ (Haiku 4.5)                │
+        │ knows its Box layout │   │ knows its Box layout       │
+        │ tools: check / run / │   │ tools: check / run / fetch │
+        │ fetch results        │   │                            │
+        └───────────────┬──────┘   └────────────┬───────────────┘
+                        │  calls (HTTP)          │
+        ┌───────────────▼────────────────────────▼───────────────┐
+   L1   │  QC ENGINE API  (provider-neutral REST, on EC2)         │
+        │  /availability · /run (async) · /result                │
+        │  Box discovery · VAD+mapping · workbook · timeline audio│
+        └─────────────────────────────────────────────────────────┘
+                        │ reads/writes
+                   Box  ·  series registry (config store)
+```
 
-| Direction | Mechanism | Status |
-|---|---|---|
-| **us → Teams** (post the cards) | Power Automate "post to channel" + Adaptive Card (reuse `teams.js`) | ✅ have it |
-| **Teams → us** (receive the command + the Run/Cancel click) | Power Automate inbound flow (below) | 🆕 to add |
-
-**Inbound = a Power Automate flow** (no Azure, matches the PRD-generator stack):
-- Trigger: *"When a new channel message is added"* (or *"when I'm mentioned"*) → **HTTP POST** the
-  message text to `/api/teams/check`.
-- For the buttons: Power Automate's **"Post an Adaptive Card and wait for a response"** gives real
-  in-card Run/Cancel buttons and calls `/api/teams/run` on Run — no bot registration needed.
-- (Alternative, richer: an **Azure Bot Service** app — full interactivity, proactive messages — but
-  needs an Azure AD registration. Overkill for v1; revisit only if Power Automate limits bite.)
+- **L1 — QC Engine API.** The reusable core. Given a series+episode (resolved through the registry)
+  or explicit asset locations, it checks availability, runs QC, and returns artifacts. This is the
+  "extension to something else" surface — any system can call it directly, no agent required. Mostly
+  exists today (`/api/jobs/box-episode`, `/api/qc`, `/api/report.xlsx`); we formalize three clean
+  endpoints: `GET /availability`, `POST /run` (async → job id), `GET /result`.
+- **L2 — per-series worker (Haiku 4.5).** One agent per show. Its **series knowledge** (Box folder
+  conventions, naming quirks, language set, where the character list lives) comes from the registry
+  + its system prompt — never hardcoded. It exposes a few **tools** that call L1: `check_availability`,
+  `run_qc`, `get_result`. Haiku is cheap enough to run these conversationally.
+- **L3 — router (bigger model).** Reads the incoming message, extracts `{series, episode, intent}`,
+  and hands off to the matching series worker (or asks which series if ambiguous). Also the place
+  for cross-series concerns later ("QC ep 42 of Gavv **and** Series B").
+- **Clients.** Teams first (via Power Automate, below). Because L3 is just an HTTP endpoint
+  (`POST /agent/chat`), a Slack app or web chat is another client, not a rewrite.
 
 ---
 
-## 5. Availability check (the 4 assets)
+## 3. Models & cost
 
-`check_episode(series, ep)` returns a structured presence report and drives the availability card:
+Principle: pick the **smallest model that clears each layer's bar**, not a fixed model.
 
-1. **English script** — `find_script` (rejects non-English language-tagged variants).
-2. **Original audio** — `find_original` (Hindi premix; now separator-tolerant so `PRE MIX` matches).
-3. **Character list** — **new** `find_char_list(series)`: a known per-series Box file
-   (e.g. *KAMEN RIDER CHARACTER LIST & VOICES.xlsx*). Feeds the mapping roster; report present/absent.
-4. **Dub stems, per language** — `find_stems` + track counts; missing languages are reported and
-   skipped, not failed.
+| Layer | Model (starting point) | ID | Price /M (in/out) | Why this tier |
+|---|---|---|---|---|
+| Router (L3) | **team decision** — Sonnet 5 *or* Opus 4.8 | `claude-sonnet-5` / `claude-opus-4-8` | $3/$15 · $5/$25 | Intent + series disambiguation is the harder call → one tier up |
+| Workers (L2) | **Haiku 4.5** (smallest that fits) | `claude-haiku-4-5` | $1/$5 | Only parse + structured tool-calls → the lowest tier is enough; bump a specific series later only if it needs it |
 
-**Series registry** — today the Box folder IDs are hardcoded for one show. Generalise to a small
-table so a new series is a config entry, not code:
-```
-SERIES = {
+Notes for implementation:
+- **Haiku 4.5 caveat:** it does **not** support the `effort` / adaptive-thinking parameters (those
+  are Opus/Sonnet-5 only) — a request that sends them 400s. Workers use the plain thinking config
+  (or none). Keep worker prompts tight; they're doing structured tool-calls, not deep reasoning.
+- **Cost is tiny per request:** a check/run/report cycle is a handful of short model turns —
+  cents at most, dominated by the router. If the router runs on Sonnet 5, the whole exchange is
+  well under a cent in model spend (the QC compute on EC2 is the real cost, unchanged).
+- The **agent loop** (model → tool → model) is driven by the SDK's tool runner, not hand-rolled.
+
+---
+
+## 4. No hardcoded file locations — the series registry
+
+A **registry** is the single source of truth for where a series' assets live. It is **data**, editable
+without a deploy (a JSON/DB record, or a config file in Box):
+
+```json
+{
   "kamen-rider-gavv": {
-     "aliases": ["gavv", "krg", "kamen rider gavv"],
-     "scripts": "375861426771", "premix": "377097256586",
-     "char_list": "<box-file-id>",
-     "voiceover": {"Tamil": "379646596612", "Telugu": "379644054186", …},
-  },
+    "aliases": ["gavv", "krg", "kamen rider gavv"],
+    "languages": ["Malayalam","Tamil","Telugu","Kannada","Bengali","Marathi"],
+    "box": {
+      "scripts_folder":  "<id-or-search-rule>",
+      "premix_folder":   "<id-or-search-rule>",
+      "char_list_file":  "<id-or-search-rule>",
+      "voiceover_root":  "<id-or-search-rule>"
+    },
+    "naming": { "script": "Kamen_Rider_Gavv_S1_E{n}.docx", "premix": "..._PRE?MIX.wav", "...": "..." }
+  }
 }
 ```
-**v1 supports Kamen Rider Gavv only** (registry has one entry; adding a show = supply its folder IDs).
+
+Two ways to resolve locations, both non-hardcoded:
+- **Registry lookup (v1):** the worker reads its series' record. Adding a show = add a record.
+- **Box *search* discovery (robust upgrade):** give the worker a `search_box` tool + the series'
+  naming conventions in its prompt, and it finds the script / premix / stems / char-list by name
+  rather than by a stored folder id — resilient to folder reshuffles. (We already hit exactly this
+  class of problem — the `PRE MIX` vs `PREMIX` spelling — so tolerant matching lives in the engine.)
+
+v1 ships the registry with **one record (Kamen Rider Gavv)**; discovery is the reliability upgrade.
+
+---
+
+## 5. The conversation (what the user sees)
+
+```
+User (Teams):   @QC run episode 42 of Kamen Rider Gavv
+
+Router → Gavv worker → availability card:
+                EP 42 — Kamen Rider Gavv
+                ✅ English script     ✅ Original audio (Hindi premix)
+                ✅ Character list     Dub stems: ✅ Tamil (15) ✅ Kannada (14)
+                                                 ✅ Bengali (13) ✅ Marathi (14)
+                                                 ❌ Malayalam · ❌ Telugu — not delivered
+                → 4 of 6 languages ready. Run QC on those 4?      [ Run QC ]  [ Cancel ]
+
+User:           (Run QC)
+
+Gavv worker:    ▶ Running EP 42 (4 languages)… ~8 min. I'll post here when done.
+   … async …
+Gavv worker → results card:
+                EP 42 QC complete ✅   Tamil 5 · Kannada 5 · Bengali 2 · Marathi 0 missing
+                ⚠ 1 label swap repaired, 1 split stem merged (Marathi)
+                📎 EP42_QC.zip  (workbook + timeline missing-audio per language)
+```
+
+**Availability = 4 assets:** English script, original audio, **character list**, and dub stems per
+language — the worker's `check_availability` tool returns all four.
 
 ---
 
 ## 6. Delivering the files INTO the channel
 
-Teams cards/webhooks post **text + Adaptive Cards only — they cannot attach a file.** The Files tab
-is just SharePoint, so a real in-channel file must be written there. Options, cheapest first:
+Teams cards/webhooks **can't attach a file** — the Files tab is SharePoint, so a real in-channel
+file must be written there. Options (this is the item deferred for team discussion):
 
-- **A — card with a [Download] button** *(works today).* QC finishes → server zips `EP{NN}_QC.zip`
-  (workbook + each language's `_MISSING_timeline.flac`) and serves it over our HTTPS behind a
-  short-lived token; the results card has a **[Download]** button. One click. Not literally "in" the
-  channel, but zero SharePoint plumbing.
-- **B — real file in the Files tab via Power Automate** *(the "in the group itself" ask).* The flow
-  does **HTTP GET** (fetch the zip) → **SharePoint "Create file"** into the channel's library →
-  **"Post message"** linking it. Teams renders a file card. All native connectors — **no Azure, no
-  Graph code.**
-- **C — Microsoft Graph upload** direct from our server (`PUT …/drive/root:/EP42_QC.zip:/content`) —
-  richest, but needs an Azure AD app + `Files.ReadWrite`. Skip unless we outgrow B.
+- **A — card with a [Download] button** *(works today).* Engine zips `EP{NN}_QC.zip` (workbook +
+  every language's timeline audio), serves it over our HTTPS behind a short-lived token; the card
+  has a download button. Zero SharePoint plumbing.
+- **B — real file in the Files tab** *(the "in the group itself" ask).* A Power Automate step fetches
+  the zip → **SharePoint "Create file"** → posts a file card. Native connectors, no Azure/Graph code.
+- **C — Microsoft Graph upload** direct from the engine — richest, needs an Azure AD app; skip unless
+  we outgrow B.
 
-One **zip per episode** keeps it a single file drop even with several languages × two outputs each.
-Timeline FLACs are ~99% silence and compress to KB–low-MB, so a per-episode zip stays well within
-Teams/SharePoint limits.
-
-*Recommendation on the table: ship A, upgrade to B — but this is the main item for the team to weigh.*
+*Recommendation on the table: ship A → upgrade to B.* One zip per episode = a single drop even with
+several languages.
 
 ---
 
-## 7. Understanding the command (natural language)
+## 7. Teams wiring (the client)
 
-Current lean: **LLM (natural language)** — "hey can you QC episode 42 of Gavv" is understood, not
-just a fixed syntax. Implementation: one Claude Messages API call that extracts
-`{series, episode, intent: check|run}` from the message; falls back to a regex if the key is absent
-or the call fails (so a malformed message still works). The LLM can also write the two card summaries
-in plain language.
-- **Needs:** an `ANTHROPIC_API_KEY` on the service.
-- **Cost:** a few cents per command at most (tiny prompts); latency ~1s, hidden behind the async run.
-- (A rule-based-only mode remains the zero-dependency fallback if the team prefers no LLM.)
+Teams integration is two directions:
 
----
+| Direction | Mechanism | Status |
+|---|---|---|
+| **us → Teams** (post cards) | Power Automate "post to channel" + Adaptive Card (reuse `teams.js`) | ✅ have it |
+| **Teams → us** (message + Run/Cancel) | Power Automate flow → `POST /agent/chat`; "post card & wait" for buttons | 🆕 to add |
 
-## 8. Security & auth
-
-- **Inbound endpoints** (`/api/teams/*`) guarded by a **shared secret** header that only the Power
-  Automate flow knows (rejects random internet POSTs). HTTPS already encrypts it.
-- **Who can trigger** = who can post in the channel (Teams membership). Optionally restrict to a
-  specific channel ID.
-- **Download links / the zip** behind a short-lived token so the artifact isn't world-readable.
-- **Box** — unchanged; the shared-token cache lets the agent, the web UI, and batches coexist.
-- No new secrets in git (same rule as today: `.env` only).
+No Azure needed — matches the PRD-generator stack. The **Microsoft 365 MCP connector** shows as
+needing authorization in tooling; we don't use it for this build, so ignore it.
 
 ---
 
-## 9. Phased build
+## 8. Implementation approach (for the build discussion)
+
+Two ways to build the router + workers; both keep L1 unchanged:
+
+- **(rec. v1) SDK tool-use, self-hosted.** Router and workers are Claude calls with tools, driven by
+  the Anthropic SDK's **tool runner**, running as a small service next to the QC engine on EC2. We
+  own the loop; QC stays on our box; cheapest; least infra. The router calls a `dispatch(series)`
+  tool; each series worker calls the L1 tools. Fits "API-first, embeddable" — the whole thing is one
+  `/agent/chat` endpoint.
+- **(later) Managed Agents (CMA) multiagent.** Anthropic hosts the loop; the router is a **coordinator
+  agent** with a **roster of per-series agents** (this is *literally* your router→per-series topology),
+  each a persisted, versioned Haiku agent; our QC is called back via custom tools/MCP. Cleaner
+  separation and per-series versioning, but more infra and it's beta. Worth it once there are several
+  series and we want each one independently owned/versioned.
+
+Start with the SDK approach; the layering means a later move to CMA is swapping L3/L2 hosting, not
+rewriting L1.
+
+---
+
+## 9. Security & auth
+
+- L1 and `/agent/chat` guarded by a shared secret (only the Teams flow / trusted callers know it);
+  HTTPS already encrypts it.
+- Who can trigger = who can post in the channel; optionally lock to a channel id.
+- Result zip behind a short-lived token.
+- `ANTHROPIC_API_KEY` in `.env` only (same secret rule as today). Box unchanged (shared-token cache).
+
+---
+
+## 10. Phased build
 
 | Phase | Work | Who | Effort |
 |---|---|---|---|
-| 1 — availability core | `check_episode` (script/original/**char-list**/6 langs) + `/api/teams/check`; LLM intent-parse; availability card; series registry (Gavv) | **me** (server) | ½ day |
-| 2 — inbound flow | Power Automate "message → POST" + "post card & wait" for Run/Cancel | you/IT (Teams) | ½ day, click-ops |
-| 3 — run + deliver (A) | on Run → async QC → zip → results card with [Download] | **me** (server) | ½ day |
-| 4 — file in Files tab (B) | Power Automate: fetch zip → SharePoint Create file → post file card | you/IT (Teams) | ½ day |
-| 5 — polish | LLM summaries, errors, auth hardening, rate-limit, proactive "new stems landed" ping | both | ongoing |
+| 1 — L1 engine API | formalize `/availability` (incl. **char-list**), `/run`, `/result`; series registry (Gavv) | **me** | ½ day |
+| 2 — L2 worker | Kamen Rider Haiku agent + its 3 tools (SDK tool runner); `/agent/chat` | **me** | ½ day |
+| 3 — L3 router | bigger-model router: parse NL, identify series, dispatch | **me** | ½ day |
+| 4 — Teams inbound | Power Automate message→`/agent/chat` + "post card & wait" for Run/Cancel | you/IT | ½ day |
+| 5 — deliver (A) | zip workbook + timeline audio → results card with [Download] | **me** | ¼ day |
+| 6 — file-in-channel (B) | Power Automate fetch zip → SharePoint Create file → file card | you/IT | ½ day |
+| 7 — polish | Box-search discovery, add a 2nd series, errors, auth, proactive "new stems landed" ping | both | ongoing |
 
-**≈ 2 days to a working bot** (Phases 1–3), **+½ day** for true in-channel files (Phase 4).
-
----
-
-## 10. Division of labor
-
-- **I build from here (no Teams access needed):** all server-side — `check_episode` incl. char-list,
-  the `/api/teams/check` + `/api/teams/run` endpoints, the series registry, the LLM parse/summary,
-  the zip packaging, the tokenized download. Deployable to the existing EC2 service immediately.
-- **You / IT do in the Teams tenant (click-ops I can't reach):** the 2 Power Automate flows and the
-  SharePoint "Create file" permission on the channel's library. I'll write exact step-by-steps and
-  the card JSON.
-- The **Microsoft 365 MCP connector** shows as needing authorization in tooling — **not required**
-  for this build (we use our own endpoints + Power Automate), so ignore it.
+**≈ 2 days to a working bot** (Phases 1–5), + ½ day for true in-channel files.
 
 ---
 
-## 11. Open decisions for the team
+## 11. Division of labor
 
-1. **File delivery** — download button (A, live fastest) vs real file in the Files tab (B, the
-   "in the group" experience) vs just a link. *(Recommendation: A now → B.)*
-2. **Which channel / who can trigger** — the target Teams channel, and whether to restrict runs to
-   its members only.
-3. **LLM parsing** — confirm natural-language (needs `ANTHROPIC_API_KEY`) vs a fixed command syntax.
-   *(Current lean: LLM.)*
-4. **Series scope** — Gavv only for v1 (current lean), or wire additional shows now (need their Box
-   folder IDs).
-5. **Approval step** — keep the explicit Run/Cancel confirmation, or auto-run when all assets are
-   present?
+- **I build from here (no Teams access needed):** all of L1 + L2 + L3 — the engine endpoints, the
+  series registry, the Haiku worker(s), the router, the `/agent/chat` API, the zip packaging. Deploys
+  to the existing EC2 service.
+- **You / IT do in the Teams tenant:** the Power Automate flows + SharePoint permission. I'll write
+  exact step-by-steps and the card JSON.
 
 ---
 
-## 12. Nice-to-haves (later)
-- **Proactive**: watch Box and ping the channel when a new episode's stems land ("EP 46 Tamil is
-  ready — QC it?").
-- **"QC the whole series 1–50"** in one command → batch + a rolled-up card.
-- **Threaded** results so each episode's QC is its own conversation.
-- `qc.rian.io` friendly URL (ask IT for an A-record → 1-line Caddy change).
+## 12. Open decisions for the team
+
+1. **Router model** — Sonnet 5 (cost-fit) vs Opus 4.8 (max capability). *(Workers fixed at Haiku 4.5.)*
+2. **File delivery** — [Download] button (A) vs real file in Files tab (B) vs just a link. *(Rec: A→B.)*
+3. **Location resolution** — registry lookup only, or add Box-search discovery in v1.
+4. **Target channel / who can trigger** — the Teams channel + whether to restrict to members.
+5. **Approval step** — keep the Run/Cancel confirmation, or auto-run when all assets are present.
+6. **Series scope** — Gavv only for v1 (agreed), plus which show is next (for the 2nd registry record).
+
+---
+
+## 13. Later
+- Proactive: watch Box, ping the channel when a new episode's stems land.
+- "QC the whole series 1–50" in one command → batch + rolled-up card.
+- `qc.rian.io` friendly URL (A-record → 1-line Caddy change).
+- Migrate L2/L3 to CMA multiagent once several series exist (per-series versioning).
