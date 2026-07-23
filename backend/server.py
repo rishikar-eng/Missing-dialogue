@@ -800,6 +800,64 @@ def agent_availability(series: str, episode: int) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Box lookup failed: {e}")
 
 
+class AgentRunRequest(BaseModel):
+    series: str
+    episode: int
+    languages: list[str] | None = None      # subset; default = all available
+    ref_audio: bool = True
+
+
+@app.post("/api/agent/run", status_code=202)
+def agent_run(req: AgentRunRequest) -> dict[str, Any]:
+    """Kick off QC for a series+episode straight from Box (async — downloads + analyses take
+    minutes). Returns a job id to poll via /api/agent/result. The worker's run_qc tool calls
+    this after the user confirms."""
+    from . import episode_runner, series_registry
+    r = series_registry.resolve(req.series)
+    if not r:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown series '{req.series}'. Known: {', '.join(series_registry.series_names())}")
+    key, cfg = r
+    n, langs, refa = int(req.episode), req.languages, req.ref_audio
+    try:
+        job = jobs.submit("agent-run", lambda stage: episode_runner.run(
+            key, cfg, n, languages=langs, ref_audio=refa, stage=stage))
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    return {"job_id": job.id, "status": job.status,
+            "series": cfg.get("display_name", key), "episode": n}
+
+
+@app.get("/api/agent/result")
+def agent_result(job_id: str) -> dict[str, Any]:
+    """Status of an /api/agent/run job; when done, the per-language missing/extra summary
+    plus a download link for EP{NN}_QC.zip (workbook + missing-audio)."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Unknown or expired job")
+    out: dict[str, Any] = {"job_id": job.id, "status": job.status,
+                           "progress": job.progress, "error": job.error}
+    if job.status == "done" and job.result:
+        res = {k: v for k, v in job.result.items() if k != "zip_path"}
+        if res.get("status") == "ok":
+            res["download_url"] = f"/api/agent/download?job_id={job.id}"
+        out["result"] = res
+    return out
+
+
+@app.get("/api/agent/download")
+def agent_download(job_id: str) -> FileResponse:
+    """Serve the EP{NN}_QC.zip a finished /api/agent/run job produced."""
+    job = jobs.get(job_id)
+    if not job or job.status != "done" or not job.result:
+        raise HTTPException(status_code=404, detail="No result for that job")
+    zip_path = job.result.get("zip_path")
+    if not zip_path or not Path(zip_path).is_file():
+        raise HTTPException(status_code=404, detail="Result file is gone (job expired)")
+    return FileResponse(zip_path, media_type="application/zip", filename=Path(zip_path).name)
+
+
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
 _DISK_HEADROOM = 2 * 1024**3          # always keep 2 GB free
 
