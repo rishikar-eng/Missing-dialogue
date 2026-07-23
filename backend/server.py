@@ -54,7 +54,7 @@ from .voices import attach_voices
 # (the initial share link + curl). Unset (the desktop app) = no auth, behaviour unchanged.
 API_KEY = os.environ.get("DQC_API_KEY", "")
 # /api/healthz stays open so the UI (and a tunnel healthcheck) can probe the server.
-_KEY_EXEMPT = {"/api/healthz"}
+_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams"}   # teams webhook self-auths via HMAC
 # FastAPI's auto-docs sit OUTSIDE /api/* and would otherwise be public through the
 # tunnel, leaking the whole schema (routes + models, incl. the Box token fields) — so
 # gate them too, and disable them outright when a key is set (belt and braces).
@@ -872,39 +872,89 @@ _AGENT_SESSIONS: dict[str, dict[str, Any]] = {}
 _AGENT_SESSIONS_MAX = 200
 
 
-@app.post("/api/agent/chat")
-def agent_chat(req: AgentChatRequest) -> dict[str, Any]:
-    """Natural-language QC chat for one series. Keeps a server-side session by session_id.
-    `series` must be supplied (or defaults to the single registered series); the L3 router
-    will resolve the series from the message itself in the next phase."""
+def _agent_turn(message: str, session_id: str | None, series: str | None) -> dict[str, Any]:
+    """One chat turn: bind the series on a new session (router or explicit), then run the
+    series' worker. Shared by /api/agent/chat and the Teams webhook."""
     import uuid
-    from . import agent, series_registry
-    sid = req.session_id or uuid.uuid4().hex[:12]
+    from . import agent, router as agent_router, series_registry
+    sid = session_id or uuid.uuid4().hex[:12]
     sess = _AGENT_SESSIONS.get(sid)
     if sess is None:
-        all_s = series_registry.all_series()
-        series = req.series or (all_s[0]["key"] if len(all_s) == 1 else None)
-        if not series:
-            raise HTTPException(
-                status_code=400,
-                detail="`series` is required (router not enabled yet). Known: "
-                       + ", ".join(series_registry.series_names()))
-        r = series_registry.resolve(series)
-        if not r:
-            raise HTTPException(status_code=404, detail=f"Unknown series '{series}'")
-        if len(_AGENT_SESSIONS) >= _AGENT_SESSIONS_MAX:            # drop oldest when full
+        if len(_AGENT_SESSIONS) >= _AGENT_SESSIONS_MAX:           # drop oldest when full
             for old in list(_AGENT_SESSIONS)[: _AGENT_SESSIONS_MAX // 4]:
                 _AGENT_SESSIONS.pop(old, None)
-        sess = {"series_key": r[0], "cfg": r[1], "convo": []}
+        sess = {"series_key": None, "cfg": None, "convo": []}
         _AGENT_SESSIONS[sid] = sess
 
-    sess["convo"].append({"role": "user", "content": req.message})
-    try:
-        out = agent.worker_reply(sess["series_key"], sess["cfg"], sess["convo"])
-    except Exception as e:  # anthropic / tool errors — never echo internals/keys
-        raise HTTPException(status_code=502, detail=f"Agent error: {str(e)[:160]}")
+    if sess["series_key"] is None:                               # bind the series once
+        if series:
+            r = series_registry.resolve(series)
+            if not r:
+                raise HTTPException(status_code=404, detail=f"Unknown series '{series}'")
+        else:
+            decision = agent_router.route(message)
+            if not decision.get("series_key"):
+                return {"session_id": sid, "series": None, "reply": decision.get("ask", "Which series?")}
+            r = series_registry.resolve(decision["series_key"])
+        sess["series_key"], sess["cfg"] = r[0], r[1]
+
+    sess["convo"].append({"role": "user", "content": message})
+    out = agent.worker_reply(sess["series_key"], sess["cfg"], sess["convo"])
     sess["convo"] = out["convo"]
     return {"session_id": sid, "series": sess["cfg"].get("display_name"), "reply": out["reply"]}
+
+
+@app.post("/api/agent/chat")
+def agent_chat(req: AgentChatRequest) -> dict[str, Any]:
+    """Natural-language QC chat. Server-side session by session_id (a Teams thread id works).
+    The router binds the series on the first message; the worker carries the conversation."""
+    try:
+        return _agent_turn(req.message, req.session_id, req.series)
+    except HTTPException:
+        raise
+    except Exception as e:  # anthropic / tool errors — never echo internals/keys
+        raise HTTPException(status_code=502, detail=f"Agent error: {str(e)[:160]}")
+
+
+TEAMS_SECRET = os.environ.get("DQC_TEAMS_SECRET", "")
+
+
+@app.post("/api/agent/teams")
+async def agent_teams(request: Request):
+    """Microsoft Teams **Outgoing Webhook** receiver (HMAC-authenticated; no API key — this
+    path is exempt from the key gate). Create an Outgoing Webhook in a team you own, point it
+    here, and @mention it with your message. The session is the Teams conversation id, so a
+    thread stays in context. Teams expects a reply within ~5 s."""
+    import base64, hashlib, hmac
+    import json as _json
+    from starlette.concurrency import run_in_threadpool
+    if not TEAMS_SECRET:
+        return JSONResponse({"type": "message",
+                             "text": "Teams webhook is not configured on the server (DQC_TEAMS_SECRET)."},
+                            status_code=503)
+    body = await request.body()
+    auth = request.headers.get("authorization", "")
+    provided = auth.split(" ", 1)[1].strip() if " " in auth else ""
+    try:
+        secret = base64.b64decode(TEAMS_SECRET)
+    except Exception:
+        secret = TEAMS_SECRET.encode()
+    digest = base64.b64encode(hmac.new(secret, body, hashlib.sha256).digest()).decode()
+    if not provided or not hmac.compare_digest(provided, digest):
+        return JSONResponse({"type": "message", "text": "(unauthorized)"}, status_code=401)
+    try:
+        data = _json.loads(body or b"{}")
+    except Exception:
+        data = {}
+    text = re.sub(r"<at>.*?</at>", "", data.get("text") or "").strip()
+    conv = (data.get("conversation") or {}).get("id") or data.get("id") or "teams-default"
+    if not text:
+        return {"type": "message", "text": "Tell me a series + episode, e.g. “QC episode 42 of Gavv”."}
+    try:
+        out = await run_in_threadpool(_agent_turn, text, conv, None)
+        return {"type": "message", "text": out.get("reply") or "(no reply)"}
+    except Exception as e:
+        return {"type": "message", "text": f"Sorry — {str(e)[:160]}"}
 
 
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
