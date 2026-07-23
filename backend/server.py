@@ -54,7 +54,7 @@ from .voices import attach_voices
 # (the initial share link + curl). Unset (the desktop app) = no auth, behaviour unchanged.
 API_KEY = os.environ.get("DQC_API_KEY", "")
 # /api/healthz stays open so the UI (and a tunnel healthcheck) can probe the server.
-_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams"}   # teams webhook self-auths via HMAC
+_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams", "/api/agent/go"}   # HMAC-self-authed
 # FastAPI's auto-docs sit OUTSIDE /api/* and would otherwise be public through the
 # tunnel, leaking the whole schema (routes + models, incl. the Box token fields) — so
 # gate them too, and disable them outright when a key is set (belt and braces).
@@ -901,7 +901,8 @@ def _agent_turn(message: str, session_id: str | None, series: str | None) -> dic
     sess["convo"].append({"role": "user", "content": message})
     out = agent.worker_reply(sess["series_key"], sess["cfg"], sess["convo"])
     sess["convo"] = out["convo"]
-    return {"session_id": sid, "series": sess["cfg"].get("display_name"), "reply": out["reply"]}
+    return {"session_id": sid, "series": sess["cfg"].get("display_name"),
+            "reply": out["reply"], "last_availability": out.get("last_availability")}
 
 
 @app.post("/api/agent/chat")
@@ -952,9 +953,104 @@ async def agent_teams(request: Request):
         return {"type": "message", "text": "Tell me a series + episode, e.g. 'QC episode 42 of Gavv'."}
     try:
         out = await run_in_threadpool(_agent_turn, text, conv, None)
-        return {"type": "message", "text": out.get("reply") or "(no reply)"}
     except Exception as e:
         return {"type": "message", "text": f"Sorry - {str(e)[:160]}"}
+    resp: dict[str, Any] = {"type": "message", "text": out.get("reply") or "(no reply)"}
+    avail = out.get("last_availability")
+    if avail and avail.get("runnable"):        # attach a card with a one-click Run button
+        resp["attachments"] = [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": _availability_card(avail, conv),
+        }]
+    return resp
+
+
+# --- signed one-click "Run QC" links (from the Teams Adaptive Card) --------------------
+def _sign_link(payload: dict[str, Any]) -> str:
+    import base64, hashlib, hmac
+    import json as _j
+    raw = base64.urlsafe_b64encode(_j.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new((API_KEY or "dev").encode(), raw.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{raw}.{sig}"
+
+
+def _verify_link(token: str) -> dict[str, Any] | None:
+    import base64, hashlib, hmac, time as _t
+    import json as _j
+    try:
+        raw, sig = token.rsplit(".", 1)
+        good = hmac.new((API_KEY or "dev").encode(), raw.encode(), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, good):
+            return None
+        obj = _j.loads(base64.urlsafe_b64decode((raw + "=" * (-len(raw) % 4)).encode()))
+        return None if float(obj.get("exp", 0)) < _t.time() else obj
+    except Exception:
+        return None
+
+
+def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
+    import time as _t
+    n = avail.get("episode")
+    ready = avail.get("languages_ready") or {}
+    facts = [
+        {"title": "Script", "value": "present" if avail.get("script") else "missing"},
+        {"title": "Original audio", "value": "present" if avail.get("original_audio") else "missing"},
+        {"title": "Character list", "value": "present" if avail.get("character_list") else "not delivered"},
+        {"title": "Languages ready", "value": ", ".join(f"{l} ({t})" for l, t in ready.items()) or "none"},
+    ]
+    if avail.get("not_delivered"):
+        facts.append({"title": "Not delivered", "value": ", ".join(avail["not_delivered"])})
+    actions = []
+    if avail.get("runnable"):
+        base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
+        tok = _sign_link({"conv": conv, "series": avail.get("series_key") or avail.get("series"),
+                          "episode": n, "exp": _t.time() + 3600})
+        actions = [{"type": "Action.OpenUrl", "title": "▶ Run QC",
+                    "url": f"{base}/api/agent/go?d={tok}"}]
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard", "version": "1.4",
+        "body": [
+            {"type": "TextBlock", "text": f"Episode {n} — {avail.get('series')}",
+             "weight": "Bolder", "size": "Medium"},
+            {"type": "FactSet", "facts": facts},
+        ],
+        "actions": actions,
+    }
+
+
+@app.get("/api/agent/go")
+def agent_go(d: str):
+    """Signed one-click Run from the Teams card: verify HMAC, start the QC run, seed the
+    chat session with the job id (so the bot answers 'status'), return a confirmation page.
+    Key-exempt — the signature is the auth."""
+    from fastapi.responses import HTMLResponse
+    from . import episode_runner, series_registry
+    payload = _verify_link(d)
+    if not payload:
+        return HTMLResponse("<h3>This Run link is invalid or expired.</h3>", status_code=400)
+    r = series_registry.resolve(str(payload.get("series") or ""))
+    if not r:
+        return HTMLResponse("<h3>Unknown series.</h3>", status_code=404)
+    key, cfg = r
+    n = int(payload.get("episode"))
+    conv = str(payload.get("conv") or "")
+    try:
+        job = jobs.submit("agent-run", lambda stage: episode_runner.run(
+            key, cfg, n, ref_audio=True, stage=stage))
+    except RuntimeError as e:
+        return HTMLResponse(f"<h3>Server busy: {e}</h3>", status_code=429)
+    sess = _AGENT_SESSIONS.get(conv)                     # let the bot report on this job
+    if sess is not None and sess.get("series_key"):
+        sess["convo"].append({"role": "assistant",
+                              "content": f"QC run started for episode {n}. Job id: {job.id}. "
+                                         f"Ask me for status any time."})
+    return HTMLResponse(
+        "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:34rem;margin:3rem auto'>"
+        f"<h2 style='color:#2b6cb0'>▶ QC started — Episode {n}, {cfg.get('display_name')}</h2>"
+        f"<p>Job <code>{job.id}</code> is running across all delivered languages.</p>"
+        "<p>Head back to Teams and ask <b>@QC status</b> — I'll post the per-language "
+        "missing/extra counts and a download link when it finishes.</p></div>")
 
 
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}

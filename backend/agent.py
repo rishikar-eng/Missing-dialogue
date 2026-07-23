@@ -65,7 +65,8 @@ def _availability_brief(rep: dict[str, Any]) -> dict[str, Any]:
     """Compact the full availability report to what the model needs to decide + summarise."""
     langs = rep.get("languages", {})
     return {
-        "series": rep.get("series"), "episode": rep.get("episode"),
+        "series": rep.get("series"), "series_key": rep.get("series_key"),
+        "episode": rep.get("episode"),
         "script": rep["script"].get("present"),
         "original_audio": rep["original"].get("present"),
         "character_list": rep["char_list"].get("present"),
@@ -144,6 +145,7 @@ def worker_reply(series_key: str, cfg: dict[str, Any],
     client = anthropic.Anthropic()
     system = _system(cfg)
     reply = ""
+    last_availability: dict[str, Any] | None = None   # most recent check, for the Run card
     for _ in range(_MAX_TURNS):
         resp = client.messages.create(
             model=WORKER_MODEL, max_tokens=1024, system=system, tools=_TOOLS, messages=convo)
@@ -158,9 +160,11 @@ def worker_reply(series_key: str, cfg: dict[str, Any],
                     out = _dispatch(series_key, cfg, b.name, b.input)
                 except Exception as e:  # noqa: BLE001 — surface tool errors to the model
                     out = {"error": str(e)[:200]}
+                if b.name == "check_availability" and isinstance(out, dict) and "runnable" in out:
+                    last_availability = out
                 results.append({"type": "tool_result", "tool_use_id": b.id,
                                 "content": json.dumps(out)})
         convo.append({"role": "user", "content": results})
     else:
-        reply = reply or "Sorry — I got stuck taking too many steps. Please try rephrasing."
-    return {"reply": reply, "convo": convo}
+        reply = reply or "Sorry - I got stuck taking too many steps. Please try rephrasing."
+    return {"reply": reply, "convo": convo, "last_availability": last_availability}

@@ -15,8 +15,9 @@
         "Marathi": "384071995189"
       },
       "char_list": {
-        "name_contains": ["character list", "char list", "characters"],
-        "search_folders": ["375861426771"]
+        "file_id": "2133028571140",
+        "name": "GAV character list.docx",
+        "_note": "Box: Rian - External Storage/JioStar/2026_04_09_018 (Kamen Rider)/Original - Source Files/Updated/Character list/. Table: Character | Pic | Voice name (e.g. Shouma -> KMR_GAV_Shouma) — canonical names + studio voice-name convention, usable as a mapping roster."
       }
     },
     "_notes": "Box folder ids for Kamen Rider Gavv. char_list.search_folders is a best-guess (the scripts folder); if the character-list workbook lives elsewhere in Box, drop its folder id (or a direct file_id) here. Adding another series = another top-level entry; no code change."
