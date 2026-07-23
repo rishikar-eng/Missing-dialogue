@@ -949,12 +949,12 @@ async def agent_teams(request: Request):
     text = re.sub(r"<at>.*?</at>", "", data.get("text") or "").strip()
     conv = (data.get("conversation") or {}).get("id") or data.get("id") or "teams-default"
     if not text:
-        return {"type": "message", "text": "Tell me a series + episode, e.g. “QC episode 42 of Gavv”."}
+        return {"type": "message", "text": "Tell me a series + episode, e.g. 'QC episode 42 of Gavv'."}
     try:
         out = await run_in_threadpool(_agent_turn, text, conv, None)
         return {"type": "message", "text": out.get("reply") or "(no reply)"}
     except Exception as e:
-        return {"type": "message", "text": f"Sorry — {str(e)[:160]}"}
+        return {"type": "message", "text": f"Sorry - {str(e)[:160]}"}
 
 
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
