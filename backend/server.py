@@ -858,6 +858,55 @@ def agent_download(job_id: str) -> FileResponse:
     return FileResponse(zip_path, media_type="application/zip", filename=Path(zip_path).name)
 
 
+# ---- QC agent: chat (L2 worker) ----------------------------------------------
+# Server-side sessions hold the full tool history (incl. tool_use/tool_result blocks) so a
+# multi-turn "check -> confirm -> run -> result" flow keeps context. In-process + capped,
+# like the jobs registry; a restart forgets sessions (the client just starts a new one).
+class AgentChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+    series: str | None = None      # phase 2: caller names the series; phase 3 router fills it
+
+
+_AGENT_SESSIONS: dict[str, dict[str, Any]] = {}
+_AGENT_SESSIONS_MAX = 200
+
+
+@app.post("/api/agent/chat")
+def agent_chat(req: AgentChatRequest) -> dict[str, Any]:
+    """Natural-language QC chat for one series. Keeps a server-side session by session_id.
+    `series` must be supplied (or defaults to the single registered series); the L3 router
+    will resolve the series from the message itself in the next phase."""
+    import uuid
+    from . import agent, series_registry
+    sid = req.session_id or uuid.uuid4().hex[:12]
+    sess = _AGENT_SESSIONS.get(sid)
+    if sess is None:
+        all_s = series_registry.all_series()
+        series = req.series or (all_s[0]["key"] if len(all_s) == 1 else None)
+        if not series:
+            raise HTTPException(
+                status_code=400,
+                detail="`series` is required (router not enabled yet). Known: "
+                       + ", ".join(series_registry.series_names()))
+        r = series_registry.resolve(series)
+        if not r:
+            raise HTTPException(status_code=404, detail=f"Unknown series '{series}'")
+        if len(_AGENT_SESSIONS) >= _AGENT_SESSIONS_MAX:            # drop oldest when full
+            for old in list(_AGENT_SESSIONS)[: _AGENT_SESSIONS_MAX // 4]:
+                _AGENT_SESSIONS.pop(old, None)
+        sess = {"series_key": r[0], "cfg": r[1], "convo": []}
+        _AGENT_SESSIONS[sid] = sess
+
+    sess["convo"].append({"role": "user", "content": req.message})
+    try:
+        out = agent.worker_reply(sess["series_key"], sess["cfg"], sess["convo"])
+    except Exception as e:  # anthropic / tool errors — never echo internals/keys
+        raise HTTPException(status_code=502, detail=f"Agent error: {str(e)[:160]}")
+    sess["convo"] = out["convo"]
+    return {"session_id": sid, "series": sess["cfg"].get("display_name"), "reply": out["reply"]}
+
+
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
 _DISK_HEADROOM = 2 * 1024**3          # always keep 2 GB free
 
