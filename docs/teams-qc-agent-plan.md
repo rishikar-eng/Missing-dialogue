@@ -255,10 +255,19 @@ DECIDED (2026-07-23):
 - **Series scope = Kamen Rider Gavv only** for v1. ✅
 - **NL parsing = LLM** (natural language). ✅
 
-BUILD STATUS:
-- **Phase 1 (engine availability) — DONE & DEPLOYED.** series_registry.json + box_discovery.py +
-  `/api/agent/series` + `/api/agent/availability`; proven on real Box (EP42). ⚠ char-list Box location
-  still a registry TODO (its `search_folders` guess was wrong / it may only exist on Desktop).
+BUILD STATUS — **L1+L2+L3 DONE & DEPLOYED, proven end-to-end on real Box (2026-07-23):**
+- **L1 engine:** series_registry.json + box_discovery.py + episode_runner.py; endpoints
+  `/api/agent/series`, `/availability`, `/run`, `/result`, `/download`. Full run validated
+  (EP43 Tamil → zip = workbook + missing-audio).
+- **L2 worker (Haiku 4.5):** backend/agent.py — check_availability/run_qc/get_result tools;
+  `/api/agent/chat` with server-side sessions. Natural-language chat proven.
+- **L3 router (Sonnet 5):** backend/router.py — rule fast-path + structured-output disambiguation;
+  binds series per session. "gavv"/omitted/unknown all route correctly.
+- **Teams:** `/api/agent/teams` Outgoing-Webhook receiver (HMAC). Setup guide: docs/teams-setup.md.
+- Rian ANTHROPIC_API_KEY installed on the server (value never exposed).
+- ⚠ char-list Box location still a registry TODO. Restart forgets in-flight jobs/sessions (by design).
+- **REMAINING (you):** create the Teams Outgoing Webhook (or Power Automate flow) per
+  docs/teams-setup.md and set DQC_TEAMS_SECRET; optional Adaptive Cards / Run button polish.
 
 STILL OPEN (team):
 - **File delivery** — [Download] button (A) vs real file in the Files tab (B) vs just a link. *(Rec: A→B.)*
