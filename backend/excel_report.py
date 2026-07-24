@@ -32,7 +32,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from . import voices
+from . import voices as voicebank   # aliased: a local 'voices' var exists in _language_sheet
 
 # --- house style -------------------------------------------------------------
 _HDR_FILL = PatternFill("solid", fgColor="0D3B66")
@@ -140,7 +140,7 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     # Voice-ID validation against the studio voice list, per language — computed once and
     # shared by the delivery-health summary and the per-character table below.
     lang_code = _LANG_CODE.get(lang.lower())
-    dup_ids = voices.duplicate_voice_ids()
+    dup_ids = voicebank.duplicate_voice_ids()
     vlist = [_voice_check(c, lang_code, lang.title(), dup_ids) for c in chars]
 
     ws.cell(row=1, column=1, value=f"{lang} — dialogue QC").font = _TITLE_FONT
