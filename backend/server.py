@@ -54,7 +54,7 @@ from .voices import attach_voices
 # (the initial share link + curl). Unset (the desktop app) = no auth, behaviour unchanged.
 API_KEY = os.environ.get("DQC_API_KEY", "")
 # /api/healthz stays open so the UI (and a tunnel healthcheck) can probe the server.
-_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams", "/api/agent/go"}   # HMAC-self-authed
+_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams", "/api/agent/go", "/api/agent/dl"}   # HMAC-self-authed
 # FastAPI's auto-docs sit OUTSIDE /api/* and would otherwise be public through the
 # tunnel, leaking the whole schema (routes + models, incl. the Box token fields) — so
 # gate them too, and disable them outright when a key is set (belt and braces).
@@ -950,19 +950,14 @@ async def agent_teams(request: Request):
     text = re.sub(r"<at>.*?</at>", "", data.get("text") or "").strip()
     conv = (data.get("conversation") or {}).get("id") or data.get("id") or "teams-default"
     if not text:
-        return {"type": "message", "text": "Tell me a series + episode, e.g. 'QC episode 42 of Gavv'."}
+        return {"type": "message", "text": "Tell me what to do, e.g. 'check episode 42 of Gavv'."}
+    # Teams' Outgoing Webhook must reply within ~5s — too tight for the multi-call LLM loop
+    # (~10s). So Teams uses a FAST deterministic path (check / run / status parsed directly,
+    # returning the same card). The full natural-language agent stays on /api/agent/chat.
     try:
-        out = await run_in_threadpool(_agent_turn, text, conv, None)
+        return await run_in_threadpool(_teams_fast, text, conv)
     except Exception as e:
         return {"type": "message", "text": f"Sorry - {str(e)[:160]}"}
-    resp: dict[str, Any] = {"type": "message", "text": out.get("reply") or "(no reply)"}
-    avail = out.get("last_availability")
-    if avail and avail.get("runnable"):        # attach a card with a one-click Run button
-        resp["attachments"] = [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": _availability_card(avail, conv),
-        }]
-    return resp
 
 
 # --- signed one-click "Run QC" links (from the Teams Adaptive Card) --------------------
@@ -1051,6 +1046,103 @@ def agent_go(d: str):
         f"<p>Job <code>{job.id}</code> is running across all delivered languages.</p>"
         "<p>Head back to Teams and ask <b>@QC status</b> — I'll post the per-language "
         "missing/extra counts and a download link when it finishes.</p></div>")
+
+
+def _dl_link(job_id: str) -> str:
+    import time as _t
+    base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
+    return f"{base}/api/agent/dl?d={_sign_link({'job': job_id, 'exp': _t.time() + 86400})}"
+
+
+@app.get("/api/agent/dl")
+def agent_dl(d: str) -> FileResponse:
+    """Signed download of a run's zip (for Teams links — no API key). HMAC-verified."""
+    p = _verify_link(d)
+    if not p:
+        raise HTTPException(status_code=400, detail="This download link is invalid or expired")
+    job = jobs.get(str(p.get("job")))
+    if not job or job.status != "done" or not job.result:
+        raise HTTPException(status_code=404, detail="No result for that job (it may have expired)")
+    zip_path = job.result.get("zip_path")
+    if not zip_path or not Path(zip_path).is_file():
+        raise HTTPException(status_code=404, detail="Result file is gone")
+    return FileResponse(zip_path, media_type="application/zip", filename=Path(zip_path).name)
+
+
+def _teams_fast(text: str, conv: str) -> dict[str, Any]:
+    """Fast, LLM-free handler for the Teams webhook (must answer in ~5s): parse
+    check / run / status and act deterministically. Session (by conversation id) remembers
+    the last episode + job so 'run' / 'status' work without repeating the episode."""
+    from . import agent as _agent, box_discovery, box_oauth, episode_runner
+    from . import router as _router, series_registry
+    low = text.lower().strip()
+    sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
+    fast = sess.setdefault("fast", {})
+
+    # STATUS
+    if re.search(r"\b(status|done|ready|result|finished?|progress|is it)\b", low) \
+            and not re.search(r"\b(run|check|start)\b", low):
+        jid = fast.get("job")
+        job = jobs.get(jid) if jid else None
+        if not job:
+            return {"type": "message", "text": "No QC run here yet. Start one, e.g. 'run episode 42 of Gavv'."}
+        if job.status == "running":
+            return {"type": "message", "text": f"🔄 Running — {job.progress.get('stage', 'working')}. Ask 'status' again in a bit."}
+        if job.status == "error":
+            return {"type": "message", "text": f"⚠️ Run failed: {job.error}"}
+        r = job.result or {}
+        if r.get("status") != "ok":
+            return {"type": "message", "text": f"Run finished: {r.get('why') or r.get('status')}"}
+        lines = [f"{l}: {s['missing']} missing"
+                 + (f", {s['mismatch']} mismatch" if s.get("mismatch") else "")
+                 for l, s in (r.get("summary_by_language") or {}).items()]
+        return {"type": "message",
+                "text": f"✅ EP {r.get('episode')} QC done:\n- " + "\n- ".join(lines)
+                        + f"\n\nDownload report: {_dl_link(jid)}"}
+
+    # episode + series (fall back to the session's last if not restated)
+    m = re.search(r"(?:ep|epi|episode)\s*#?\s*(\d{1,3})", low) or re.search(r"\b(\d{1,3})\b", low)
+    ep = int(m.group(1)) if m else fast.get("episode")
+    hits = _router._rule_match(text)
+    all_s = series_registry.all_series()
+    series_key = (next(iter(hits)) if len(hits) == 1
+                  else fast.get("series_key") or (all_s[0]["key"] if len(all_s) == 1 else None))
+
+    # RUN
+    if re.search(r"\b(run|start|go|proceed|yes|do it|launch|kick)\b", low):
+        if ep is None:
+            return {"type": "message", "text": "Which episode? e.g. 'run episode 42'."}
+        if not series_key:
+            return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
+        key, cfg = series_registry.resolve(series_key)
+        try:
+            job = jobs.submit("agent-run", lambda stage: episode_runner.run(
+                key, cfg, int(ep), ref_audio=True, stage=stage))
+        except RuntimeError as e:
+            return {"type": "message", "text": f"Server busy: {e}"}
+        fast.update(job=job.id, episode=int(ep), series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
+        return {"type": "message",
+                "text": f"▶ QC started for EP {ep} ({cfg.get('display_name')}), all delivered "
+                        f"languages. Ask 'status' for progress + the download link."}
+
+    # CHECK (default when an episode is present)
+    if ep is not None:
+        if not series_key:
+            return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
+        key, cfg = series_registry.resolve(series_key)
+        rep = box_discovery.check_episode(box_oauth.get_token(), key, cfg, int(ep))
+        brief = _agent._availability_brief(rep)
+        fast.update(episode=int(ep), series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
+        ready = brief.get("languages_ready") or {}
+        summary = f"EP {ep} — {brief.get('series')}: {len(ready)}/{len(cfg.get('languages', []))} languages ready."
+        return {"type": "message", "text": summary,
+                "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
+                                 "content": _availability_card(brief, conv)}]}
+
+    return {"type": "message",
+            "text": "I can check or run dialogue QC. Try:\n- 'check gavv ep 42'\n- 'run episode 42'\n- 'status'"}
 
 
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}
