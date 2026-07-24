@@ -95,8 +95,10 @@ def parse(xlsx: str) -> list[dict]:
             voices += _parse_cell(str(vid), "normal")
         if vid_g:
             voices += _parse_cell(str(vid_g), "granute")
-        if not voices:
-            continue
+        # Keep rows with NO voice id too (voices == []): the sheet LISTS the character but
+        # hasn't recorded a voice yet (e.g. 'Yoshida ma'am'). Carrying them lets the report
+        # say "listed, no voice id" instead of the wronger "not in list". A no-id row can
+        # never produce a false OK (it has no id to show), so this only sharpens the check.
         bank.append({"character": clean, "raw_name": raw, "voices": voices})
     return bank
 

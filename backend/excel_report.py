@@ -130,9 +130,12 @@ def _voice_check(c: dict[str, Any], lang_code: str | None, lang_label: str,
         if voicebank._is_generic(name):
             return "—", "generic / bit part — no dedicated voice expected", None
         return "not in list", "no matching character in the studio voice list", "MISSING"
-    lv = [x for x in (c.get("voices") or []) if x.get("lang") == lang_code and x.get("id")]
+    all_voices = c.get("voices") or []
+    lv = [x for x in all_voices if x.get("lang") == lang_code and x.get("id")]
     v = next((x for x in lv if x.get("form") == "normal"), lv[0] if lv else None)
     if not v:
+        if not any(x.get("id") for x in all_voices):
+            return "no voice id", f"'{matched}' is listed but has no voice id recorded", "WARN"
         return f"no {lang_label} id", f"'{matched}' has no {lang_label} voice id in the list", "WARN"
     shared = [s for s in dup_ids.get(v["id"], []) if s != matched]
     if shared:

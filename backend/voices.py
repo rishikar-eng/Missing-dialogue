@@ -24,6 +24,9 @@ from .characters import _ROLE_WORDS, CharacterEntity, _name_score, _squash
 # Committed snapshot (offline fallback) + on-disk cache of the last live Box fetch.
 _BANK_PATH = Path(__file__).resolve().parent / "data" / "voice_bank.json"
 _CACHE_PATH = Path(os.environ.get("DQC_DATA_ROOT", os.environ.get("TMPDIR") or "/tmp")) / "voice_bank_cache.json"
+# Bump when build_voice_bank.parse's OUTPUT shape changes, so an etag-unchanged sheet is
+# still re-parsed (the cache is keyed by file etag, which can't see a parser change).
+_PARSER_VERSION = 2
 # Fuzzy floor for real names ('Shoma'~'SHOUMA'). GENERIC script names ('Man',
 # 'Girl', 'Team guy B') would substring-match into unrelated bank rows
 # ('HOUND MAN'), so they only attach on an essentially exact match.
@@ -48,6 +51,8 @@ _bank_fid: str | None = None       # Box file id of the loaded sheet
 def _read_cache() -> tuple[list | None, str | None, str | None]:
     try:
         d = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+        if d.get("pv") != _PARSER_VERSION:   # parser changed -> cache is stale
+            return None, None, None
         return d.get("bank"), d.get("etag"), d.get("file_id")
     except Exception:
         return None, None, None
@@ -116,8 +121,8 @@ def refresh_from_box(token: str, file_id: str, name: str | None = None) -> str:
     try:
         _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _CACHE_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"file_id": file_id, "etag": etag, "bank": bank},
-                                  ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps({"file_id": file_id, "etag": etag, "pv": _PARSER_VERSION,
+                                   "bank": bank}, ensure_ascii=False), encoding="utf-8")
         tmp.replace(_CACHE_PATH)
     except Exception:
         pass
@@ -163,12 +168,15 @@ def attach_voices(characters: list[CharacterEntity]) -> None:
         return
     for ent in characters:
         threshold = _EXACT_THRESHOLD if _is_generic(ent.name) else _MATCH_THRESHOLD
-        best_score, best_entry = 0.0, None
+        best_score, best_entry, best_has_ids = 0.0, None, False
         for entry in bank:
             s = max(_name_score(entry["character"], ent),
                     _channel_score(entry["character"], ent.channel))
-            if s > best_score:
-                best_score, best_entry = s, entry
+            has_ids = any(v.get("id") for v in entry["voices"])
+            # Highest score wins; on a tie prefer the row that actually carries a voice id
+            # (the bank now also holds listed-but-unvoiced rows, e.g. 'Yoshida ma'am').
+            if s > best_score + 1e-9 or (abs(s - best_score) <= 1e-9 and has_ids and not best_has_ids):
+                best_score, best_entry, best_has_ids = s, entry, has_ids
         matched = best_entry if (best_entry is not None and best_score >= threshold) else None
         ent.voice_match_score = round(best_score, 3) if matched else None
         ent.voices = matched["voices"] if matched else None
