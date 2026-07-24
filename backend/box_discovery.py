@@ -12,7 +12,9 @@ batch runner's find_* helpers.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from . import box_fetch
 
@@ -60,11 +62,16 @@ class _Box:
     def __init__(self, token: str) -> None:
         self.token = token
         self._c: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def listing(self, folder_id: str) -> dict[str, Any]:
-        if folder_id not in self._c:
-            self._c[folder_id] = box_fetch.list_folder(self.token, folder_id)
-        return self._c[folder_id]
+        with self._lock:
+            cached = self._c.get(folder_id)
+        if cached is not None:
+            return cached
+        data = box_fetch.list_folder(self.token, folder_id)   # network OUTSIDE the lock
+        with self._lock:
+            return self._c.setdefault(folder_id, data)
 
 
 # --------------------------------------------------------------------------- #
@@ -159,22 +166,30 @@ def check_episode(token: str, key: str, cfg: dict[str, Any], n: int) -> dict[str
     def asset(x: dict[str, Any] | None) -> dict[str, Any]:
         return {"present": True, "name": x["name"], "id": x["id"]} if x else {"present": False}
 
-    script = find_script(box, cfg, n)
-    original = find_original(box, cfg, n)
-    char_list = find_char_list(box, cfg)
-
-    languages: dict[str, dict[str, Any]] = {}
-    ready: list[str] = []
-    missing: list[str] = []
-    for lang in cfg.get("languages", []):
+    def lang_info(lang: str) -> tuple[str, dict[str, Any], bool]:
         st = find_stems(box, cfg, lang, n)
-        if st:
-            cnt = _track_count(box, st["id"])
-            languages[lang] = {"present": cnt > 0, "tracks": cnt, "folder": st["name"]}
-            (ready if cnt > 0 else missing).append(lang)
-        else:
-            languages[lang] = {"present": False}
-            missing.append(lang)
+        if not st:
+            return lang, {"present": False}, False
+        cnt = _track_count(box, st["id"])
+        return lang, {"present": cnt > 0, "tracks": cnt, "folder": st["name"]}, cnt > 0
+
+    # Fan out every Box lookup — script, original, char-list, and each language — so a check
+    # is bounded by the slowest single chain (~1-2s) instead of ~15 sequential calls (~10s).
+    # This matters for the Teams Outgoing Webhook, which must reply within ~5s.
+    langs = list(cfg.get("languages", []))
+    with ThreadPoolExecutor(max_workers=max(4, len(langs) + 3)) as ex:
+        f_script = ex.submit(find_script, box, cfg, n)
+        f_orig = ex.submit(find_original, box, cfg, n)
+        f_char = ex.submit(find_char_list, box, cfg)
+        f_langs = [ex.submit(lang_info, lang) for lang in langs]
+        script, original, char_list = f_script.result(), f_orig.result(), f_char.result()
+        languages: dict[str, dict[str, Any]] = {}
+        ready: list[str] = []
+        missing: list[str] = []
+        for f in f_langs:
+            lang, info, ok = f.result()
+            languages[lang] = info
+            (ready if ok else missing).append(lang)
 
     return {
         "series": cfg.get("display_name", key),
