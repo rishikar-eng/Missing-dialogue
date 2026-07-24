@@ -1680,6 +1680,11 @@
   ]
  },
  {
+  "character": "Evil character minion",
+  "raw_name": "Evil character minion\nep 11\n17:13",
+  "voices": []
+ },
+ {
   "character": "Granute Laage Nine",
   "raw_name": "Granute Laage Nine\nep 12\n12:20",
   "voices": [
@@ -1932,6 +1937,71 @@
   ]
  },
  {
+  "character": "EP 17 MISSING",
+  "raw_name": "EP 17 MISSING",
+  "voices": []
+ },
+ {
+  "character": "Random guy",
+  "raw_name": "Random guy\nep 17\n2:09",
+  "voices": []
+ },
+ {
+  "character": "Woman speaking 1",
+  "raw_name": "Woman speaking 1\nep 17\n2:20",
+  "voices": []
+ },
+ {
+  "character": "Woman speaking 2",
+  "raw_name": "Woman speaking 2\nep 17\n2:20",
+  "voices": []
+ },
+ {
+  "character": "Weird Granute",
+  "raw_name": "Weird Granute\nep 17\n2:51",
+  "voices": []
+ },
+ {
+  "character": "Random minion",
+  "raw_name": "Random minion\nep 17\n2:58",
+  "voices": []
+ },
+ {
+  "character": "Teacher in the classroom",
+  "raw_name": "Teacher in the classroom \nEP 17\n6:51",
+  "voices": []
+ },
+ {
+  "character": "Two women talking to Shouma",
+  "raw_name": "Two women talking to Shouma \nep 17\n7:28",
+  "voices": []
+ },
+ {
+  "character": "Man talking to Shouma",
+  "raw_name": "Man talking to Shouma \nep 17\n7:30",
+  "voices": []
+ },
+ {
+  "character": "Man 2 talking to Shouma",
+  "raw_name": "Man 2 talking to Shouma \nep 17\n8:00",
+  "voices": []
+ },
+ {
+  "character": "Man talking to Sachika",
+  "raw_name": "Man talking to Sachika\nep 17\n11:00",
+  "voices": []
+ },
+ {
+  "character": "Theatre attendant",
+  "raw_name": "Theatre attendant \nep 17\n11:16",
+  "voices": []
+ },
+ {
+  "character": "Other Man talking to Sachika",
+  "raw_name": "Other Man talking to Sachika\nep 17\n13:42",
+  "voices": []
+ },
+ {
   "character": "Granute Laage Nine after turning into a evil Kamen Rider version/ Vram",
   "raw_name": "Granute Laage Nine after turning into a evil Kamen Rider version/ Vram\nep 18\n3:31",
   "voices": [
@@ -1942,6 +2012,16 @@
     "form": "normal"
    }
   ]
+ },
+ {
+  "character": "Male Passerby",
+  "raw_name": "Male Passerby \nEP 18\n13:55",
+  "voices": []
+ },
+ {
+  "character": "Female Passerby",
+  "raw_name": "Female Passerby \nEP 18\n13:55",
+  "voices": []
  },
  {
   "character": "Suspicious red scarf woman",
@@ -1956,6 +2036,51 @@
   ]
  },
  {
+  "character": "Woman in restaurant 1",
+  "raw_name": "Woman in restaurant 1\nEP 19\n8:26",
+  "voices": []
+ },
+ {
+  "character": "Woman in restaurant 2",
+  "raw_name": "Woman in restaurant 2\nEP 19\n8:26",
+  "voices": []
+ },
+ {
+  "character": "Teacher in the classroom",
+  "raw_name": "Teacher in the classroom \nEP 19\n10:45",
+  "voices": []
+ },
+ {
+  "character": "Comel Amarga",
+  "raw_name": "Comel Amarga (Lage Nine's Younger Brother)\nEP 19\n17:28",
+  "voices": []
+ },
+ {
+  "character": "Helpless citizen",
+  "raw_name": "Helpless citizen \nEP 20\n7:42",
+  "voices": []
+ },
+ {
+  "character": "Helpless citizen - woman",
+  "raw_name": "Helpless citizen - woman\nEP 20\n7:42",
+  "voices": []
+ },
+ {
+  "character": "Shopkeeper",
+  "raw_name": "Shopkeeper \nEP 21\n14:56",
+  "voices": []
+ },
+ {
+  "character": "Girl 1 in restaurant",
+  "raw_name": "Girl 1 in restaurant\nEP 21\n16:15",
+  "voices": []
+ },
+ {
+  "character": "Girl 2 in restaurant",
+  "raw_name": "Girl 2 in restaurant\nEP 21\n16:15",
+  "voices": []
+ },
+ {
   "character": "Policeman in restaurant",
   "raw_name": "Policeman in restaurant\nEP 21\n16:20",
   "voices": [
@@ -1966,5 +2091,575 @@
     "form": "normal"
    }
   ]
+ },
+ {
+  "character": "Attacked man in restaurant",
+  "raw_name": "Attacked man in restaurant\nEP 21\n16:20",
+  "voices": []
+ },
+ {
+  "character": "man in restaurant",
+  "raw_name": "man in restaurant\nEP 21\n16:23",
+  "voices": []
+ },
+ {
+  "character": "Shopkeeper",
+  "raw_name": "Shopkeeper\nep 21\n19:12",
+  "voices": []
+ },
+ {
+  "character": "Spectator of the fight 1",
+  "raw_name": "Spectator of the fight 1\nep 21\n22:15",
+  "voices": []
+ },
+ {
+  "character": "Spectator of the fight 2",
+  "raw_name": "Spectator of the fight 2\nep 21\n22:15",
+  "voices": []
+ },
+ {
+  "character": "Random woman",
+  "raw_name": "Random woman\nep 22\n9:53",
+  "voices": []
+ },
+ {
+  "character": "Random man",
+  "raw_name": "Random man\nep 22\n9:53",
+  "voices": []
+ },
+ {
+  "character": "Other random man",
+  "raw_name": "Other random man\nEP 22\n12:04",
+  "voices": []
+ },
+ {
+  "character": "Evil Shoma",
+  "raw_name": "Evil Shoma \nEP 22\n17:50",
+  "voices": []
+ },
+ {
+  "character": "Hanto's mom",
+  "raw_name": "Hanto's mom\nep 23\n2:32",
+  "voices": []
+ },
+ {
+  "character": "Hanto's friend",
+  "raw_name": "Hanto's friend\nep 23\n13:39",
+  "voices": []
+ },
+ {
+  "character": "Restaurant server",
+  "raw_name": "Restaurant server\n(granute form in ep 24)\nep 23\n14:09",
+  "voices": []
+ },
+ {
+  "character": "Shouma's grandfather",
+  "raw_name": "Shouma's grandfather\nep 23\n18:22",
+  "voices": []
+ },
+ {
+  "character": "Guy driving car",
+  "raw_name": "Guy driving car\nep 23\n20:00",
+  "voices": []
+ },
+ {
+  "character": "Random guy watching",
+  "raw_name": "Random guy watching\nep 23\n21:38",
+  "voices": []
+ },
+ {
+  "character": "Random woman helping old woman",
+  "raw_name": "Random woman helping old woman\nep 23\n23:40",
+  "voices": []
+ },
+ {
+  "character": "Old woman",
+  "raw_name": "Old woman\nep 23\n23:49",
+  "voices": []
+ },
+ {
+  "character": "Restaurant server",
+  "raw_name": "Restaurant server\n(granute form in ep 24)\nep 24\n8:08",
+  "voices": []
+ },
+ {
+  "character": "Man on TV",
+  "raw_name": "Man on TV\nep 25\n5:12",
+  "voices": []
+ },
+ {
+  "character": "Woman eating dessert",
+  "raw_name": "Woman eating dessert\nep 25\n5:22",
+  "voices": []
+ },
+ {
+  "character": "Evil guy giving instructions",
+  "raw_name": "Evil guy giving instructions\nep 25\n5:38",
+  "voices": []
+ },
+ {
+  "character": "Old lady client",
+  "raw_name": "Old lady client\nep 25\n9:16",
+  "voices": []
+ },
+ {
+  "character": "Male shopper",
+  "raw_name": "Male shopper\nep 25\n11:40",
+  "voices": []
+ },
+ {
+  "character": "Female shopper",
+  "raw_name": "Female shopper\nep 25\n11:40",
+  "voices": []
+ },
+ {
+  "character": "Client number 2",
+  "raw_name": "Client number 2\nep 25\n11:45",
+  "voices": []
+ },
+ {
+  "character": "Client number 3",
+  "raw_name": "Client number 3\nep 25\n13:05",
+  "voices": []
+ },
+ {
+  "character": "Fan 1",
+  "raw_name": "Fan 1 \nep 26\n17:12",
+  "voices": []
+ },
+ {
+  "character": "Fan 2",
+  "raw_name": "Fan 2\nep 26\n17:14",
+  "voices": []
+ },
+ {
+  "character": "Modified doctor - Kenzo Suga",
+  "raw_name": "Modified doctor - Kenzo Suga\nep 27\n17:16",
+  "voices": []
+ },
+ {
+  "character": "Random goon",
+  "raw_name": "Random goon\nep 28\n3:38",
+  "voices": []
+ },
+ {
+  "character": "Random guy and girl talking in cafe",
+  "raw_name": "Random guy and girl talking in cafe\nep 29\n4:25",
+  "voices": []
+ },
+ {
+  "character": "Lizel Jaldak - Jiip's wife",
+  "raw_name": "Lizel Jaldak - Jiip's wife\nep 29\n6:25",
+  "voices": []
+ },
+ {
+  "character": "Bocca Jaldak, Lizel's father, president of the Granute world",
+  "raw_name": "Bocca Jaldak, Lizel's father, president of the Granute world\nep 29\n9:32",
+  "voices": []
+ },
+ {
+  "character": "People playing basketball, talking and cheering",
+  "raw_name": "People playing basketball, talking and cheering\nep 29\n12:41",
+  "voices": []
+ },
+ {
+  "character": "Spectator",
+  "raw_name": "Spectator (Granute 21:30)\nep 29\n13:14",
+  "voices": []
+ },
+ {
+  "character": "Basketball player",
+  "raw_name": "Basketball player\nep 29\n14:54",
+  "voices": []
+ },
+ {
+  "character": "Opposing team player",
+  "raw_name": "Opposing team player\nep 29\n15:01",
+  "voices": []
+ },
+ {
+  "character": "Basketball player 2",
+  "raw_name": "Basketball player 2\nep 29\n15:12",
+  "voices": []
+ },
+ {
+  "character": "Waitress",
+  "raw_name": "Waitress\nep 29\n15:37",
+  "voices": []
+ },
+ {
+  "character": "Couple talking and laughing",
+  "raw_name": "Couple talking and laughing\nep 29\n18:07",
+  "voices": []
+ },
+ {
+  "character": "Librarian",
+  "raw_name": "Librarian\nep 29\n21:07",
+  "voices": []
+ },
+ {
+  "character": "Random customer",
+  "raw_name": "Random customer \nep 29\n21:18",
+  "voices": []
+ },
+ {
+  "character": "Magen",
+  "raw_name": "Magen\nep 30\n7:10",
+  "voices": []
+ },
+ {
+  "character": "Sweets shopkeeper",
+  "raw_name": "Sweets shopkeeper\nep 30\n10:53",
+  "voices": []
+ },
+ {
+  "character": "Small kid",
+  "raw_name": "Small kid\nep 30\n11:40",
+  "voices": []
+ },
+ {
+  "character": "Some woman",
+  "raw_name": "Some woman\nep 31\n5:09",
+  "voices": []
+ },
+ {
+  "character": "Barber",
+  "raw_name": "Barber (Granute Ripper)\nep 31\n9:43",
+  "voices": []
+ },
+ {
+  "character": "Candy shop owner",
+  "raw_name": "Candy shop owner\nep 31\n14:45",
+  "voices": []
+ },
+ {
+  "character": "Salesman",
+  "raw_name": "Salesman\nep 31\n16:00",
+  "voices": []
+ },
+ {
+  "character": "Lizel's butler",
+  "raw_name": "Lizel's butler\nep 31\n16:09",
+  "voices": []
+ },
+ {
+  "character": "Waitress",
+  "raw_name": "Waitress\nep 32\n6:02",
+  "voices": []
+ },
+ {
+  "character": "Magen human form and transformed version",
+  "raw_name": "Magen human form and transformed version (Bitter Gavv Breacookie Form)\nep 33\n6:46",
+  "voices": []
+ },
+ {
+  "character": "Small kid",
+  "raw_name": "Small kid\nep 34\n7:17",
+  "voices": []
+ },
+ {
+  "character": "Small kid's mother",
+  "raw_name": "Small kid's mother\nep 34\n7:10",
+  "voices": []
+ },
+ {
+  "character": "Ritsu Sato",
+  "raw_name": "Ritsu Sato \nep 35\n3:09",
+  "voices": []
+ },
+ {
+  "character": "Article woman",
+  "raw_name": "Article woman\nep 35\n10:10",
+  "voices": []
+ },
+ {
+  "character": "News channel woman",
+  "raw_name": "News channel woman (can be heard but not seen on screen)\nep 35\n10:39",
+  "voices": []
+ },
+ {
+  "character": "Two customers speaking",
+  "raw_name": "Two customers speaking\nep 35\n14:30",
+  "voices": []
+ },
+ {
+  "character": "Man at the stall",
+  "raw_name": "Man at the stall \nep 35\n14:30",
+  "voices": []
+ },
+ {
+  "character": "Airhostess Granute 1 and 2",
+  "raw_name": "Airhostess Granute 1 and 2\nep 35\n15:52",
+  "voices": []
+ },
+ {
+  "character": "Passengers saying thankyou 1 and 2",
+  "raw_name": "Passengers saying thankyou 1 and 2\nep 35\n16:21",
+  "voices": []
+ },
+ {
+  "character": "People on the plane talking and chatting",
+  "raw_name": "People on the plane talking and chatting (multiple)\nep 35\n16:30",
+  "voices": []
+ },
+ {
+  "character": "Shouma's dad",
+  "raw_name": "Shouma's dad\nep 35\n20:57",
+  "voices": []
+ },
+ {
+  "character": "Guy watching news",
+  "raw_name": "Guy watching news\nep 36\n2:10",
+  "voices": []
+ },
+ {
+  "character": "Woman watching news",
+  "raw_name": "Woman watching news\nep 36\n2:13",
+  "voices": []
+ },
+ {
+  "character": "Comments read by 4-5 different people",
+  "raw_name": "Comments read by 4-5 different people (people not on screen)\nep 36\n10:48",
+  "voices": []
+ },
+ {
+  "character": "Crowd talking and cheering",
+  "raw_name": "Crowd talking and cheering\nep 36\n13:33",
+  "voices": []
+ },
+ {
+  "character": "Human collector",
+  "raw_name": "Human collector \nep 36\n14:41",
+  "voices": []
+ },
+ {
+  "character": "News reporter",
+  "raw_name": "News reporter\nep 37\n1:27",
+  "voices": []
+ },
+ {
+  "character": "Small kid",
+  "raw_name": "Small kid\nep 37\n2:27",
+  "voices": []
+ },
+ {
+  "character": "Sweets shop owner",
+  "raw_name": "Sweets shop owner (small kid's mom)\nep 37\n8:12",
+  "voices": []
+ },
+ {
+  "character": "Employee at the sweets shop - Kenji",
+  "raw_name": "Employee at the sweets shop - Kenji\nep 37\n9:13",
+  "voices": []
+ },
+ {
+  "character": "Lady customer",
+  "raw_name": "Lady customer \nep 38\n12:48",
+  "voices": []
+ },
+ {
+  "character": "Crowd screaming and talking",
+  "raw_name": "Crowd screaming and talking\nep 39\n6:48",
+  "voices": []
+ },
+ {
+  "character": "Military guy",
+  "raw_name": "Military guy\nep 39\n6:53",
+  "voices": []
+ },
+ {
+  "character": "Male shopkeeper",
+  "raw_name": "Male shopkeeper\nep 39\n11:00",
+  "voices": []
+ },
+ {
+  "character": "Female shopkeeper",
+  "raw_name": "Female shopkeeper\nep 39\n11:00",
+  "voices": []
+ },
+ {
+  "character": "Random man talking in the background with the female shopkeeper",
+  "raw_name": "Random man talking in the background with the female shopkeeper\nep 40\n14:10",
+  "voices": []
+ },
+ {
+  "character": "Neighbour lady",
+  "raw_name": "Neighbour lady\nep 41\n6:44",
+  "voices": []
+ },
+ {
+  "character": "Man trying to eat a stone",
+  "raw_name": "Man trying to eat a stone\nep 41\n7:31",
+  "voices": []
+ },
+ {
+  "character": "Nurse 1",
+  "raw_name": "Nurse 1\nep 41\n8:10",
+  "voices": []
+ },
+ {
+  "character": "Nurse 2",
+  "raw_name": "Nurse 2\nep 41\n8:10",
+  "voices": []
+ },
+ {
+  "character": "Hooded figure",
+  "raw_name": "Hooded figure (zombie version of Kenzo Suga)\nep 41\n8:54",
+  "voices": []
+ },
+ {
+  "character": "Small girl",
+  "raw_name": "Small girl\nEpisode 42\n9:11",
+  "voices": []
+ },
+ {
+  "character": "Yoshida ma'am",
+  "raw_name": "Yoshida ma'am\nEP 42\n10:21",
+  "voices": []
+ },
+ {
+  "character": "Kid",
+  "raw_name": "Kid\nep 42\n11:36",
+  "voices": []
+ },
+ {
+  "character": "Lango Stomach - zombie version?",
+  "raw_name": "Lango Stomach - zombie version? (he comes back from the dead or he doesn't die and just pretends to die idk)\nep 42\n12:43",
+  "voices": []
+ },
+ {
+  "character": "Human form of Bocca Jaldak",
+  "raw_name": "Human form of Bocca Jaldak\nep 43\n9:38",
+  "voices": []
+ },
+ {
+  "character": "Hajime",
+  "raw_name": "Hajime (boy who finds Shoma when he first comes to earth)\nep 44\n1:30",
+  "voices": []
+ },
+ {
+  "character": "Kid 1 talking about Kamen Rider",
+  "raw_name": "Kid 1 talking about Kamen Rider\nep 44\n1:59",
+  "voices": []
+ },
+ {
+  "character": "Kid 2 talking about Kamen Rider",
+  "raw_name": "Kid 2 talking about Kamen Rider\nep 44\n1:59",
+  "voices": []
+ },
+ {
+  "character": "Man in knitted hat",
+  "raw_name": "Man in knitted hat\nep 44\n11:02",
+  "voices": []
+ },
+ {
+  "character": "Stomach inc tutorial guide person",
+  "raw_name": "Stomach inc tutorial guide person\nep 44\n11:15",
+  "voices": []
+ },
+ {
+  "character": "Customer and customer's kid",
+  "raw_name": "Customer and customer's kid\nep 44\n11:32",
+  "voices": []
+ },
+ {
+  "character": "Client",
+  "raw_name": "Client\nep 45\n1:28",
+  "voices": []
+ },
+ {
+  "character": "Evil minion",
+  "raw_name": "Evil minion\nep 45\n7:40",
+  "voices": []
+ },
+ {
+  "character": "Couple walking and talking",
+  "raw_name": "Couple walking and talking\nep 45\n14:14",
+  "voices": []
+ },
+ {
+  "character": "Kid with football",
+  "raw_name": "Kid with football\nep 45\n14:55",
+  "voices": []
+ },
+ {
+  "character": "Kids saying thank you",
+  "raw_name": "Kids saying thank you\nep 45\n14:56",
+  "voices": []
+ },
+ {
+  "character": "Fortune-teller/Granute Te Sou",
+  "raw_name": "Fortune-teller/Granute Te Sou\nep 45\n15:29",
+  "voices": []
+ },
+ {
+  "character": "Castle guard",
+  "raw_name": "Castle guard\nep 46\n12:55",
+  "voices": []
+ },
+ {
+  "character": "Jaldak minion",
+  "raw_name": "Jaldak minion \nep 47\n15:11",
+  "voices": []
+ },
+ {
+  "character": "Dying minion",
+  "raw_name": "Dying minion\nep 48\n14:30",
+  "voices": []
+ },
+ {
+  "character": "Female minion",
+  "raw_name": "Female minion\nep 49\n12:43",
+  "voices": []
+ },
+ {
+  "character": "Male minion",
+  "raw_name": "Male minion\nep 49\n12:45",
+  "voices": []
+ },
+ {
+  "character": "Female minion 2",
+  "raw_name": "Female minion 2\nep 49\n17:33",
+  "voices": []
+ },
+ {
+  "character": "Random citizen",
+  "raw_name": "Random citizen\nep 49\n19:10",
+  "voices": []
+ },
+ {
+  "character": "Confused crowd talking",
+  "raw_name": "Confused crowd talking\nep 49\n19:15",
+  "voices": []
+ },
+ {
+  "character": "Minions that are attacking",
+  "raw_name": "Minions that are attacking\nep 49\n20:49",
+  "voices": []
+ },
+ {
+  "character": "2 kids",
+  "raw_name": "2 kids\nep 50\n18:54",
+  "voices": []
+ },
+ {
+  "character": "Random woman",
+  "raw_name": "Random woman\nep 50\n18:54",
+  "voices": []
+ },
+ {
+  "character": "Random granute",
+  "raw_name": "Random granute\nep 50\n21:12",
+  "voices": []
+ },
+ {
+  "character": "Random granute shopkeeper",
+  "raw_name": "Random granute shopkeeper\nep 50\n21:12",
+  "voices": []
+ },
+ {
+  "character": "Guy on the street",
+  "raw_name": "Guy on the street \nep 50\n22:41",
+  "voices": []
  }
 ]
