@@ -158,6 +158,37 @@ def status(task_arn: str, job_id: str) -> tuple[str, dict[str, Any] | None]:
     return ecs_state, rec
 
 
+def ensure_summary(parent_id: str, episode: int,
+                   langs_map: dict[str, dict[str, Any]]) -> str | None:
+    """Build (once, then cache in S3) the cross-language Summary workbook for a fanned-out run
+    from each language's uploaded `xlang.json`. Returns its S3 key, or None if nothing to
+    aggregate. Cheap (~1-2s, no audio) and idempotent — re-runs only if the object is missing."""
+    import tempfile
+
+    from . import excel_report
+    c = _cfg()
+    key = f"{c['prefix']}/{parent_id}/EP{int(episode):02d}_Summary.xlsx"
+    s3 = _s3()
+    try:
+        s3.head_object(Bucket=c["bucket"], Key=key)
+        return key                                   # already built
+    except Exception:
+        pass
+    per_lang: dict[str, Any] = {}
+    for info in langs_map.values():
+        try:
+            obj = s3.get_object(Bucket=c["bucket"], Key=f"{c['prefix']}/{info['job_id']}/xlang.json")
+            per_lang.update(json.loads(obj["Body"].read()))   # {lang: res}
+        except Exception:
+            pass                                     # a skipped/failed language has no xlang.json
+    if not per_lang:
+        return None
+    tmp = f"{tempfile.mkdtemp()}/EP{int(episode):02d}_Summary.xlsx"
+    excel_report.build_summary_workbook(per_lang, tmp)
+    s3.upload_file(tmp, c["bucket"], key)
+    return key
+
+
 def download_url(zip_key: str, expires: int = 86400) -> str:
     c = _cfg()
     return _s3().generate_presigned_url(

@@ -73,6 +73,13 @@ def main() -> int:
     if r.get("status") == "ok" and zp and os.path.isfile(zp):
         zip_key = f"{prefix}/{job_id}/{os.path.basename(zp)}"
         _s3().upload_file(zp, bucket, zip_key)
+        # per-language result JSON -> for the cross-language Summary aggregation
+        rp = r.get("results_path")
+        if rp and os.path.isfile(rp):
+            try:
+                _s3().upload_file(rp, bucket, f"{prefix}/{job_id}/xlang.json")
+            except Exception as e:  # noqa: BLE001
+                print("WARN: could not upload xlang.json:", e, file=sys.stderr)
 
     _put_status(bucket, prefix, job_id, {
         "status": r.get("status"), "episode": r.get("episode", episode),

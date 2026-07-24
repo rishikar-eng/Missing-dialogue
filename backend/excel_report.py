@@ -575,6 +575,18 @@ def _summary(wb: Workbook, per_lang: dict[str, dict[str, Any]]) -> None:
     ws.freeze_panes = "A4"
 
 
+def build_summary_workbook(per_lang: dict[str, dict[str, Any]], out_path: str | Path) -> Path:
+    """Just the cross-language Summary sheet (side-by-side totals + the CROSS-LANGUAGE CHECK),
+    built from per-language analysis results only — no audio. Used by the Fargate fan-out to
+    restore the cross-language view that the parallel per-language zips can't carry."""
+    wb = Workbook()
+    _summary(wb, per_lang)                       # inserts "Summary" at index 0
+    if "Sheet" in wb.sheetnames:                 # drop the default empty sheet
+        wb.remove(wb["Sheet"])
+    wb.save(str(out_path))
+    return Path(out_path)
+
+
 def build_workbook(meta: dict[str, Any], per_lang: dict[str, dict[str, Any]], out_path: str | Path) -> Path:
     """meta: {episode, generated_at, script_path, original_audio_path, tol_s}
     per_lang: {"Malayalam": <analyze result dict + '_audio_dir'>, ...} — insertion-ordered."""

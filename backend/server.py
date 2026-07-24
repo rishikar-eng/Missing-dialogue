@@ -1135,6 +1135,15 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                     lines.append(f"🔄 {lang}: {(ecs_state or 'running').lower()}")
             header = (f"✅ EP {ep_no} QC done ({done} language{'s' if done != 1 else ''})"
                       if running == 0 else f"EP {ep_no}: {done} done, {running} running")
+            # All languages finished -> build (once) the cross-language Summary and link it.
+            if running == 0 and done:
+                try:
+                    skey = fargate.ensure_summary(jid, ep_no, rec.get("langs") or {})
+                    if skey:
+                        lines.append(f"\n📊 Cross-language summary (all languages side by side + "
+                                     f"root-cause check): {_dl_s3(skey)}")
+                except Exception:  # noqa: BLE001 — never let aggregation break the status reply
+                    pass
             return {"type": "message", "text": header + "\n" + "\n".join(lines)}
 
         # Cloud (Fargate) run, single task: outcome lives in S3, task state in ECS.

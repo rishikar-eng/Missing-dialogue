@@ -12,6 +12,7 @@ worker (which already holds the heavy-analysis slot), so it calls _run_analysis 
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -195,6 +196,16 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
                 if p.name != zip_path.name:
                     z.write(p, arcname=p.name)
 
+        # Per-language analysis result as JSON (written AFTER the zip, so it stays out of the
+        # studio's bundle). The Fargate fan-out uploads this so the cross-language Summary can
+        # be aggregated from all languages without re-running any audio analysis.
+        results_path: Path | None = out_dir / f"EP{n:02d}_results.json"
+        try:
+            results_path.write_text(json.dumps(per_lang, default=str, ensure_ascii=False),
+                                    encoding="utf-8")
+        except Exception:  # noqa: BLE001 — never fail a run over the companion JSON
+            results_path = None
+
         summary = {lang: {"missing": r["alignment"]["summary"]["n_missing"],
                           "mismatch": r["alignment"]["summary"].get("n_mismatch", 0),
                           "extra": r["alignment"]["summary"]["n_extra"]}
@@ -209,6 +220,7 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
             "workbook": xlsx.name,
             "zip_name": zip_path.name,
             "zip_path": str(zip_path),
+            "results_path": str(results_path) if results_path else None,
         }
     finally:
         shutil.rmtree(work, ignore_errors=True)
