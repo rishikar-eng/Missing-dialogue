@@ -1075,7 +1075,7 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     """Fast, LLM-free handler for the Teams webhook (must answer in ~5s): parse
     check / run / status and act deterministically. Session (by conversation id) remembers
     the last episode + job so 'run' / 'status' work without repeating the episode."""
-    from . import agent as _agent, box_discovery, box_oauth, episode_runner
+    from . import agent as _agent, box_discovery, box_oauth, episode_runner, fargate
     from . import router as _router, series_registry
     low = text.lower().strip()
     sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
@@ -1092,6 +1092,25 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         rec = run_store.get(jid) if jid else None  # persisted (survives restart)
         if not job and not rec:
             return {"type": "message", "text": "No QC run here yet. Start one, e.g. 'run episode 42 of Gavv'."}
+
+        # Cloud (Fargate) run: outcome lives in S3, task state in ECS.
+        if rec and rec.get("compute") == "fargate":
+            ecs_state, srec = fargate.status(rec.get("task_arn"), jid)
+            if not srec or srec.get("status") == "running":
+                if ecs_state in ("STOPPED",) and not srec:
+                    return {"type": "message", "text": "⚠️ The cloud run stopped without writing a "
+                                                       "result — check the ECS logs, then re-run."}
+                return {"type": "message",
+                        "text": f"🔄 Running on the cloud ({ecs_state.lower()}). Ask 'status' again shortly."}
+            if srec.get("status") != "ok":
+                return {"type": "message", "text": f"Run finished: {srec.get('why') or srec.get('status')}"}
+            lines = [f"{l}: {s['missing']} missing"
+                     + (f", {s['mismatch']} mismatch" if s.get("mismatch") else "")
+                     for l, s in (srec.get("summary") or {}).items()]
+            dl = fargate.download_url(srec["zip_key"]) if srec.get("zip_key") else None
+            return {"type": "message",
+                    "text": f"✅ EP {srec.get('episode')} QC done:\n- " + "\n- ".join(lines)
+                            + (f"\n\nDownload report: {dl}" if dl else "")}
 
         # Live job present -> authoritative for in-progress state.
         if job and job.status in ("queued", "running"):
@@ -1136,6 +1155,21 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
             return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
         key, cfg = series_registry.resolve(series_key)
         n_ep, disp = int(ep), cfg.get("display_name")
+
+        # Cloud compute: launch a Fargate task (heavy compute off-box), record it, and let
+        # STATUS read the outcome from S3. Falls through to the in-process runner otherwise.
+        if fargate.enabled():
+            try:
+                job_id, task_arn = fargate.launch(key, n_ep)
+            except Exception as e:  # noqa: BLE001
+                return {"type": "message", "text": f"Couldn't launch the cloud job: {str(e)[:160]}"}
+            run_store.record(job_id, conv=conv, episode=n_ep, series=disp, status="running",
+                             compute="fargate", task_arn=task_arn)
+            fast.update(job=job_id, episode=n_ep, series_key=key)
+            sess["series_key"], sess["cfg"] = key, cfg
+            return {"type": "message",
+                    "text": f"▶ QC started on the cloud (Fargate) for EP {ep} ({disp}), all "
+                            f"delivered languages. Ask 'status' for the result + download link."}
 
         def _persist(j: jobs.Job) -> None:
             # Runs in the worker thread when the job ends — record the outcome to disk so
