@@ -983,6 +983,39 @@ def _verify_link(token: str) -> dict[str, Any] | None:
         return None
 
 
+def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, Any]:
+    """Start a QC run for (series, episode) and register it under the Teams conversation so a
+    later 'status' finds it. Shared by the typed 'run' command AND the card's Run button, so
+    both behave identically (Fargate parallel when enabled, in-process otherwise). Returns
+    {mode, job, launched?, disp}. Raises on launch failure (caller formats the error)."""
+    from . import episode_runner, fargate
+    disp = cfg.get("display_name")
+    sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
+    fast = sess.setdefault("fast", {})
+    if fargate.enabled():
+        parent_id, langmap = fargate.launch_parallel(key, n, list(cfg.get("languages", [])))
+        run_store.record(parent_id, conv=conv, episode=n, series=disp, status="running",
+                         compute="fargate-parallel", langs=langmap)
+        fast.update(job=parent_id, episode=n, series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
+        return {"mode": "fargate", "job": parent_id, "disp": disp,
+                "launched": sum(1 for v in langmap.values() if v.get("task_arn"))}
+
+    def _persist(j: jobs.Job) -> None:
+        r = j.result or {}
+        run_store.record(j.id, conv=conv, episode=n, series=disp,
+                         status=("error" if j.status == "error" else r.get("status") or "done"),
+                         zip_path=r.get("zip_path"), summary=r.get("summary_by_language"),
+                         why=r.get("why") or j.error)
+
+    job = jobs.submit("agent-run", lambda stage: episode_runner.run(
+        key, cfg, n, ref_audio=True, stage=stage), on_done=_persist)
+    run_store.record(job.id, conv=conv, episode=n, series=disp, status="running")
+    fast.update(job=job.id, episode=n, series_key=key)
+    sess["series_key"], sess["cfg"] = key, cfg
+    return {"mode": "local", "job": job.id, "disp": disp}
+
+
 def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
     import time as _t
     n = avail.get("episode")
@@ -1020,7 +1053,7 @@ def agent_go(d: str):
     chat session with the job id (so the bot answers 'status'), return a confirmation page.
     Key-exempt — the signature is the auth."""
     from fastapi.responses import HTMLResponse
-    from . import episode_runner, series_registry
+    from . import series_registry
     payload = _verify_link(d)
     if not payload:
         return HTMLResponse("<h3>This Run link is invalid or expired.</h3>", status_code=400)
@@ -1030,20 +1063,20 @@ def agent_go(d: str):
     key, cfg = r
     n = int(payload.get("episode"))
     conv = str(payload.get("conv") or "")
+    # SAME launcher as the typed 'run' command — records the run under `conv` so 'status'
+    # finds it (the old code only nudged the LLM convo, so the fast path saw nothing).
     try:
-        job = jobs.submit("agent-run", lambda stage: episode_runner.run(
-            key, cfg, n, ref_audio=True, stage=stage))
+        info = _launch_run(conv, key, cfg, n)
     except RuntimeError as e:
         return HTMLResponse(f"<h3>Server busy: {e}</h3>", status_code=429)
-    sess = _AGENT_SESSIONS.get(conv)                     # let the bot report on this job
-    if sess is not None and sess.get("series_key"):
-        sess["convo"].append({"role": "assistant",
-                              "content": f"QC run started for episode {n}. Job id: {job.id}. "
-                                         f"Ask me for status any time."})
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(f"<h3>Couldn't start the run: {str(e)[:200]}</h3>", status_code=500)
+    where = (f"{info.get('launched')} languages running in parallel on the cloud"
+             if info["mode"] == "fargate" else "running across all delivered languages")
     return HTMLResponse(
         "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:34rem;margin:3rem auto'>"
         f"<h2 style='color:#2b6cb0'>▶ QC started — Episode {n}, {cfg.get('display_name')}</h2>"
-        f"<p>Job <code>{job.id}</code> is running across all delivered languages.</p>"
+        f"<p>Job <code>{info['job']}</code> is {where}.</p>"
         "<p>Head back to Teams and ask <b>@QC status</b> — I'll post the per-language "
         "missing/extra counts and a download link when it finishes.</p></div>")
 
@@ -1088,7 +1121,7 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     """Fast, LLM-free handler for the Teams webhook (must answer in ~5s): parse
     check / run / status and act deterministically. Session (by conversation id) remembers
     the last episode + job so 'run' / 'status' work without repeating the episode."""
-    from . import agent as _agent, box_discovery, box_oauth, episode_runner, fargate
+    from . import agent as _agent, box_discovery, box_oauth, fargate
     from . import router as _router, series_registry
     low = text.lower().strip()
     sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
@@ -1207,45 +1240,19 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         if not series_key:
             return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
         key, cfg = series_registry.resolve(series_key)
-        n_ep, disp = int(ep), cfg.get("display_name")
-
-        # Cloud compute: launch a Fargate task (heavy compute off-box), record it, and let
-        # STATUS read the outcome from S3. Falls through to the in-process runner otherwise.
-        if fargate.enabled():
-            langs = list(cfg.get("languages", []))
-            try:
-                parent_id, langmap = fargate.launch_parallel(key, n_ep, langs)
-            except Exception as e:  # noqa: BLE001
-                return {"type": "message", "text": f"Couldn't launch the cloud job: {str(e)[:160]}"}
-            launched = sum(1 for v in langmap.values() if v.get("task_arn"))
-            run_store.record(parent_id, conv=conv, episode=n_ep, series=disp, status="running",
-                             compute="fargate-parallel", langs=langmap)
-            fast.update(job=parent_id, episode=n_ep, series_key=key)
-            sess["series_key"], sess["cfg"] = key, cfg
-            return {"type": "message",
-                    "text": f"▶ QC started on the cloud for EP {ep} ({disp}) — {launched} languages "
-                            f"running in parallel. Ask 'status' for results + download links."}
-
-        def _persist(j: jobs.Job) -> None:
-            # Runs in the worker thread when the job ends — record the outcome to disk so
-            # 'status' and the download link survive a server restart (jobs are in-process).
-            r = j.result or {}
-            run_store.record(
-                j.id, conv=conv, episode=n_ep, series=disp,
-                status=("error" if j.status == "error" else r.get("status") or "done"),
-                zip_path=r.get("zip_path"), summary=r.get("summary_by_language"),
-                why=r.get("why") or j.error)
-
         try:
-            job = jobs.submit("agent-run", lambda stage: episode_runner.run(
-                key, cfg, n_ep, ref_audio=True, stage=stage), on_done=_persist)
+            info = _launch_run(conv, key, cfg, int(ep))
         except RuntimeError as e:
             return {"type": "message", "text": f"Server busy: {e}"}
-        run_store.record(job.id, conv=conv, episode=n_ep, series=disp, status="running")
-        fast.update(job=job.id, episode=n_ep, series_key=key)
-        sess["series_key"], sess["cfg"] = key, cfg
+        except Exception as e:  # noqa: BLE001
+            return {"type": "message", "text": f"Couldn't launch the job: {str(e)[:160]}"}
+        if info["mode"] == "fargate":
+            return {"type": "message",
+                    "text": f"▶ QC started on the cloud for EP {ep} ({info['disp']}) — "
+                            f"{info.get('launched')} languages running in parallel. "
+                            f"Ask 'status' for results + download links."}
         return {"type": "message",
-                "text": f"▶ QC started for EP {ep} ({disp}), all delivered "
+                "text": f"▶ QC started for EP {ep} ({info['disp']}), all delivered "
                         f"languages. Ask 'status' for progress + the download link."}
 
     # CHECK (default when an episode is present)
