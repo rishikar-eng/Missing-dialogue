@@ -167,6 +167,14 @@ def get_token(force_refresh: bool = False) -> str:
     Reuses a host-shared cached access token when possible so concurrent PROCESSES (web
     service + batch runner) don't each burn the single-use refresh token and 401 each other.
     Raises BoxAuthError with a fix-it message on any dead end."""
+    # 0) a pre-minted access token handed in by a dispatcher (Fargate task): use it
+    # directly and NEVER touch the rotating refresh token. The EC2 dispatcher mints this
+    # (its own get_token) and passes it as env, so a short-lived task can reach Box without
+    # racing/rotating the single-use refresh token that the always-on service owns.
+    pre = os.environ.get("BOX_ACCESS_TOKEN")
+    if pre:
+        return pre
+
     global _access, _access_expiry
     with _LOCK:
         now = time.time()
