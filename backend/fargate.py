@@ -83,6 +83,60 @@ def launch(series_key: str, episode: int, languages: list[str] | None = None) ->
     return job_id, tasks[0]["taskArn"]
 
 
+def launch_parallel(series_key: str, episode: int,
+                    languages: list[str]) -> tuple[str, dict[str, dict[str, Any]]]:
+    """Fan out ONE Fargate task per language (2-vCPU task def) so an episode's languages run
+    concurrently — wall-clock becomes the slowest single language, not their sum. Returns
+    (parent_id, {lang: {job_id, task_arn, error}}). run_task calls are issued in parallel so
+    the dispatch itself stays within the Teams reply window."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import box_oauth
+    c = _cfg()
+    parent = uuid.uuid4().hex[:12]
+    token = box_oauth.get_token()                       # one token shared by all tasks (read-only)
+    taskdef = os.environ.get("DQC_ECS_TASKDEF_LANG", "dialogue-qc-lang")
+    ecs = _ecs()
+
+    def _one(lang: str) -> tuple[str, dict[str, Any]]:
+        job_id = f"{parent}_{lang}"
+        env = [
+            {"name": "DQC_JOB_SERIES", "value": series_key},
+            {"name": "DQC_JOB_EPISODE", "value": str(int(episode))},
+            {"name": "DQC_JOB_ID", "value": job_id},
+            {"name": "DQC_JOB_LANGUAGES", "value": lang},
+            {"name": "BOX_ACCESS_TOKEN", "value": token},
+        ]
+        try:
+            resp = ecs.run_task(
+                cluster=c["cluster"], taskDefinition=taskdef, launchType="FARGATE", count=1,
+                networkConfiguration={"awsvpcConfiguration": {
+                    "subnets": c["subnets"], "securityGroups": [c["sg"]], "assignPublicIp": "ENABLED"}},
+                overrides={"containerOverrides": [{"name": "qc", "environment": env}]})
+            tasks = resp.get("tasks") or []
+            arn = tasks[0]["taskArn"] if tasks else None
+            return lang, {"job_id": job_id, "task_arn": arn,
+                          "error": None if arn else str(resp.get("failures") or "no task")}
+        except Exception as e:  # noqa: BLE001
+            return lang, {"job_id": job_id, "task_arn": None, "error": str(e)[:120]}
+
+    with ThreadPoolExecutor(max_workers=min(8, len(languages))) as ex:
+        results = dict(ex.map(_one, languages))
+    return parent, results
+
+
+def status_parallel(langs_map: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-language {ecs_state, S3 status record} for a fanned-out run."""
+    out: dict[str, dict[str, Any]] = {}
+    for lang, info in langs_map.items():
+        if not info.get("task_arn"):
+            out[lang] = {"ecs": "FAILED", "rec": None, "error": info.get("error")}
+            continue
+        st, rec = status(info["task_arn"], info["job_id"])
+        out[lang] = {"ecs": st, "rec": rec}
+    return out
+
+
 def status(task_arn: str, job_id: str) -> tuple[str, dict[str, Any] | None]:
     """(ECS lastStatus, S3 status record or None). The S3 record — written by the task —
     is authoritative for the OUTCOME; the ECS state tells us if it's still running."""

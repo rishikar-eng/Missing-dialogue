@@ -1054,12 +1054,25 @@ def _dl_link(job_id: str) -> str:
     return f"{base}/api/agent/dl?d={_sign_link({'job': job_id, 'exp': _t.time() + 86400})}"
 
 
+def _dl_s3(s3_key: str) -> str:
+    """Short signed link that redirects to a presigned S3 URL — keeps Teams messages compact
+    (the presigned S3 URL itself is ~1.5 KB; six of them per parallel run would be unwieldy)."""
+    import time as _t
+    base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
+    return f"{base}/api/agent/dl?d={_sign_link({'s3': s3_key, 'exp': _t.time() + 86400})}"
+
+
 @app.get("/api/agent/dl")
-def agent_dl(d: str) -> FileResponse:
-    """Signed download of a run's zip (for Teams links — no API key). HMAC-verified."""
+def agent_dl(d: str):
+    """Signed download of a run's zip (for Teams links — no API key). HMAC-verified.
+    Local runs stream the file; Fargate runs redirect to a presigned S3 URL."""
+    from fastapi.responses import RedirectResponse
     p = _verify_link(d)
     if not p:
         raise HTTPException(status_code=400, detail="This download link is invalid or expired")
+    if p.get("s3"):
+        from . import fargate
+        return RedirectResponse(fargate.download_url(str(p["s3"])), status_code=307)
     jid = str(p.get("job"))
     job = jobs.get(jid)
     # Prefer the live job; fall back to the disk record so the link works after a restart.
@@ -1093,7 +1106,38 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         if not job and not rec:
             return {"type": "message", "text": "No QC run here yet. Start one, e.g. 'run episode 42 of Gavv'."}
 
-        # Cloud (Fargate) run: outcome lives in S3, task state in ECS.
+        # Cloud run fanned out one task PER LANGUAGE: aggregate their per-language outcomes.
+        if rec and rec.get("compute") == "fargate-parallel":
+            per = fargate.status_parallel(rec.get("langs") or {})
+            ep_no = rec.get("episode")
+            done = running = 0
+            lines: list[str] = []
+            for lang in sorted(per):
+                s = per[lang]
+                srec, ecs_state = s.get("rec"), (s.get("ecs") or "")
+                st = (srec or {}).get("status")
+                if st == "ok":
+                    done += 1
+                    cnt = ((srec.get("summary") or {}).get(lang)) or {}
+                    dl = _dl_s3(srec["zip_key"]) if srec.get("zip_key") else None
+                    lines.append(f"✅ {lang}: {cnt.get('missing', '?')} missing"
+                                 + (f", {cnt.get('mismatch')} mismatch" if cnt.get("mismatch") else "")
+                                 + (f" — {dl}" if dl else ""))
+                elif st == "skip":
+                    lines.append(f"⏭ {lang}: not delivered")
+                elif st == "error":
+                    lines.append(f"⚠️ {lang}: {str(srec.get('why') or 'failed')[:60]}")
+                elif ecs_state == "FAILED" and not srec:
+                    running += 0
+                    lines.append(f"⚠️ {lang}: could not launch")
+                else:
+                    running += 1
+                    lines.append(f"🔄 {lang}: {(ecs_state or 'running').lower()}")
+            header = (f"✅ EP {ep_no} QC done ({done} language{'s' if done != 1 else ''})"
+                      if running == 0 else f"EP {ep_no}: {done} done, {running} running")
+            return {"type": "message", "text": header + "\n" + "\n".join(lines)}
+
+        # Cloud (Fargate) run, single task: outcome lives in S3, task state in ECS.
         if rec and rec.get("compute") == "fargate":
             ecs_state, srec = fargate.status(rec.get("task_arn"), jid)
             if not srec or srec.get("status") == "running":
@@ -1159,17 +1203,19 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         # Cloud compute: launch a Fargate task (heavy compute off-box), record it, and let
         # STATUS read the outcome from S3. Falls through to the in-process runner otherwise.
         if fargate.enabled():
+            langs = list(cfg.get("languages", []))
             try:
-                job_id, task_arn = fargate.launch(key, n_ep)
+                parent_id, langmap = fargate.launch_parallel(key, n_ep, langs)
             except Exception as e:  # noqa: BLE001
                 return {"type": "message", "text": f"Couldn't launch the cloud job: {str(e)[:160]}"}
-            run_store.record(job_id, conv=conv, episode=n_ep, series=disp, status="running",
-                             compute="fargate", task_arn=task_arn)
-            fast.update(job=job_id, episode=n_ep, series_key=key)
+            launched = sum(1 for v in langmap.values() if v.get("task_arn"))
+            run_store.record(parent_id, conv=conv, episode=n_ep, series=disp, status="running",
+                             compute="fargate-parallel", langs=langmap)
+            fast.update(job=parent_id, episode=n_ep, series_key=key)
             sess["series_key"], sess["cfg"] = key, cfg
             return {"type": "message",
-                    "text": f"▶ QC started on the cloud (Fargate) for EP {ep} ({disp}), all "
-                            f"delivered languages. Ask 'status' for the result + download link."}
+                    "text": f"▶ QC started on the cloud for EP {ep} ({disp}) — {launched} languages "
+                            f"running in parallel. Ask 'status' for results + download links."}
 
         def _persist(j: jobs.Job) -> None:
             # Runs in the worker thread when the job ends — record the outcome to disk so
