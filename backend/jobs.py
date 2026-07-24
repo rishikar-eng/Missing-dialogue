@@ -80,10 +80,13 @@ def _reap_locked() -> None:
         del _JOBS[jid]
 
 
-def submit(kind: str, runner: Callable[[Callable[[str, int, int], None]], dict[str, Any]]) -> Job:
+def submit(kind: str, runner: Callable[[Callable[[str, int, int], None]], dict[str, Any]],
+           on_done: Callable[[Job], None] | None = None) -> Job:
     """Queue `runner` on a worker thread. `runner` receives a stage(msg, done, total)
     callback for progress and returns the result dict; raising marks the job failed.
-    Raises RuntimeError when the queue is full (the endpoint maps it to HTTP 429)."""
+    `on_done`, if given, is called with the finished Job (done OR error) — used to persist
+    the result to disk so it survives a restart. Raises RuntimeError when the queue is full
+    (the endpoint maps it to HTTP 429)."""
     with _LOCK:
         _reap_locked()
         queued = sum(1 for j in _JOBS.values() if j.status == "queued")
@@ -107,6 +110,11 @@ def submit(kind: str, runner: Callable[[Callable[[str, int, int], None]], dict[s
                 job.status = "error"
             finally:
                 job.finished_at = time.time()
+                if on_done:
+                    try:
+                        on_done(job)
+                    except Exception:  # persistence must never fail the job
+                        pass
 
     try:
         threading.Thread(target=work, daemon=True, name=f"dqc-job-{job.id}").start()

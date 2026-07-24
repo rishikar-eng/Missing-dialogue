@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import box_fetch, box_oauth, excel_report, jobs, scriptless
+from . import box_fetch, box_oauth, excel_report, jobs, run_store, scriptless
 from .alignment import align_script_to_channels
 from .auth import login as rian_login, logout as rian_logout
 from .char_list import apply_char_list
@@ -1060,12 +1060,14 @@ def agent_dl(d: str) -> FileResponse:
     p = _verify_link(d)
     if not p:
         raise HTTPException(status_code=400, detail="This download link is invalid or expired")
-    job = jobs.get(str(p.get("job")))
-    if not job or job.status != "done" or not job.result:
-        raise HTTPException(status_code=404, detail="No result for that job (it may have expired)")
-    zip_path = job.result.get("zip_path")
+    jid = str(p.get("job"))
+    job = jobs.get(jid)
+    # Prefer the live job; fall back to the disk record so the link works after a restart.
+    zip_path = (job.result or {}).get("zip_path") if (job and job.status == "done") else None
+    if not zip_path:
+        zip_path = (run_store.get(jid) or {}).get("zip_path")
     if not zip_path or not Path(zip_path).is_file():
-        raise HTTPException(status_code=404, detail="Result file is gone")
+        raise HTTPException(status_code=404, detail="No result for that job (it may have expired)")
     return FileResponse(zip_path, media_type="application/zip", filename=Path(zip_path).name)
 
 
@@ -1083,21 +1085,39 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     if re.search(r"\b(status|done|ready|result|finished?|progress|is it)\b", low) \
             and not re.search(r"\b(run|check|start)\b", low):
         jid = fast.get("job")
-        job = jobs.get(jid) if jid else None
-        if not job:
+        if not jid:                              # session lost (restart) — recover from disk
+            rec0 = run_store.latest_for(conv)
+            jid = rec0.get("job_id") if rec0 else None
+        job = jobs.get(jid) if jid else None     # live, in-process (this process's run)
+        rec = run_store.get(jid) if jid else None  # persisted (survives restart)
+        if not job and not rec:
             return {"type": "message", "text": "No QC run here yet. Start one, e.g. 'run episode 42 of Gavv'."}
-        if job.status == "running":
-            return {"type": "message", "text": f"🔄 Running — {job.progress.get('stage', 'working')}. Ask 'status' again in a bit."}
-        if job.status == "error":
+
+        # Live job present -> authoritative for in-progress state.
+        if job and job.status in ("queued", "running"):
+            return {"type": "message",
+                    "text": f"🔄 Running — {job.progress.get('stage', 'working')}. Ask 'status' again shortly."}
+        if job and job.status == "error":
             return {"type": "message", "text": f"⚠️ Run failed: {job.error}"}
-        r = job.result or {}
-        if r.get("status") != "ok":
-            return {"type": "message", "text": f"Run finished: {r.get('why') or r.get('status')}"}
+
+        # Finished: read from the live job if we have it, else from the disk record.
+        r = (job.result if (job and job.status == "done") else None) or {}
+        status = r.get("status") or (rec or {}).get("status")
+        summary = r.get("summary_by_language") or (rec or {}).get("summary")
+        ep_no = r.get("episode") or (rec or {}).get("episode")
+        # A disk record still 'running' with no live job = the run was killed by a restart.
+        if not job and (rec or {}).get("status") == "running":
+            return {"type": "message",
+                    "text": f"⚠️ The EP {ep_no} run was interrupted (the server restarted). "
+                            f"Please start it again with 'run episode {ep_no}'."}
+        if status != "ok":
+            return {"type": "message",
+                    "text": f"Run finished: {(rec or r).get('why') or status or 'no result'}"}
         lines = [f"{l}: {s['missing']} missing"
                  + (f", {s['mismatch']} mismatch" if s.get("mismatch") else "")
-                 for l, s in (r.get("summary_by_language") or {}).items()]
+                 for l, s in (summary or {}).items()]
         return {"type": "message",
-                "text": f"✅ EP {r.get('episode')} QC done:\n- " + "\n- ".join(lines)
+                "text": f"✅ EP {ep_no} QC done:\n- " + "\n- ".join(lines)
                         + f"\n\nDownload report: {_dl_link(jid)}"}
 
     # episode + series (fall back to the session's last if not restated)
@@ -1115,15 +1135,28 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         if not series_key:
             return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
         key, cfg = series_registry.resolve(series_key)
+        n_ep, disp = int(ep), cfg.get("display_name")
+
+        def _persist(j: jobs.Job) -> None:
+            # Runs in the worker thread when the job ends — record the outcome to disk so
+            # 'status' and the download link survive a server restart (jobs are in-process).
+            r = j.result or {}
+            run_store.record(
+                j.id, conv=conv, episode=n_ep, series=disp,
+                status=("error" if j.status == "error" else r.get("status") or "done"),
+                zip_path=r.get("zip_path"), summary=r.get("summary_by_language"),
+                why=r.get("why") or j.error)
+
         try:
             job = jobs.submit("agent-run", lambda stage: episode_runner.run(
-                key, cfg, int(ep), ref_audio=True, stage=stage))
+                key, cfg, n_ep, ref_audio=True, stage=stage), on_done=_persist)
         except RuntimeError as e:
             return {"type": "message", "text": f"Server busy: {e}"}
-        fast.update(job=job.id, episode=int(ep), series_key=key)
+        run_store.record(job.id, conv=conv, episode=n_ep, series=disp, status="running")
+        fast.update(job=job.id, episode=n_ep, series_key=key)
         sess["series_key"], sess["cfg"] = key, cfg
         return {"type": "message",
-                "text": f"▶ QC started for EP {ep} ({cfg.get('display_name')}), all delivered "
+                "text": f"▶ QC started for EP {ep} ({disp}), all delivered "
                         f"languages. Ask 'status' for progress + the download link."}
 
     # CHECK (default when an episode is present)
