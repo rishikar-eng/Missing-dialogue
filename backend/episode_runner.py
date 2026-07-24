@@ -115,6 +115,15 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
             stage(msg, done, total)
 
     token = box_oauth.get_token()
+
+    # Refresh the ElevenLabs voice bank from the studio's live Box sheet (per series) so the
+    # workbook's Voice-ID check reflects the CURRENT list, not a committed snapshot. Cheap
+    # (etag-gated) and never fatal — a failure just keeps the last-known bank.
+    vl = (cfg.get("box") or {}).get("voice_list") or {}
+    if vl.get("file_id"):
+        from . import voices as _voices  # noqa: PLC0415
+        _stage("voice list: " + _voices.refresh_from_box(token, vl["file_id"], vl.get("name")))
+
     box = box_discovery._Box(token)
     sc = box_discovery.find_script(box, cfg, n)
     if not sc:

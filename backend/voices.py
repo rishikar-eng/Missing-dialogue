@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from .characters import _ROLE_WORDS, CharacterEntity, _name_score, _squash
 
+# Committed snapshot (offline fallback) + on-disk cache of the last live Box fetch.
 _BANK_PATH = Path(__file__).resolve().parent / "data" / "voice_bank.json"
+_CACHE_PATH = Path(os.environ.get("DQC_DATA_ROOT", os.environ.get("TMPDIR") or "/tmp")) / "voice_bank_cache.json"
 # Fuzzy floor for real names ('Shoma'~'SHOUMA'). GENERIC script names ('Man',
 # 'Girl', 'Team guy B') would substring-match into unrelated bank rows
 # ('HOUND MAN'), so they only attach on an essentially exact match.
@@ -38,16 +41,87 @@ def _is_generic(name: str) -> bool:
     )
 
 _bank: list[dict[str, Any]] | None = None
+_bank_etag: str | None = None      # Box etag of the loaded sheet (skips re-download)
+_bank_fid: str | None = None       # Box file id of the loaded sheet
+
+
+def _read_cache() -> tuple[list | None, str | None, str | None]:
+    try:
+        d = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+        return d.get("bank"), d.get("etag"), d.get("file_id")
+    except Exception:
+        return None, None, None
 
 
 def _load_bank() -> list[dict[str, Any]]:
-    global _bank
+    """The active voice bank: a live Box fetch (refresh_from_box) if one ran this process,
+    else the on-disk cache from a previous fetch, else the committed snapshot."""
+    global _bank, _bank_etag, _bank_fid
     if _bank is None:
-        try:
-            _bank = json.loads(_BANK_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            _bank = []  # bank missing/corrupt -> feature quietly off
+        cached, etag, fid = _read_cache()
+        if cached is not None:
+            _bank, _bank_etag, _bank_fid = cached, etag, fid
+        else:
+            try:
+                _bank = json.loads(_BANK_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                _bank = []  # bank missing/corrupt -> feature quietly off
     return _bank
+
+
+def refresh_from_box(token: str, file_id: str, name: str | None = None) -> str:
+    """Refresh the voice bank from the studio's Box sheet so the report reflects the CURRENT
+    list, not a committed snapshot. Cheap: an etag metadata check skips the (large, ~90 MB)
+    download whenever the sheet is unchanged. NEVER raises — on any failure the existing bank
+    stays in use. Returns a short human status (surfaced in the run's progress)."""
+    global _bank, _bank_etag, _bank_fid
+    import shutil
+    import tempfile
+
+    import httpx
+
+    from . import box_fetch
+    file_id = str(file_id)
+    try:
+        r = httpx.get(f"https://api.box.com/2.0/files/{file_id}", params={"fields": "etag,name"},
+                      headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        r.raise_for_status()
+        etag = str(r.json().get("etag"))
+    except Exception as e:  # metadata unreachable -> keep whatever bank we have
+        _load_bank()
+        return f"kept cached voice list ({str(e)[:40]})"
+
+    if _bank is not None and _bank_fid == file_id and _bank_etag == etag:
+        return "voice list current"
+    cached, cetag, cfid = _read_cache()
+    if cached is not None and cfid == file_id and cetag == etag:
+        _bank, _bank_etag, _bank_fid = cached, etag, file_id
+        return f"voice list from cache ({len(cached)} characters)"
+
+    d = tempfile.mkdtemp()
+    try:
+        from .tools.build_voice_bank import parse as _parse   # lazy: pulls openpyxl
+        p = box_fetch.download_file(token, file_id, d, name=name or "voices.xlsx")
+        bank = _parse(str(p))
+    except Exception as e:  # download/parse failed -> keep existing bank
+        _load_bank()
+        return f"voice list fetch failed, kept cached ({str(e)[:40]})"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    if not bank:
+        _load_bank()
+        return "voice list parsed empty, kept cached"
+
+    _bank, _bank_etag, _bank_fid = bank, etag, file_id
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"file_id": file_id, "etag": etag, "bank": bank},
+                                  ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_CACHE_PATH)
+    except Exception:
+        pass
+    return f"voice list refreshed from Box ({len(bank)} characters)"
 
 
 def duplicate_voice_ids() -> dict[str, list[str]]:

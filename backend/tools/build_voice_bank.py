@@ -76,7 +76,10 @@ def _parse_cell(cell: str, form: str) -> list[dict]:
     return out
 
 
-def main(xlsx: str) -> int:
+def parse(xlsx: str) -> list[dict]:
+    """Parse the character-list workbook -> [{character, raw_name, voices:[{lang,name,id,form}]}].
+    Pure (no file writes) so it can be called at run time to build the bank from a freshly
+    fetched Box copy — see backend/voices.refresh_from_box."""
     wb = openpyxl.load_workbook(xlsx, data_only=True)
     ws = wb[wb.sheetnames[0]]
     bank: list[dict] = []
@@ -95,6 +98,11 @@ def main(xlsx: str) -> int:
         if not voices:
             continue
         bank.append({"character": clean, "raw_name": raw, "voices": voices})
+    return bank
+
+
+def main(xlsx: str) -> int:
+    bank = parse(xlsx)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(bank, indent=1, ensure_ascii=False), encoding="utf-8")
     n_ids = sum(1 for e in bank for v in e["voices"] if v["id"])
