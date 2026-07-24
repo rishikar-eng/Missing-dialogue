@@ -1,0 +1,17 @@
+.git
+.venv
+node_modules
+release
+backend-dist
+dist
+build
+src
+electron
+*.pem
+*.secret
+secrets.local.*
+**/__pycache__
+**/*.pyc
+docs
+*.md
+!backend/models/*.onnx

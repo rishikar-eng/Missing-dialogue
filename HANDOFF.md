@@ -2,6 +2,25 @@
 
 Context primer for the next agent picking up this project. Read this fully before changing anything.
 
+> **Detailed, always-current context lives in the agent memory** at
+> `C:\Users\Rishi\.claude\projects\c--Users-Rishi-Desktop-dialogue-qc\memory\` (index: `MEMORY.md`).
+> This file is the architectural primer; the memory files carry the blow-by-blow of each subsystem.
+
+---
+
+## 0. CURRENT STATE (2026-07-24) — this project is now BOTH a desktop app AND a hosted service
+
+The original desktop app (sections 1–8 below) still stands. On top of it, a **hosted pipeline** was built:
+
+- **Live on AWS EC2** — `ap-south-1`, instance `i-02a2c3ef2e468ab05` (**t3.medium**; resize to `c7i.4xlarge` for batches, back after), Elastic IP `13.205.42.228`, HTTPS at **https://13-205-42-228.sslip.io** (Caddy + Let's Encrypt), `systemd` unit `dialogue-qc`, env in `/home/ubuntu/app/.env`. Deploy = `git pull` + `sudo systemctl restart dialogue-qc`. See memory `ec2-deployment`.
+- **Box integration** — the pipeline fetches the English script, original premix, and per-language dub stems **live from Box** by naming convention. Which folders belong to which show is **data, not code**: `backend/series_registry.json` (per-series Box folder ids) + `backend/box_discovery.py` (find script/premix/stems). Adding a show = a JSON entry, no code change. `backend/box_fetch.py` = server-to-server download; `backend/box_oauth.py` = token. Batch runner: `box_batch.py`. Per-episode agent runner: `backend/episode_runner.py`.
+- **QC chat agent (Teams)** — 3 layers: **L1** engine API (`/api/agent/*`), **L2** per-series worker (Claude Haiku 4.5, `backend/agent.py`), **L3** router (Claude Sonnet 5, `backend/router.py`). Teams Outgoing-Webhook receiver `/api/agent/teams` uses a **fast LLM-free path** (`_teams_fast` in server.py) to fit the 5 s reply window (check/run/status → availability card + Run button). Runs are **persisted to disk** (`backend/run_store.py`) so status + download survive restarts (in-process `backend/jobs.py` does not). See memory `teams-qc-agent`.
+- **Voice-ID check** — the Excel report validates each delivered audio's **ElevenLabs voice id** against the studio's master sheet (`KAMEN RIDER CHARACTER LIST & VOICES.xlsx`), **auto-fetched live from Box** (etag-cached, `backend/voices.py::refresh_from_box`; parsed by `backend/tools/build_voice_bank.py`; committed `voice_bank.json` = fallback). New "Voice ID check" column: **OK / no voice id / not in list / duplicate id / verify match / — (generic)**. Pure metadata, no cloning. See memory `voice-id-check`.
+- **Mapping accuracy** — `backend/content_map.py` (twin-merge, swap-repair, reassign-by-voice, grouped bit-parts) + `backend/char_list.py` roster aid. See memory `mapping-accuracy-fixes`, `content-based-mapping`, `group-stem-recognition`.
+- **Other shows (Engaged / Suits S9 / Motu Patlu)** were assessed 2026-07-24: similar top-level Box layout but **not QC-able like Gavv** — they ship `.srt` subtitles with **no speaker names** (per-character QC needs character-labelled scripts), and dub tracks are organised differently (Suits = Male/Female bundles; Motu = per-episode single-language). Scriptless timeline QC is the only option without scripts. Held for later.
+
+**Compute note:** QC analysis is CPU/RAM-heavy (Silero VAD holds native-rate stems in RAM; ~3–4 GB per run) and **bursty** — idle most of the time, then a heavy multi-language batch. This is the motivation for the ongoing **Fargate / serverless** discussion (`docs/lambda-serverless-plan.md`): run heavy jobs on-demand instead of paying for a big always-on box.
+
 ---
 
 ## 1. What this tool is

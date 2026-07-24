@@ -1,0 +1,6 @@
+# Extra deps for the HOSTED backend (EC2 / container / Fargate) on top of requirements.txt.
+# Kept separate so the frozen desktop app (PyInstaller) stays lean and offline.
+-r requirements.txt
+anthropic==0.118.0     # L2/L3 QC chat agent (Haiku worker + Sonnet router)
+python-docx==1.1.2     # parse the studio character-list .docx (voice-id coverage tooling)
+boto3==1.35.0          # S3 (job outputs) + ECS RunTask dispatch, when running on Fargate
