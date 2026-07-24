@@ -101,21 +101,34 @@ _LANG_CODE = {"hindi": "hi", "tamil": "ta", "telugu": "te", "malayalam": "ml",
 _VOICE_WEAK = 0.86
 
 
+def _shares_token(bank_name: str | None, *others: str | None) -> bool:
+    """True if the bank name shares a real word (>=3 chars) with any other string. Used to
+    clear benign fuzzy matches ('Suga'->'Kenzo Suga', 'Hanto'->'HANTO KARAKEDE') that only
+    scored low because the bank spells the name longer — they still name the same person."""
+    bt = {t for t in re.split(r"[^a-z0-9]+", (bank_name or "").lower()) if len(t) >= 3}
+    return any(bt & {t for t in re.split(r"[^a-z0-9]+", (o or "").lower()) if len(t) >= 3}
+               for o in others)
+
+
 def _voice_check(c: dict[str, Any], lang_code: str | None, lang_label: str,
                  dup_ids: dict[str, list[str]]) -> tuple[str, str, str | None]:
     """Validate one character's assigned ElevenLabs voice id against the studio voice
     list (KAMEN RIDER CHARACTER LIST & VOICES). Returns (status, note, fill_key). Only
     speaking characters are 'audios' worth checking. Statuses:
       OK            - matched a list character and carries this language's id
-      not in list   - the delivered audio's character isn't in the voice list
+      not in list   - a NAMED character that isn't in the voice list (studio should add it)
+      —             - a generic/bit part (Man, Girl, Crowd) — no dedicated voice expected
       no <lang> id  - matched, but the list has no id for THIS language
       duplicate id  - the id is shared with another character (a list copy-paste error)
-      verify match  - only a loose/spelling match to the list (confirm it's the right voice)
+      verify match  - a loose match with no shared name word (confirm it's the right voice)
     """
     if not (c.get("line_count") or 0):
         return "", "", None
+    name = c.get("name") or ""
     matched = c.get("voice_bank_name")
     if not matched:
+        if voicebank._is_generic(name):
+            return "—", "generic / bit part — no dedicated voice expected", None
         return "not in list", "no matching character in the studio voice list", "MISSING"
     lv = [x for x in (c.get("voices") or []) if x.get("lang") == lang_code and x.get("id")]
     v = next((x for x in lv if x.get("form") == "normal"), lv[0] if lv else None)
@@ -125,8 +138,8 @@ def _voice_check(c: dict[str, Any], lang_code: str | None, lang_label: str,
     if shared:
         return "duplicate id", "same voice id as: " + ", ".join(shared), "MISMATCH"
     score = c.get("voice_match_score")
-    if score is not None and score < _VOICE_WEAK:
-        return "verify match", f"matched to '{matched}' only loosely ({score:.0%}) — confirm", "WARN"
+    if score is not None and score < _VOICE_WEAK and not _shares_token(matched, name, c.get("channel")):
+        return "verify match", f"matched to '{matched}' only loosely ({score:.0%}) — confirm the voice", "WARN"
     return "OK", "", "OK"
 
 
