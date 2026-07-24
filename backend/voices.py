@@ -50,6 +50,20 @@ def _load_bank() -> list[dict[str, Any]]:
     return _bank
 
 
+def duplicate_voice_ids() -> dict[str, list[str]]:
+    """ElevenLabs voice IDs assigned to MORE THAN ONE character in the bank -> the list
+    of those characters. A shared id means two characters would speak in the same voice —
+    a copy-paste error in the studio sheet (e.g. Glotta & Nyelv share a Tamil id). The
+    workbook's voice-ID check flags any delivered audio whose id is in here. Language and
+    normal/Granute form are ignored: one id must belong to exactly one character."""
+    id_to_chars: dict[str, set[str]] = {}
+    for entry in _load_bank():
+        for v in entry.get("voices", []):
+            if v.get("id"):
+                id_to_chars.setdefault(v["id"], set()).add(entry["character"])
+    return {i: sorted(cs) for i, cs in id_to_chars.items() if len(cs) > 1}
+
+
 def _channel_score(bank_name: str, channel: str | None) -> float:
     """The bank often spells characters the way the AUDIO TRACKS do ('Jilip
     Stomach') rather than the script ('Jiib') — so the mapped channel name is a
@@ -82,6 +96,7 @@ def attach_voices(characters: list[CharacterEntity]) -> None:
             if s > best_score:
                 best_score, best_entry = s, entry
         matched = best_entry if (best_entry is not None and best_score >= threshold) else None
+        ent.voice_match_score = round(best_score, 3) if matched else None
         ent.voices = matched["voices"] if matched else None
         # Record WHICH bank row matched. The bank and the character PICTURES come from
         # the same studio sheet, so this fuzzy result ('Shoma' -> 'SHOUMA') is exactly

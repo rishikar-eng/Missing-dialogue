@@ -62,6 +62,9 @@ class CharacterEntity(BaseModel):
     # voices.attach_voices; the QC workbook uses it to look up the character's picture,
     # since bank + pictures come from the same studio sheet and are spelled its way.
     voice_bank_name: str | None = None
+    # Fuzzy score (0..1) of that voice-bank match — 1.0 is an exact name hit, lower is a
+    # spelling/variant match. The workbook's voice-ID check flags weak matches for review.
+    voice_match_score: float | None = None
     # ElevenLabs voices across dub languages, from the production voice bank:
     # [{lang: "hi"|"ta"|..., name, id, form: "normal"|"granute"}]
     voices: list[dict[str, Any]] | None = None

@@ -27,9 +27,12 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
+
+from . import voices
 
 # --- house style -------------------------------------------------------------
 _HDR_FILL = PatternFill("solid", fgColor="0D3B66")
@@ -93,6 +96,39 @@ def _section(ws: Worksheet, row: int, title: str, note: str = "") -> int:
 _LANG_CODE = {"hindi": "hi", "tamil": "ta", "telugu": "te", "malayalam": "ml",
               "marathi": "mr", "bengali": "bn", "kannada": "kn"}
 
+# A bank match this loose is worth a manual look ('Shoma'->'SHOUMA' ~0.91 is fine; a
+# 0.8x scrape onto a similarly-spelled but different character is not).
+_VOICE_WEAK = 0.86
+
+
+def _voice_check(c: dict[str, Any], lang_code: str | None, lang_label: str,
+                 dup_ids: dict[str, list[str]]) -> tuple[str, str, str | None]:
+    """Validate one character's assigned ElevenLabs voice id against the studio voice
+    list (KAMEN RIDER CHARACTER LIST & VOICES). Returns (status, note, fill_key). Only
+    speaking characters are 'audios' worth checking. Statuses:
+      OK            - matched a list character and carries this language's id
+      not in list   - the delivered audio's character isn't in the voice list
+      no <lang> id  - matched, but the list has no id for THIS language
+      duplicate id  - the id is shared with another character (a list copy-paste error)
+      verify match  - only a loose/spelling match to the list (confirm it's the right voice)
+    """
+    if not (c.get("line_count") or 0):
+        return "", "", None
+    matched = c.get("voice_bank_name")
+    if not matched:
+        return "not in list", "no matching character in the studio voice list", "MISSING"
+    lv = [x for x in (c.get("voices") or []) if x.get("lang") == lang_code and x.get("id")]
+    v = next((x for x in lv if x.get("form") == "normal"), lv[0] if lv else None)
+    if not v:
+        return f"no {lang_label} id", f"'{matched}' has no {lang_label} voice id in the list", "WARN"
+    shared = [s for s in dup_ids.get(v["id"], []) if s != matched]
+    if shared:
+        return "duplicate id", "same voice id as: " + ", ".join(shared), "MISMATCH"
+    score = c.get("voice_match_score")
+    if score is not None and score < _VOICE_WEAK:
+        return "verify match", f"matched to '{matched}' only loosely ({score:.0%}) — confirm", "WARN"
+    return "OK", "", "OK"
+
 
 def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     ws = wb.create_sheet(title=lang[:31])
@@ -100,6 +136,12 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     align = res.get("alignment") or {}
     errors = align.get("errors") or []
     summary = align.get("summary") or {}
+
+    # Voice-ID validation against the studio voice list, per language — computed once and
+    # shared by the delivery-health summary and the per-character table below.
+    lang_code = _LANG_CODE.get(lang.lower())
+    dup_ids = voices.duplicate_voice_ids()
+    vlist = [_voice_check(c, lang_code, lang.title(), dup_ids) for c in chars]
 
     ws.cell(row=1, column=1, value=f"{lang} — dialogue QC").font = _TITLE_FONT
     ws.cell(row=1, column=4, value=(
@@ -144,6 +186,18 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
         if n_reass: bits.append(f"{n_reass} track{'s' if n_reass != 1 else ''} reassigned by voice")
         if n_ambig: bits.append(f"{n_ambig} ambiguous filename{'s' if n_ambig != 1 else ''}")
         health.append(("Mapping repairs: " + " · ".join(bits) + "  (details under CHECKS)", True))
+    n_vni = sum(1 for s, _, _ in vlist if s == "not in list")
+    n_vdup = sum(1 for s, _, _ in vlist if s == "duplicate id")
+    n_vno = sum(1 for s, _, _ in vlist if s.startswith("no "))
+    n_vweak = sum(1 for s, _, _ in vlist if s == "verify match")
+    if n_vni or n_vdup or n_vno or n_vweak:
+        bits = []
+        if n_vni: bits.append(f"{n_vni} not in the voice list")
+        if n_vdup: bits.append(f"{n_vdup} DUPLICATE voice id")
+        if n_vno: bits.append(f"{n_vno} missing this language's id")
+        if n_vweak: bits.append(f"{n_vweak} weak name match")
+        health.append(("Voice-ID check: " + " · ".join(bits)
+                       + "  (see the 'Voice ID check' column)", True))
     if miss_all:
         health.append((
             f"Missing lines: {len(miss_all)} — {len(miss_all) - n_check} confirmed"
@@ -163,11 +217,10 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
     r = _section(ws, r, "CHARACTERS", "mapping confidence is voice-timeline agreement, not a guess")
     hdr = ["Character", "ID", "Lines", "Dialogue (s)", "Mapped track (file)",
            "Mapped by", "Confidence", "Delivered", "Voice matched as", "ElevenLabs voice",
-           "Voice ID", "Level min…max (dBFS)", "Reviewer verdict"]
-    widths = [22, 16, 7, 12, 30, 11, 11, 11, 20, 22, 24, 18, 18]
+           "Voice ID", "Voice ID check", "Level min…max (dBFS)", "Reviewer verdict"]
+    widths = [22, 16, 7, 12, 30, 11, 11, 11, 20, 22, 24, 15, 18, 18]
     r = _head(ws, r, hdr, widths)
     char_start = r
-    lang_code = _LANG_CODE.get(lang.lower())     # which language's voice id this sheet shows
 
     # per-character delivered% = fraction of the character's lines actually on THEIR own
     # track. A line that's MISSING (nobody said it) OR MISMATCH (another speaker said it)
@@ -187,7 +240,7 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
         if cid and prec is not None:
             conf_by_char[cid] = prec
 
-    for c in chars:
+    for c, vchk in zip(chars, vlist):
         lines = c.get("line_count") or 0
         mapped = bool(c.get("channel")) or bool(c.get("grouped_in"))
         missed = miss_by_char.get(c.get("id"), 0)
@@ -222,6 +275,7 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             c.get("voice_bank_name") or "",
             (v or {}).get("name", ""),
             (v or {}).get("id", ""),
+            vchk[0],                                # voice-ID check status (col 12)
             (f"{c['level_min_dbfs']:.0f} … {c['level_max_dbfs']:.0f}"
              if c.get("level_min_dbfs") is not None and c.get("level_max_dbfs") is not None else ""),
             "",                                     # reviewer verdict — left blank on purpose
@@ -230,6 +284,14 @@ def _language_sheet(wb: Workbook, lang: str, res: dict[str, Any]) -> None:
             cell = ws.cell(row=r, column=i, value=val)
             cell.border = _BORDER
             cell.alignment = Alignment(vertical="center", wrap_text=(i == 5))
+        # colour the voice-ID check cell (green ok / red not-in-list / purple dup / amber
+        # weak|no-id) and attach the detail as a hover comment.
+        vstatus, vnote, vfill = vchk
+        if vstatus and vfill:
+            vc = ws.cell(row=r, column=12)
+            vc.fill = _FILL[vfill]
+            if vnote:
+                vc.comment = Comment(vnote, "QC")
         # confidence: only content-verified mappings have a real number (see above)
         cc = ws.cell(row=r, column=7, value=conf_by_char.get(c.get("id")))
         cc.number_format = "0%"
