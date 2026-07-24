@@ -134,6 +134,10 @@ def _voice_check(c: dict[str, Any], lang_code: str | None, lang_label: str,
     lv = [x for x in all_voices if x.get("lang") == lang_code and x.get("id")]
     v = next((x for x in lv if x.get("form") == "normal"), lv[0] if lv else None)
     if not v:
+        # A generic bit-part (Kid/Crowd) that merely matched a listed-but-unvoiced row is
+        # still "no dedicated voice expected" — don't flag it; only NAMED roles matter here.
+        if voicebank._is_generic(name):
+            return "—", "generic / bit part — no dedicated voice expected", None
         if not any(x.get("id") for x in all_voices):
             return "no voice id", f"'{matched}' is listed but has no voice id recorded", "WARN"
         return f"no {lang_label} id", f"'{matched}' has no {lang_label} voice id in the list", "WARN"
