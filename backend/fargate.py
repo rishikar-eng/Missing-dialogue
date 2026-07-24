@@ -48,7 +48,13 @@ def _ecs():
 
 def _s3():
     import boto3
-    return boto3.client("s3", region_name=_REGION)
+    from botocore.config import Config
+    # Force the REGIONAL virtual-hosted endpoint (bucket.s3.<region>.amazonaws.com) so a
+    # presigned URL serves directly. The default global host (bucket.s3.amazonaws.com) 307s
+    # to the region for a non-us-east-1 bucket, and the redirect breaks the host-signed URL.
+    return boto3.client("s3", region_name=_REGION,
+                        endpoint_url=f"https://s3.{_REGION}.amazonaws.com",
+                        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}))
 
 
 def launch(series_key: str, episode: int, languages: list[str] | None = None) -> tuple[str, str]:
