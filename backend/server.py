@@ -917,7 +917,11 @@ def agent_chat(req: AgentChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Agent error: {str(e)[:160]}")
 
 
+# Teams issues a SEPARATE Outgoing-Webhook secret per team, so running the bot in more than
+# one team (e.g. a private test team plus the shared team with the boss) means accepting
+# several. Comma-separate them in DQC_TEAMS_SECRET; any match authenticates.
 TEAMS_SECRET = os.environ.get("DQC_TEAMS_SECRET", "")
+TEAMS_SECRETS = [s.strip() for s in TEAMS_SECRET.split(",") if s.strip()]
 
 
 @app.post("/api/agent/teams")
@@ -936,12 +940,18 @@ async def agent_teams(request: Request):
     body = await request.body()
     auth = request.headers.get("authorization", "")
     provided = auth.split(" ", 1)[1].strip() if " " in auth else ""
-    try:
-        secret = base64.b64decode(TEAMS_SECRET)
-    except Exception:
-        secret = TEAMS_SECRET.encode()
-    digest = base64.b64encode(hmac.new(secret, body, hashlib.sha256).digest()).decode()
-    if not provided or not hmac.compare_digest(provided, digest):
+
+    def _matches(sec: str) -> bool:
+        try:
+            key = base64.b64decode(sec)
+        except Exception:
+            key = sec.encode()
+        want = base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
+        return hmac.compare_digest(provided, want)
+
+    # Accept ANY configured team's secret (see TEAMS_SECRETS) — compare every one rather than
+    # short-circuiting, so timing doesn't leak which team a request failed against.
+    if not provided or not any([_matches(s) for s in TEAMS_SECRETS]):
         return JSONResponse({"type": "message", "text": "(unauthorized)"}, status_code=401)
     try:
         data = _json.loads(body or b"{}")
