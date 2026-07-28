@@ -125,15 +125,51 @@ def launch_parallel(series_key: str, episode: int,
     return parent, results
 
 
+def _s3_status(job_id: str) -> dict[str, Any] | None:
+    """The status record the task wrote to S3, or None if it hasn't written one yet."""
+    c = _cfg()
+    try:
+        obj = _s3().get_object(Bucket=c["bucket"], Key=f"{c['prefix']}/{job_id}/status.json")
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
 def status_parallel(langs_map: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Per-language {ecs_state, S3 status record} for a fanned-out run."""
+    """Per-language {ecs_state, S3 status record} for a fanned-out run.
+
+    Both lookups are batched/fanned out because this runs inside the Teams webhook's ~5s
+    reply window: describe_tasks takes up to 100 ARNs in ONE call (it was one call per
+    language), and the S3 status reads go out concurrently. Six languages was 12 serial
+    AWS round-trips; it's now 1 + 6-in-parallel.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    arns = [i["task_arn"] for i in langs_map.values() if i.get("task_arn")]
+    ecs_by_arn: dict[str, str] = {}
+    if arns:
+        cluster = _cfg()["cluster"]
+        ecs = _ecs()
+        try:
+            for i in range(0, len(arns), 100):          # describe_tasks caps at 100 per call
+                d = ecs.describe_tasks(cluster=cluster, tasks=arns[i:i + 100])
+                for tk in d.get("tasks") or []:
+                    ecs_by_arn[tk["taskArn"]] = tk.get("lastStatus", "UNKNOWN")
+        except Exception:
+            pass                                        # fall through as UNKNOWN, S3 still decides
+
+    jobs_to_read = {lang: i["job_id"] for lang, i in langs_map.items() if i.get("task_arn")}
+    recs: dict[str, dict[str, Any] | None] = {}
+    if jobs_to_read:
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs_to_read))) as ex:
+            recs = dict(zip(jobs_to_read, ex.map(_s3_status, jobs_to_read.values())))
+
     out: dict[str, dict[str, Any]] = {}
     for lang, info in langs_map.items():
         if not info.get("task_arn"):
             out[lang] = {"ecs": "FAILED", "rec": None, "error": info.get("error")}
             continue
-        st, rec = status(info["task_arn"], info["job_id"])
-        out[lang] = {"ecs": st, "rec": rec}
+        out[lang] = {"ecs": ecs_by_arn.get(info["task_arn"], "UNKNOWN"), "rec": recs.get(lang)}
     return out
 
 
@@ -148,30 +184,34 @@ def status(task_arn: str, job_id: str) -> tuple[str, dict[str, Any] | None]:
             ecs_state = tk[0].get("lastStatus", "UNKNOWN")
     except Exception:
         pass
-    rec = None
-    c = _cfg()
-    try:
-        obj = _s3().get_object(Bucket=c["bucket"], Key=f"{c['prefix']}/{job_id}/status.json")
-        rec = json.loads(obj["Body"].read())
-    except Exception:
-        pass
-    return ecs_state, rec
+    return ecs_state, _s3_status(job_id)
 
 
 def ensure_summary(parent_id: str, episode: int,
-                   langs_map: dict[str, dict[str, Any]]) -> str | None:
-    """Build (once, then cache in S3) the cross-language Summary workbook for a fanned-out run
-    from each language's uploaded `xlang.json`. Returns its S3 key, or None if nothing to
-    aggregate. Cheap (~1-2s, no audio) and idempotent — re-runs only if the object is missing."""
+                   langs_map: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """Build (once, then cache in S3) the cross-language view for a fanned-out run from each
+    language's uploaded `xlang.json`: the Summary workbook AND the chat-sized root-cause
+    headline. Returns {"key": <xlsx s3 key>, "headline": [...]} or None if nothing to
+    aggregate. Cheap (~1-2s, no audio) and idempotent — rebuilt only if the objects are gone.
+
+    The headline is cached beside the workbook because the alternative — re-reading every
+    language's full xlang.json on each 'status' — would blow the Teams reply window.
+    """
     import tempfile
 
     from . import excel_report
     c = _cfg()
     key = f"{c['prefix']}/{parent_id}/EP{int(episode):02d}_Summary.xlsx"
+    meta_key = f"{c['prefix']}/{parent_id}/EP{int(episode):02d}_Summary.json"
     s3 = _s3()
     try:
         s3.head_object(Bucket=c["bucket"], Key=key)
-        return key                                   # already built
+        headline: list[str] = []
+        try:                                         # a few hundred bytes
+            headline = json.loads(s3.get_object(Bucket=c["bucket"], Key=meta_key)["Body"].read())
+        except Exception:
+            pass                                     # pre-dating the cache, or not written
+        return {"key": key, "headline": headline}    # already built
     except Exception:
         pass
     per_lang: dict[str, Any] = {}
@@ -186,7 +226,18 @@ def ensure_summary(parent_id: str, episode: int,
     tmp = f"{tempfile.mkdtemp()}/EP{int(episode):02d}_Summary.xlsx"
     excel_report.build_summary_workbook(per_lang, tmp)
     s3.upload_file(tmp, c["bucket"], key)
-    return key
+    from . import xlang as _xlang
+    try:
+        headline = _xlang.headline(per_lang)
+    except Exception:  # noqa: BLE001 — the workbook is the deliverable; the headline is extra
+        headline = []
+    try:
+        s3.put_object(Bucket=c["bucket"], Key=meta_key,
+                      Body=json.dumps(headline, ensure_ascii=False).encode("utf-8"),
+                      ContentType="application/json")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"key": key, "headline": headline}
 
 
 def download_url(zip_key: str, expires: int = 86400) -> str:

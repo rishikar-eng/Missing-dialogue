@@ -137,6 +137,123 @@ def _system(cfg: dict[str, Any]) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Asking questions ABOUT a finished run (the async path)
+# --------------------------------------------------------------------------- #
+# The Teams webhook can't wait for an LLM (5s reply window), so anything the regex intents
+# don't cover is answered on a background thread and pushed into the channel. That removes the
+# latency ceiling, which is what makes a read-only tool loop over the FULL results affordable:
+# the model can look up individual lines, one character across languages, or the cross-language
+# root cause, instead of paraphrasing a summary it was handed.
+_ASK_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "run_overview",
+        "description": ("Counts per language for this run plus the caveats that qualify them "
+                        "(characters with no audio delivered, out-of-sync tracks, unparsed "
+                        "script rows, mapping issues). Start here."),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_findings",
+        "description": ("Individual findings with episode timecodes and the scripted line. "
+                        "Filter by language, type (MISSING / MISMATCH / MISALIGNED / EXTRA) "
+                        "and/or character name."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "language": {"type": "string"},
+                "type": {"type": "string", "enum": ["MISSING", "MISMATCH", "MISALIGNED", "EXTRA"]},
+                "character": {"type": "string"},
+                "limit": {"type": "integer", "description": "default 25, max 50"},
+            },
+        },
+    },
+    {
+        "name": "character_report",
+        "description": ("One character across every language: which track they were mapped to "
+                        "and how, whether any audio was delivered at all, and their missing / "
+                        "wrong-speaker / misaligned counts. Use for 'why is X missing?'."),
+        "input_schema": {"type": "object",
+                         "properties": {"character": {"type": "string"}},
+                         "required": ["character"]},
+    },
+    {
+        "name": "cross_language_check",
+        "description": ("Per affected character, whether a gap repeats across ALL languages "
+                        "(points at the script or the character mapping) or shows up in one "
+                        "language only (points at that dub vendor). The root-cause view."),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+
+_ASK_SYSTEM = (
+    "You answer questions about a COMPLETED dialogue-QC run for a dubbed episode, for a studio "
+    "QC team in a Teams channel.\n\n"
+    "Dialogue QC compares each dubbed line against the script using speech detection. It knows "
+    "WHETHER someone spoke in the right place, never WHAT they said — so never claim a line was "
+    "mis-spoken, mistranslated or badly acted; that needs a human listen.\n"
+    "Finding types: MISSING (scripted line, silent track) · MISMATCH (delivered, but on another "
+    "character's track) · MISALIGNED (present but early/late/clipped) · EXTRA (speech with no "
+    "scripted line — often breaths or un-scripted reactions, usually harmless).\n"
+    "'No audio delivered' means no track was matched to that character — either it wasn't "
+    "delivered or it was labelled unrecognisably.\n\n"
+    "How to answer:\n"
+    "- Call tools for every fact. Never guess a number, a timecode or a character name.\n"
+    "- Lead with the answer. Then the evidence: timecodes, counts, language names.\n"
+    "- Say what to DO when it's clear (re-record, check the delivery folder, look at the "
+    "script) and, where the cross-language check supports it, say whether it's a script-side "
+    "or a dub-side problem.\n"
+    "- Keep it under ~150 words, Teams-friendly markdown, no headings.\n"
+    "- If the tools don't cover the question, say so plainly rather than speculating."
+)
+_ASK_MAX_TURNS = 6
+
+
+def answer_about_run(question: str, per_lang: dict[str, Any], context: str = "") -> str:
+    """Answer a free-form question against one finished run's full results. Runs OFF the Teams
+    reply path (see backend/notify.py) — a tool loop takes ~10-20s."""
+    from . import results as _results
+    if not per_lang:
+        return ("I don't have the detailed results for that run any more — ask `status` for the "
+                "summary, or re-run the episode.")
+
+    def _dispatch(name: str, inp: dict[str, Any]) -> Any:
+        if name == "run_overview":
+            return _results.overview(per_lang)
+        if name == "list_findings":
+            return _results.findings(per_lang, language=inp.get("language"),
+                                     kind=inp.get("type"), character=inp.get("character"),
+                                     limit=min(int(inp.get("limit") or 25), 50))
+        if name == "character_report":
+            return _results.character_report(per_lang, str(inp.get("character") or ""))
+        if name == "cross_language_check":
+            return _results.cross_language(per_lang)
+        return {"error": f"unknown tool {name}"}
+
+    client = anthropic.Anthropic()
+    convo: list[dict[str, Any]] = [{"role": "user", "content": question}]
+    system = _ASK_SYSTEM + (f"\n\nContext for this run: {context}" if context else "")
+    reply = ""
+    for _ in range(_ASK_MAX_TURNS):
+        resp = client.messages.create(model=WORKER_MODEL, max_tokens=1024, system=system,
+                                      tools=_ASK_TOOLS, messages=convo)
+        reply = "".join(b.text for b in resp.content if b.type == "text")
+        convo.append({"role": "assistant", "content": resp.content})
+        if resp.stop_reason != "tool_use":
+            break
+        out_blocks = []
+        for b in resp.content:
+            if b.type == "tool_use":
+                try:
+                    out = _dispatch(b.name, b.input or {})
+                except Exception as e:  # noqa: BLE001 — let the model see and recover
+                    out = {"error": str(e)[:200]}
+                out_blocks.append({"type": "tool_result", "tool_use_id": b.id,
+                                   "content": json.dumps(out, default=str)[:60000]})
+        convo.append({"role": "user", "content": out_blocks})
+    return reply or "I couldn't work that out — try asking about a specific character or language."
+
+
 def worker_reply(series_key: str, cfg: dict[str, Any],
                  convo: list[dict[str, Any]]) -> dict[str, Any]:
     """Run the Haiku tool-use loop over `convo` (a message list ending in the new user turn).

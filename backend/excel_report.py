@@ -33,6 +33,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from . import voices as voicebank   # aliased: a local 'voices' var exists in _language_sheet
+from . import xlang                 # cross-language root cause (shared with the chat agent)
 
 # --- house style -------------------------------------------------------------
 _HDR_FILL = PatternFill("solid", fgColor="0D3B66")
@@ -505,63 +506,22 @@ def _summary(wb: Workbook, per_lang: dict[str, dict[str, Any]]) -> None:
     # calling that "missing everywhere -> script/mapping issue" sends the studio chasing a
     # phantom. Only a character who is *substantially* absent in EVERY language is
     # evidence of a script/mapping problem rather than six dub teams failing identically.
-    langs = list(per_lang)
     r = _section(ws, r, "CROSS-LANGUAGE CHECK",
                  "same character, every language — where a gap repeats, the script/mapping is "
                  "the more likely cause than the dub")
     r = _head(ws, r, ["Character", "Missing lines per language", "Languages affected",
                       "Worst miss rate", "Reading"], [22, 40, 16, 14, 60])
 
-    MOSTLY_ABSENT = 0.5     # >= half a character's lines missing = they're effectively absent
-    stats: dict[str, dict[str, tuple[int, int]]] = {}   # name -> lang -> (missed, lines)
-    for lang, res in per_lang.items():
-        chars = {c.get("id"): c for c in (res.get("characters") or [])}
-        missed: dict[str, int] = {}
-        for e in ((res.get("alignment") or {}).get("errors") or []):
-            if e.get("type") == "MISSING" and e.get("character"):
-                missed[e["character"]] = missed.get(e["character"], 0) + 1
-        for cid, c in chars.items():
-            n = missed.get(cid, 0)
-            lines = c.get("line_count") or 0
-            # a character with no track at all is absent even without per-line findings
-            if not (c.get("channel") or c.get("grouped_in")) and lines:
-                n = lines
-            if n:
-                stats.setdefault(c.get("name") or cid, {})[lang] = (n, lines)
+    # The judgement itself lives in backend/xlang.py — the chat agent reports the same
+    # reading, and one source of truth is the only way those two stay in agreement.
+    # 'script'/'hard-lines' are amber (look at the source), the rest red (a delivery gap).
+    _TONE = {"script": "WARN", "hard-lines": "WARN", "delivery": "MISSING", "dub": "MISSING"}
+    rows = xlang.rows(per_lang)
 
-    rows = []
-    for name, per in stats.items():
-        rated = {lg: m / l for lg, (m, l) in per.items() if l}      # language -> miss rate
-        worst = max(rated.values()) if rated else 0.0
-        absent = [lg for lg in langs if rated.get(lg, 0) >= MOSTLY_ABSENT]  # ~fully missing
-        partial = [lg for lg in langs if 0 < rated.get(lg, 0) < MOSTLY_ABSENT]  # a few lines
-        delivered = [lg for lg in langs if lg not in per]           # no missing at all
-        n = len(langs)
-        if len(absent) == n:
-            reading, tone = ("Absent in EVERY language — look at the script/mapping first, "
-                             "not the dub", "WARN")
-        elif absent:
-            # Fully missing in SOME languages but not others: the languages that DID deliver
-            # prove the line exists, so the fully-missing ones are a delivery/mapping gap
-            # there — not a script problem. Name them explicitly (the imprecise old wording
-            # called this "a few lines drop in every language").
-            bits = [f"fully missing in {', '.join(absent)}"]
-            if partial:
-                bits.append(f"a few lines in {', '.join(partial)}")
-            if delivered:
-                bits.append(f"delivered in {', '.join(delivered)}")
-            reading = "; ".join(bits) + f" — check delivery/mapping for {', '.join(absent)}"
-            tone = "MISSING"
-        elif len(per) == n and n > 1:
-            reading, tone = ("A few lines drop in every language — usually the same hard lines; "
-                             "check those timings in the script", "WARN")
-        else:
-            reading, tone = (f"Gap in {', '.join(per)} only — the other languages delivered these "
-                             f"lines, so it looks like a real dub gap", "MISSING")
-        rows.append((name, per, worst, reading, tone))
-
-    for name, per, worst, reading, tone in sorted(rows, key=lambda x: (-len(x[1]), -x[2], x[0])):
-        detail = ", ".join(f"{lg} {m}/{l}" for lg, (m, l) in per.items())
+    for row in rows:
+        name, reading, tone = row["character"], row["reading"], _TONE[row["cause"]]
+        per, worst = row["per_language"], row["worst_rate"]
+        detail = ", ".join(f"{lg} {v['missing']}/{v['lines']}" for lg, v in per.items())
         for i, val in enumerate([name, detail, len(per), None, reading], start=1):
             c = ws.cell(row=r, column=i, value=val)
             c.border = _BORDER

@@ -988,7 +988,7 @@ def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, A
     later 'status' finds it. Shared by the typed 'run' command AND the card's Run button, so
     both behave identically (Fargate parallel when enabled, in-process otherwise). Returns
     {mode, job, launched?, disp}. Raises on launch failure (caller formats the error)."""
-    from . import episode_runner, fargate
+    from . import episode_runner, fargate, notify
     disp = cfg.get("display_name")
     sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
     fast = sess.setdefault("fast", {})
@@ -998,7 +998,10 @@ def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, A
                          compute="fargate-parallel", langs=langmap)
         fast.update(job=parent_id, episode=n, series_key=key)
         sess["series_key"], sess["cfg"] = key, cfg
-        return {"mode": "fargate", "job": parent_id, "disp": disp,
+        # Announce completion in the channel instead of making the user poll (no-op unless an
+        # Incoming Webhook is configured — see backend/notify.py).
+        pushed = notify.watch(parent_id, conv)
+        return {"mode": "fargate", "job": parent_id, "disp": disp, "pushed": pushed,
                 "launched": sum(1 for v in langmap.values() if v.get("task_arn"))}
 
     def _persist(j: jobs.Job) -> None:
@@ -1006,6 +1009,8 @@ def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, A
         run_store.record(j.id, conv=conv, episode=n, series=disp,
                          status=("error" if j.status == "error" else r.get("status") or "done"),
                          zip_path=r.get("zip_path"), summary=r.get("summary_by_language"),
+                         cross_language=r.get("cross_language"),
+                         results_path=r.get("results_path"),
                          why=r.get("why") or j.error)
 
     job = jobs.submit("agent-run", lambda stage: episode_runner.run(
@@ -1013,7 +1018,8 @@ def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, A
     run_store.record(job.id, conv=conv, episode=n, series=disp, status="running")
     fast.update(job=job.id, episode=n, series_key=key)
     sess["series_key"], sess["cfg"] = key, cfg
-    return {"mode": "local", "job": job.id, "disp": disp}
+    pushed = notify.watch(job.id, conv)
+    return {"mode": "local", "job": job.id, "disp": disp, "pushed": pushed}
 
 
 def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
@@ -1073,12 +1079,15 @@ def agent_go(d: str):
         return HTMLResponse(f"<h3>Couldn't start the run: {str(e)[:200]}</h3>", status_code=500)
     where = (f"{info.get('launched')} languages running in parallel on the cloud"
              if info["mode"] == "fargate" else "running across all delivered languages")
+    back = ("Head back to Teams — I'll post the results in the channel when it finishes."
+            if info.get("pushed") else
+            "Head back to Teams and ask <b>@QC status</b> — I'll report the per-language "
+            "counts, the cross-language root cause and a download link.")
     return HTMLResponse(
         "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:34rem;margin:3rem auto'>"
         f"<h2 style='color:#2b6cb0'>▶ QC started — Episode {n}, {cfg.get('display_name')}</h2>"
         f"<p>Job <code>{info['job']}</code> is {where}.</p>"
-        "<p>Head back to Teams and ask <b>@QC status</b> — I'll post the per-language "
-        "missing/extra counts and a download link when it finishes.</p></div>")
+        f"<p>{back}</p></div>")
 
 
 def _dl_link(job_id: str) -> str:
@@ -1117,15 +1126,479 @@ def agent_dl(d: str):
     return FileResponse(zip_path, media_type="application/zip", filename=Path(zip_path).name)
 
 
+# --- status rendering ---------------------------------------------------------------
+# These turn a run's compact per-language summary (episode_runner._lang_summary) into the
+# Teams reply. Records written BEFORE that summary was widened carry only
+# missing/mismatch/extra, so every richer key is read with a default — an old run, or one
+# resumed from disk after a deploy, must still render rather than KeyError.
+
+# Known failure modes -> what a QC lead should actually do about them. Matched against the
+# lowercased failure text; first hit wins, so order these most-specific first.
+_ERROR_HINTS: tuple[tuple[str, str], ...] = (
+    ("no english script", "no English script for this episode in Box — check the script file's "
+                          "naming (the episode number must be findable, e.g. '#42')"),
+    ("no language had usable stems", "no dub stems delivered for this episode yet"),
+    ("not delivered", "not delivered to Box yet"),
+    ("unauthorized", "Box rejected the credentials — the server's Box token needs re-authorising"),
+    ("401", "Box rejected the credentials — the server's Box token needs re-authorising"),
+    ("invalid_grant", "the Box refresh token has expired — re-authorise the server against Box"),
+    ("dl-err", "the stem download from Box failed part-way (usually transient) — re-run"),
+    ("download", "the download from Box failed part-way (usually transient) — re-run"),
+    ("timeout", "a Box call timed out — re-run; if it repeats, Box may be degraded"),
+    ("cannotpull", "the cloud task could not pull its container image — check the ECR image tag"),
+    ("resourceinitialization", "the cloud task failed to start (network/secrets) — check the ECS "
+                               "task definition, then re-run"),
+    ("capacity", "AWS had no capacity for the task — re-run in a few minutes"),
+    ("outofmemory", "the run exhausted the task's memory — it needs a larger task size"),
+    ("memory", "the run exhausted the task's memory — it needs a larger task size"),
+)
+
+
+def _friendly_error(why: Any) -> str:
+    """Plain-English rendering of a failure, with the next step. Falls back to the raw text
+    (truncated) so an unrecognised error is still reported rather than swallowed."""
+    raw = str(why or "").strip()
+    low = raw.lower()
+    for needle, msg in _ERROR_HINTS:
+        if needle in low:
+            return msg
+    return f"{raw[:140]} (check the server logs, then re-run)" if raw else "failed for an unknown reason"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _lang_sort_key(s: dict[str, Any]) -> tuple[int, int, int]:
+    """Worst first: undelivered characters, then missing lines, then wrong-speaker lines.
+    Alphabetical order buried the language that needed action behind the clean ones."""
+    return (-int(s.get("no_audio") or 0), -int(s.get("missing") or 0), -int(s.get("mismatch") or 0))
+
+
+def _verdict_line(ok: dict[str, dict[str, Any]]) -> str | None:
+    """The one line that answers 'do I need to do something about this episode?', rolled up
+    across every language that produced a result. Without it the reader has to add up six
+    per-language blocks themselves to find out whether anything is actually wrong."""
+    if not ok:
+        return None
+    undelivered: dict[str, list[str]] = {}      # character -> languages missing them entirely
+    for lang, s in ok.items():
+        for name in (s.get("undelivered") or []):
+            undelivered.setdefault(str(name), []).append(lang)
+    total_missing = sum(int(s.get("missing") or 0) for s in ok.values())
+    langs_missing = [l for l, s in ok.items() if int(s.get("missing") or 0)]
+
+    if undelivered:
+        who = ", ".join(f"{n} ({', '.join(sorted(lg))})" for n, lg in sorted(undelivered.items()))
+        return (f"🔴 **Needs action** — {_plural(len(undelivered), 'character')} never delivered: "
+                f"{who}. {total_missing} missing lines in total.")
+    if total_missing:
+        worst = max(langs_missing, key=lambda l: int(ok[l].get("missing") or 0))
+        return (f"🟠 **{total_missing} missing lines** across "
+                f"{_plural(len(langs_missing), 'language')} — worst is {worst} "
+                f"({ok[worst].get('missing')}).")
+    return f"🟢 **No missing dialogue** in any of the {_plural(len(ok), 'language')} checked."
+
+
+def _lang_block(lang: str, s: dict[str, Any], dl: str | None = None) -> list[str]:
+    """One language's result as a short block of Teams lines: a verdict headline, the full
+    counts, anything that undermines those counts, and the download link.
+
+    The verdict leads because raw counts don't say whether to act: '41 missing' could be one
+    vendor dropping a lead entirely (stop everything) or a long episode's tail of hard lines.
+    """
+    g = lambda k: int(s.get(k) or 0)  # noqa: E731 — every count is optional on old records
+    miss, mism, misal, extra = g("missing"), g("mismatch"), g("misaligned"), g("extra")
+    n_und = g("no_audio")
+
+    # One severity scale, used by the per-language blocks AND the roll-up verdict so the two
+    # never disagree: 🔴 a whole character is undelivered, 🟠 lines are missing/mistimed,
+    # 🟢 nothing to do.
+    if n_und:
+        names = ", ".join(str(x) for x in (s.get("undelivered") or []))
+        more = g("undelivered_more")
+        headline = (f"{n_und} character{'s' if n_und != 1 else ''} not delivered"
+                    + (f": {names}" if names else "")
+                    + (f" +{more} more" if more else ""))
+        icon = "🔴"
+    elif miss or mism:
+        bits = ([f"{_plural(miss, 'missing line')}"] if miss else []) + \
+               ([f"{_plural(mism, 'wrong-speaker line')}"] if mism else [])
+        headline = ", ".join(bits)
+        icon = "🟠"
+    elif misal:
+        headline = f"timing only — {misal} misaligned"
+        icon = "🟠"
+    else:
+        headline = "clean"
+        icon = "🟢"
+    out = [f"{icon} **{lang}** — {headline}"]
+
+    counts = f"{miss} missing · {mism} wrong-speaker · {misal} misaligned · {extra} extra"
+    scope = []
+    if g("characters_checked"):
+        scope.append(f"{g('characters_checked')} characters")
+    if g("tracks"):
+        scope.append(f"{g('tracks')} tracks")
+    out.append(f"    {counts}" + (f"  ({', '.join(scope)})" if scope else ""))
+
+    # Who to chase first — only when no whole character is missing (that already IS the answer).
+    if not n_und and s.get("top_missing"):
+        worst = ", ".join(f"{t.get('character')} {t.get('lines')}"
+                          for t in (s.get("top_missing") or [])[:3] if t.get("lines"))
+        if worst:
+            out.append(f"    worst: {worst}")
+
+    # Caveats that change how the counts should be read, most consequential first.
+    warn: list[str] = []
+    for w in (s.get("sync_warnings") or [])[:2]:
+        off = w.get("offset_s")
+        if off is None:
+            continue
+        warn.append(f"'{w.get('channel')}' runs {abs(float(off)):.1f}s "
+                    f"{'late' if float(off) > 0 else 'early'} — whole track out of sync")
+    if g("script_dropped"):
+        warn.append(f"{g('script_dropped')} script rows failed to parse — those lines were "
+                    f"never checked")
+    if warn:
+        out.append("    ⚠ " + "; ".join(warn))
+
+    info = []
+    if g("naming_issues"):
+        info.append(f"{_plural(g('naming_issues'), 'track↔character check')} to review")
+    if g("loudness_flags"):
+        info.append(_plural(g("loudness_flags"), "loudness flag"))
+    if info:
+        out.append(f"    ⓘ {', '.join(info)} (detail in the workbook)")
+
+    if dl:
+        out.append(f"    ⬇ {dl}")
+    return out
+
+
+def _run_status(jid: str | None, rec: dict[str, Any] | None, job: Any) -> dict[str, Any]:
+    """Everything 'status' knows about one run, as DATA rather than a formatted reply:
+
+        {settled, header, verdict, lines[], cross[], summaries{}, summary_url, text}
+
+    `settled` means the run has reached a terminal state (nothing left running), which is what
+    the proactive notifier watches for. Returning data instead of a message is what lets the
+    polled reply and the pushed completion message be produced by the same code — they used to
+    be impossible to keep in step because the formatting was inline in the command handler.
+    """
+    from . import fargate
+    out: dict[str, Any] = {"settled": False, "verdict": None, "lines": [], "cross": [],
+                           "summaries": {}, "summary_url": None, "episode": None,
+                           "series": (rec or {}).get("series")}
+
+    # --- cloud run fanned out one task PER LANGUAGE: aggregate their outcomes -----------
+    if rec and rec.get("compute") == "fargate-parallel":
+        per = fargate.status_parallel(rec.get("langs") or {})
+        ep_no = rec.get("episode")
+        out["episode"] = ep_no
+        done = running = failed = skipped = 0
+        ok_summaries: dict[str, dict[str, Any]] = {}
+        downloads: dict[str, str] = {}
+        # (rank, sort-key, language, lines) — failures first, then results worst-to-clean,
+        # then still-running, then not-delivered. Whatever needs a human is at the top.
+        blocks: list[tuple[int, tuple[int, int, int], str, list[str]]] = []
+        for lang in sorted(per):
+            s = per[lang]
+            srec, ecs_state = s.get("rec"), (s.get("ecs") or "")
+            st = (srec or {}).get("status")
+            if st == "ok":
+                done += 1
+                cnt = ((srec.get("summary") or {}).get(lang)) or {}
+                ok_summaries[lang] = cnt
+                dl = _dl_s3(srec["zip_key"]) if srec.get("zip_key") else None
+                if dl:
+                    downloads[lang] = dl
+                blocks.append((1, _lang_sort_key(cnt), lang, _lang_block(lang, cnt, dl)))
+            elif st == "skip":
+                skipped += 1
+                blocks.append((3, (0, 0, 0), lang,
+                               [f"⏭ **{lang}** — {_friendly_error(srec.get('why'))}"]))
+            elif st == "error":
+                failed += 1
+                blocks.append((0, (0, 0, 0), lang,
+                               [f"⚠️ **{lang}** — {_friendly_error(srec.get('why'))}"]))
+            elif ecs_state in ("FAILED", "STOPPED") and not srec:
+                # The task never wrote a result. Previously this incremented NOTHING, so a
+                # language that failed to launch was counted as neither running nor failed
+                # and the header could still read "done".
+                failed += 1
+                blocks.append((0, (0, 0, 0), lang,
+                               [f"⚠️ **{lang}** — {_friendly_error(s.get('error') or ecs_state)}"]))
+            else:
+                running += 1
+                blocks.append((2, (0, 0, 0), lang,
+                               [f"🔄 **{lang}** — {(ecs_state or 'running').lower()}"]))
+        lines = [ln for b in sorted(blocks, key=lambda b: (b[0], b[1], b[2])) for ln in b[3]]
+
+        # The header must not read green while languages are failing: with 4 ok and 2
+        # errored, `running == 0` used to print "✅ QC done (4 languages)" and the failures
+        # were only visible further down.
+        if running:
+            header = (f"⏳ EP {ep_no} — {done} done, {running} running"
+                      + (f", {failed} failed" if failed else ""))
+        elif failed:
+            header = f"⚠️ EP {ep_no} QC finished with problems — {done} done, {failed} failed"
+        elif done:
+            header = f"✅ EP {ep_no} QC done — {_plural(done, 'language')}"
+        else:
+            header = f"⚠️ EP {ep_no} — nothing completed"
+        if skipped:
+            header += f" ({skipped} not delivered)"
+
+        out.update(settled=(running == 0), header=header, lines=lines, summaries=ok_summaries,
+                   downloads=downloads, counts={"done": done, "running": running,
+                                                "failed": failed, "skipped": skipped})
+        if running == 0:
+            out["verdict"] = _verdict_line(ok_summaries)
+            # Everything finished -> build (once, cached in S3) the cross-language view.
+            if done:
+                try:
+                    summ = fargate.ensure_summary(jid, ep_no, rec.get("langs") or {})
+                    if summ:
+                        out["summary_url"] = _dl_s3(summ["key"])
+                        out["cross"] = summ.get("headline") or []
+                        # The reading is only as wide as the languages that actually produced
+                        # a result. Saying "absent in EVERY language" when half the fan-out
+                        # failed would point the studio at the script for what is really a
+                        # missing result — so state the coverage whenever it isn't complete.
+                        if done < len(per):
+                            out["cross_scope"] = f"the {done} of {len(per)} languages that completed"
+                except Exception:  # noqa: BLE001 — aggregation must never break the reply
+                    pass
+        out["text"] = _status_text(out)
+        return out
+
+    # --- cloud run, single task: outcome in S3, liveness in ECS -------------------------
+    if rec and rec.get("compute") == "fargate":
+        ecs_state, srec = fargate.status(rec.get("task_arn"), jid)
+        out["episode"] = (srec or {}).get("episode") or rec.get("episode")
+        if not srec or srec.get("status") == "running":
+            if ecs_state == "STOPPED" and not srec:
+                out.update(settled=True, header="⚠️ The cloud run stopped without writing a "
+                                                "result — check the ECS logs, then re-run.")
+            else:
+                out["header"] = (f"🔄 Running on the cloud ({ecs_state.lower()}). "
+                                 f"Ask 'status' again shortly.")
+            out["text"] = out["header"]
+            return out
+        out["settled"] = True
+        if srec.get("status") != "ok":
+            out["header"] = (f"⚠️ EP {out['episode']} run finished without a report — "
+                             f"{_friendly_error(srec.get('why') or srec.get('status'))}.")
+            out["text"] = out["header"]
+            return out
+        summ = srec.get("summary") or {}
+        out.update(header=f"✅ EP {out['episode']} QC done",
+                   verdict=_verdict_line(summ), summaries=summ,
+                   cross=srec.get("cross_language") or [],
+                   lines=_lang_lines(summ),
+                   summary_url=(fargate.download_url(srec["zip_key"])
+                                if srec.get("zip_key") else None))
+        out["text"] = _status_text(out, report_label="Full report")
+        return out
+
+    # --- in-process run ------------------------------------------------------------------
+    if job and job.status in ("queued", "running"):
+        out["header"] = (f"🔄 Running — {job.progress.get('stage', 'working')}. "
+                         f"Ask 'status' again shortly.")
+        out["text"] = out["header"]
+        return out
+    if job and job.status == "error":
+        out.update(settled=True, header=f"⚠️ Run failed — {_friendly_error(job.error)}.")
+        out["text"] = out["header"]
+        return out
+
+    r = (job.result if (job and job.status == "done") else None) or {}
+    status = r.get("status") or (rec or {}).get("status")
+    summary = r.get("summary_by_language") or (rec or {}).get("summary")
+    ep_no = r.get("episode") or (rec or {}).get("episode")
+    out["episode"] = ep_no
+    # A disk record still 'running' with no live job = the run was killed by a restart.
+    if not job and (rec or {}).get("status") == "running":
+        out.update(settled=True,
+                   header=f"⚠️ The EP {ep_no} run was interrupted (the server restarted). "
+                          f"Please start it again with 'run episode {ep_no}'.")
+        out["text"] = out["header"]
+        return out
+    out["settled"] = True
+    if status != "ok":
+        out["header"] = (f"⚠️ EP {ep_no} run finished without a report — "
+                         f"{_friendly_error((rec or r).get('why') or status or 'no result')}.")
+        out["text"] = out["header"]
+        return out
+    summ = summary or {}
+    out.update(header=f"✅ EP {ep_no} QC done", verdict=_verdict_line(summ), summaries=summ,
+               cross=r.get("cross_language") or (rec or {}).get("cross_language") or [],
+               lines=_lang_lines(summ),
+               summary_url=_dl_link(jid) if jid else None)
+    out["text"] = _status_text(out, report_label="Full report")
+    return out
+
+
+def _lang_lines(summ: dict[str, dict[str, Any]]) -> list[str]:
+    """Per-language blocks for a single-result run, worst language first."""
+    return [ln for lang, s in sorted(summ.items(), key=lambda kv: (_lang_sort_key(kv[1]), kv[0]))
+            for ln in _lang_block(lang, s)]
+
+
+def _cross_scope(st: dict[str, Any]) -> str:
+    """How wide the cross-language reading actually is — 'languages' only when every language
+    of the run reported in, otherwise an explicit '3 of 6 that completed'."""
+    return st.get("cross_scope") or "languages"
+
+
+def _status_text(st: dict[str, Any], report_label: str = "Cross-language summary") -> str:
+    """The plain-text rendering — also the notification preview Teams shows for a card, so it
+    has to stand on its own for anyone who only sees the first line."""
+    parts = [st["header"] + (f"\n{st['verdict']}" if st.get("verdict") else "")]
+    if st.get("lines"):
+        parts.append("\n".join(st["lines"]))
+    if st.get("cross"):
+        parts.append(f"**Root cause — same character across {_cross_scope(st)}**\n"
+                     + "\n".join(st["cross"]))
+    if st.get("summary_url"):
+        parts.append(f"📊 {report_label}: {st['summary_url']}")
+    return "\n\n".join(parts)
+
+
+# --- Adaptive Cards -------------------------------------------------------------------
+# Six languages of counts is a wall of text in a chat window. A card gives it a table, a
+# colour per severity, and — the point — a collapsed 'details' section: the drill-down is
+# embedded in the payload, so expanding it costs no server round-trip and can't blow the
+# webhook's reply window.
+def _tb(text: str, **kw: Any) -> dict[str, Any]:
+    return {"type": "TextBlock", "text": text, "wrap": True, **kw}
+
+
+def _status_card(st: dict[str, Any]) -> dict[str, Any] | None:
+    summaries: dict[str, dict[str, Any]] = st.get("summaries") or {}
+    if not summaries:
+        return None                                  # nothing tabular to show; text says it all
+    ep, series = st.get("episode"), st.get("series")
+    body: list[dict[str, Any]] = [
+        _tb(f"Episode {ep}" + (f" — {series}" if series else ""), weight="Bolder", size="Medium"),
+        _tb(st["header"], isSubtle=True, spacing="None"),
+    ]
+    if st.get("verdict"):
+        colour = ("Attention" if st["verdict"].startswith("🔴")
+                  else "Warning" if st["verdict"].startswith("🟠") else "Good")
+        body.append(_tb(st["verdict"].replace("**", ""), color=colour, weight="Bolder"))
+
+    rows: list[dict[str, Any]] = []
+    for lang, s in sorted(summaries.items(), key=lambda kv: (_lang_sort_key(kv[1]), kv[0])):
+        g = lambda k: int(s.get(k) or 0)             # noqa: E731
+        icon = "🔴" if g("no_audio") else ("🟠" if (g("missing") or g("mismatch")) else "🟢")
+        detail = (f"{g('missing')} missing · {g('mismatch')} wrong-speaker · "
+                  f"{g('misaligned')} misaligned · {g('extra')} extra")
+        if g("no_audio"):
+            detail = (f"**{_plural(g('no_audio'), 'character')} not delivered** — " + detail)
+        dl = (st.get("downloads") or {}).get(lang)
+        rows.append({"type": "ColumnSet", "spacing": "Small", "columns": [
+            {"type": "Column", "width": "auto", "items": [_tb(icon)]},
+            {"type": "Column", "width": "stretch",
+             "items": [_tb(f"**{lang}**", spacing="None"), _tb(detail, isSubtle=True,
+                                                               spacing="None", size="Small")]},
+            {"type": "Column", "width": "auto",
+             "items": [_tb(f"[report]({dl})")] if dl else []},
+        ]})
+    body += rows
+
+    if st.get("cross"):
+        body.append(_tb(f"Root cause — same character across {_cross_scope(st)}",
+                        weight="Bolder", separator=True))
+        for line in st["cross"]:
+            body.append(_tb(line.replace("**", ""), size="Small", spacing="None"))
+
+    # Collapsed drill-down: concrete missing lines, already in the payload.
+    detail_items: list[dict[str, Any]] = []
+    for lang, s in sorted(summaries.items(), key=lambda kv: (_lang_sort_key(kv[1]), kv[0])):
+        ex = s.get("examples") or []
+        warn = s.get("sync_warnings") or []
+        if not ex and not warn and not s.get("script_dropped"):
+            continue
+        detail_items.append(_tb(f"**{lang}**", separator=True))
+        for w in warn[:2]:
+            off = w.get("offset_s")
+            if off is not None:
+                detail_items.append(_tb(
+                    f"⚠ '{w.get('channel')}' runs {abs(float(off)):.1f}s "
+                    f"{'late' if float(off) > 0 else 'early'} — whole track out of sync",
+                    size="Small", spacing="None"))
+        if s.get("script_dropped"):
+            detail_items.append(_tb(
+                f"⚠ {_plural(int(s['script_dropped']), 'script row')} failed to parse — "
+                f"never checked", size="Small", spacing="None"))
+        for e in ex:
+            txt = f"`{e.get('at')}` **{e.get('character')}**" + (
+                f" — “{e.get('text')}”" if e.get("text") else "")
+            detail_items.append(_tb(txt, size="Small", spacing="None"))
+    actions: list[dict[str, Any]] = []
+    if detail_items:
+        actions.append({"type": "Action.ShowCard", "title": "🔎 Missing-line examples",
+                        "card": {"type": "AdaptiveCard", "body": detail_items}})
+    if st.get("summary_url"):
+        actions.append({"type": "Action.OpenUrl", "title": "📊 Summary workbook",
+                        "url": st["summary_url"]})
+    return {"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard", "version": "1.4", "body": body, "actions": actions}
+
+
+def _card_msg(text: str, card: dict[str, Any] | None) -> dict[str, Any]:
+    """A Teams reply, with the Adaptive Card attached when there is one to attach."""
+    msg: dict[str, Any] = {"type": "message", "text": text}
+    if card:
+        msg["attachments"] = [{"contentType": "application/vnd.microsoft.card.adaptive",
+                               "content": card}]
+    return msg
+
+
+_HELP = (
+    "**Dialogue QC bot** — I check a dubbed episode against its script and report what's "
+    "missing.\n\n"
+    "- `check ep 42` — what's in Box for that episode (script, original audio, each dub "
+    "language) + a ▶ Run button\n"
+    "- `run ep 42` — start QC across every delivered language\n"
+    "- `status` — progress, then per-language results, root cause and download links\n"
+    "- `runs` — the recent runs in this channel\n"
+    "- `help` — this message\n\n"
+    "Add a series name if more than one is registered (e.g. `check gavv ep 42`). "
+    "You must pick me from the @mention autocomplete — typing `@qc` as plain text never "
+    "reaches me."
+)
+
+
 def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     """Fast, LLM-free handler for the Teams webhook (must answer in ~5s): parse
     check / run / status and act deterministically. Session (by conversation id) remembers
     the last episode + job so 'run' / 'status' work without repeating the episode."""
-    from . import agent as _agent, box_discovery, box_oauth, fargate
+    from . import agent as _agent, box_discovery, box_oauth
     from . import router as _router, series_registry
     low = text.lower().strip()
     sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
     fast = sess.setdefault("fast", {})
+
+    # HELP
+    if re.fullmatch(r"(help|\?|commands?|what can you do\??|usage)", low):
+        return {"type": "message", "text": _HELP}
+
+    # RUNS — recent history for this channel, so a user can find an older report's link
+    if re.fullmatch(r"(runs|history|recent( runs)?|my runs)", low):
+        import time as _t
+        recs = run_store.recent_for(conv, limit=5)
+        if not recs:
+            return {"type": "message", "text": "No QC runs in this channel yet."}
+        out = ["**Recent runs here**"]
+        for rr in recs:
+            when = _t.strftime("%d %b %H:%M", _t.localtime(rr.get("created_at") or 0))
+            out.append(f"- EP {rr.get('episode')} ({rr.get('series') or '?'}) — "
+                       f"{rr.get('status')} · {when} · `{rr.get('job_id')}`")
+        out.append("\nAsk `status` for the latest one's detail.")
+        return {"type": "message", "text": "\n".join(out)}
 
     # STATUS
     if re.search(r"\b(status|done|ready|result|finished?|progress|is it)\b", low) \
@@ -1138,92 +1611,8 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         rec = run_store.get(jid) if jid else None  # persisted (survives restart)
         if not job and not rec:
             return {"type": "message", "text": "No QC run here yet. Start one, e.g. 'run episode 42 of Gavv'."}
-
-        # Cloud run fanned out one task PER LANGUAGE: aggregate their per-language outcomes.
-        if rec and rec.get("compute") == "fargate-parallel":
-            per = fargate.status_parallel(rec.get("langs") or {})
-            ep_no = rec.get("episode")
-            done = running = 0
-            lines: list[str] = []
-            for lang in sorted(per):
-                s = per[lang]
-                srec, ecs_state = s.get("rec"), (s.get("ecs") or "")
-                st = (srec or {}).get("status")
-                if st == "ok":
-                    done += 1
-                    cnt = ((srec.get("summary") or {}).get(lang)) or {}
-                    dl = _dl_s3(srec["zip_key"]) if srec.get("zip_key") else None
-                    lines.append(f"✅ {lang}: {cnt.get('missing', '?')} missing"
-                                 + (f", {cnt.get('mismatch')} mismatch" if cnt.get("mismatch") else "")
-                                 + (f" — {dl}" if dl else ""))
-                elif st == "skip":
-                    lines.append(f"⏭ {lang}: not delivered")
-                elif st == "error":
-                    lines.append(f"⚠️ {lang}: {str(srec.get('why') or 'failed')[:60]}")
-                elif ecs_state == "FAILED" and not srec:
-                    running += 0
-                    lines.append(f"⚠️ {lang}: could not launch")
-                else:
-                    running += 1
-                    lines.append(f"🔄 {lang}: {(ecs_state or 'running').lower()}")
-            header = (f"✅ EP {ep_no} QC done ({done} language{'s' if done != 1 else ''})"
-                      if running == 0 else f"EP {ep_no}: {done} done, {running} running")
-            # All languages finished -> build (once) the cross-language Summary and link it.
-            if running == 0 and done:
-                try:
-                    skey = fargate.ensure_summary(jid, ep_no, rec.get("langs") or {})
-                    if skey:
-                        lines.append(f"\n📊 Cross-language summary (all languages side by side + "
-                                     f"root-cause check): {_dl_s3(skey)}")
-                except Exception:  # noqa: BLE001 — never let aggregation break the status reply
-                    pass
-            return {"type": "message", "text": header + "\n" + "\n".join(lines)}
-
-        # Cloud (Fargate) run, single task: outcome lives in S3, task state in ECS.
-        if rec and rec.get("compute") == "fargate":
-            ecs_state, srec = fargate.status(rec.get("task_arn"), jid)
-            if not srec or srec.get("status") == "running":
-                if ecs_state in ("STOPPED",) and not srec:
-                    return {"type": "message", "text": "⚠️ The cloud run stopped without writing a "
-                                                       "result — check the ECS logs, then re-run."}
-                return {"type": "message",
-                        "text": f"🔄 Running on the cloud ({ecs_state.lower()}). Ask 'status' again shortly."}
-            if srec.get("status") != "ok":
-                return {"type": "message", "text": f"Run finished: {srec.get('why') or srec.get('status')}"}
-            lines = [f"{l}: {s['missing']} missing"
-                     + (f", {s['mismatch']} mismatch" if s.get("mismatch") else "")
-                     for l, s in (srec.get("summary") or {}).items()]
-            dl = fargate.download_url(srec["zip_key"]) if srec.get("zip_key") else None
-            return {"type": "message",
-                    "text": f"✅ EP {srec.get('episode')} QC done:\n- " + "\n- ".join(lines)
-                            + (f"\n\nDownload report: {dl}" if dl else "")}
-
-        # Live job present -> authoritative for in-progress state.
-        if job and job.status in ("queued", "running"):
-            return {"type": "message",
-                    "text": f"🔄 Running — {job.progress.get('stage', 'working')}. Ask 'status' again shortly."}
-        if job and job.status == "error":
-            return {"type": "message", "text": f"⚠️ Run failed: {job.error}"}
-
-        # Finished: read from the live job if we have it, else from the disk record.
-        r = (job.result if (job and job.status == "done") else None) or {}
-        status = r.get("status") or (rec or {}).get("status")
-        summary = r.get("summary_by_language") or (rec or {}).get("summary")
-        ep_no = r.get("episode") or (rec or {}).get("episode")
-        # A disk record still 'running' with no live job = the run was killed by a restart.
-        if not job and (rec or {}).get("status") == "running":
-            return {"type": "message",
-                    "text": f"⚠️ The EP {ep_no} run was interrupted (the server restarted). "
-                            f"Please start it again with 'run episode {ep_no}'."}
-        if status != "ok":
-            return {"type": "message",
-                    "text": f"Run finished: {(rec or r).get('why') or status or 'no result'}"}
-        lines = [f"{l}: {s['missing']} missing"
-                 + (f", {s['mismatch']} mismatch" if s.get("mismatch") else "")
-                 for l, s in (summary or {}).items()]
-        return {"type": "message",
-                "text": f"✅ EP {ep_no} QC done:\n- " + "\n- ".join(lines)
-                        + f"\n\nDownload report: {_dl_link(jid)}"}
+        st = _run_status(jid, rec, job)
+        return _card_msg(st["text"], _status_card(st))
 
     # episode + series (fall back to the session's last if not restated)
     m = re.search(r"(?:ep|epi|episode)\s*#?\s*(\d{1,3})", low) or re.search(r"\b(\d{1,3})\b", low)
@@ -1246,14 +1635,17 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
             return {"type": "message", "text": f"Server busy: {e}"}
         except Exception as e:  # noqa: BLE001
             return {"type": "message", "text": f"Couldn't launch the job: {str(e)[:160]}"}
+        # Only promise a completion message when a push channel is actually configured —
+        # telling someone to wait for a message that can never arrive is worse than polling.
+        tail = ("I'll post the results here when it finishes (or ask 'status' any time)."
+                if info.get("pushed") else "Ask 'status' for progress + the download links.")
         if info["mode"] == "fargate":
             return {"type": "message",
                     "text": f"▶ QC started on the cloud for EP {ep} ({info['disp']}) — "
-                            f"{info.get('launched')} languages running in parallel. "
-                            f"Ask 'status' for results + download links."}
+                            f"{info.get('launched')} languages running in parallel. {tail}"}
         return {"type": "message",
                 "text": f"▶ QC started for EP {ep} ({info['disp']}), all delivered "
-                        f"languages. Ask 'status' for progress + the download link."}
+                        f"languages. {tail}"}
 
     # CHECK (default when an episode is present)
     if ep is not None:
@@ -1270,8 +1662,42 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                 "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
                                  "content": _availability_card(brief, conv)}]}
 
-    return {"type": "message",
-            "text": "I can check or run dialogue QC. Try:\n- 'check gavv ep 42'\n- 'run episode 42'\n- 'status'"}
+    # Nothing matched. If there's a finished run here and we have somewhere to push to, hand
+    # the question to the LLM ON A BACKGROUND THREAD and answer now — the tool loop takes
+    # ~10-20s, far past the webhook's 5s window, so it can never run inline (doing that inline
+    # is what broke this feature once before).
+    handed_off = _ask_async(text, conv)
+    if handed_off:
+        return {"type": "message", "text": handed_off}
+    return {"type": "message", "text": _HELP}
+
+
+def _ask_async(question: str, conv: str) -> str | None:
+    """Kick off an LLM answer about this channel's latest finished run, pushed when ready.
+    Returns the immediate acknowledgement, or None when the async path isn't available (no
+    push channel, no API key, or no finished run to talk about) so the caller shows help."""
+    from . import notify
+    url = notify.target_for(conv)
+    if not url or not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    rec = run_store.latest_for(conv)
+    if not rec or rec.get("status") not in ("ok", "done"):
+        return None
+
+    jid = rec.get("job_id")
+
+    def _work() -> None:
+        from . import agent as _agent, results as _results
+        try:
+            per_lang = _results.load(str(jid))
+            ctx = f"Episode {rec.get('episode')} of {rec.get('series')}"
+            answer = _agent.answer_about_run(question, per_lang, context=ctx)
+        except Exception as e:  # noqa: BLE001 — always answer, even if only to say it failed
+            answer = f"⚠️ I couldn't answer that — {_friendly_error(e)}"
+        notify.post(url, f"**Re: “{question[:80]}”**\n\n{answer}")
+
+    threading.Thread(target=_work, daemon=True, name="dqc-ask").start()
+    return f"🤔 Looking into that for EP {rec.get('episode')} — I'll post the answer here shortly."
 
 
 _BOX_AUDIO_EXTS = AUDIO_EXTS | {".mp3", ".m4a"}

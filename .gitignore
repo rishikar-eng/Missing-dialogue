@@ -52,6 +52,9 @@ secrets.local.*
 *.ppk
 .env
 .env.*
+# ...and any *other* env file (server-keys.env, prod.env). The three patterns are NOT
+# redundant: '.env*' misses 'server-keys.env' and '*.env' misses '.env.local'.
+*.env
 # studio voice-key exports etc.
 *_keys.csv
 groq.key

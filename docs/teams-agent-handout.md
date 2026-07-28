@@ -69,24 +69,39 @@ Teams channel
 POST /api/agent/teams          ← backend/server.py  (HMAC-verified Outgoing Webhook)
    │
    ├─ _teams_fast()            ← THE MAIN FUNCTION YOU'LL EDIT (server.py)
-   │     parses check / run / status with regex, NO LLM (see §4 — 5-second limit!)
-   │     ├─ check  -> box_discovery.check_episode()  -> _availability_card()  [Adaptive Card]
-   │     ├─ run    -> _launch_run()  -> Fargate task(s) or in-process job
-   │     └─ status -> run_store / fargate.status_parallel() -> results + download links
+   │     parses help / runs / check / run / status with regex, NO LLM (§4 — 5-second limit!)
+   │     ├─ check   -> box_discovery.check_episode()  -> _availability_card()  [Adaptive Card]
+   │     ├─ run     -> _launch_run()  -> Fargate task(s) or in-process job  (+ notify.watch)
+   │     ├─ status  -> _run_status()  -> _status_text() + _status_card()
+   │     └─ (no match) -> _ask_async(): instant ack, LLM answer PUSHED later (§4.1)
    │
-   └─ (the richer LLM agent lives on /api/agent/chat — backend/agent.py + router.py)
+   └─ (the older LLM chat surface lives on /api/agent/chat — backend/agent.py + router.py)
+
+                    ┌─ backend/notify.py — daemon thread; posts the finished run into the
+                    │   channel via an Incoming Webhook so nobody has to poll (§5.1)
 ```
 
 | File | What it does |
 |---|---|
-| `backend/server.py` | **All the Teams surface.** `_teams_fast`, `_availability_card`, `agent_go` (the Run button), `_launch_run`, `/api/agent/dl` (downloads) |
-| `backend/agent.py` | L2 worker agent (Claude Haiku) — natural-language path, used by `/api/agent/chat` |
+| `backend/server.py` | **All the Teams surface.** `_teams_fast` (commands), `_run_status` (a run's state as data), `_status_text` / `_status_card` (rendering), `_availability_card`, `agent_go` (the Run button), `_launch_run`, `_ask_async`, `/api/agent/dl` |
+| `backend/notify.py` | Proactive completion messages via a Teams **Incoming Webhook** — the only way this bot can speak unprompted (§5.1) |
+| `backend/results.py` | Loads a finished run's FULL per-language results (local disk or S3) + the query helpers the LLM's tools use. Background use only — it's megabytes |
+| `backend/xlang.py` | Cross-language root cause (script problem vs one vendor's gap). Shared by the workbook and the chat reply so they can't disagree |
+| `backend/agent.py` | `answer_about_run()` — the read-only tool loop behind `_ask_async`; plus the older L2 worker agent used by `/api/agent/chat` |
 | `backend/router.py` | L3 router (Claude Sonnet) — picks which series a message is about |
 | `backend/series_registry.json` | Which shows exist + their Box folder ids. **Data, not code** — add a show without touching code |
 | `backend/box_discovery.py` | Finds script/audio/dub tracks in Box by naming convention |
-| `backend/fargate.py` | Dispatches heavy runs to AWS Fargate; reads status/results from S3 |
-| `backend/run_store.py` | Persists runs to disk so `status` survives a server restart |
+| `backend/fargate.py` | Dispatches heavy runs to AWS Fargate; reads status/results from S3; `ensure_summary` builds+caches the cross-language view |
+| `backend/run_store.py` | Persists runs to disk so `status` survives a restart; also the notifier's work queue |
 | `docs/teams-setup.md` | How the Teams webhook was registered |
+
+**Where a number in a Teams message comes from.** The engine's full result is reduced ONCE, by
+`episode_runner._lang_summary()`, into a compact per-language digest. That digest is what gets
+written to S3 (`status.json`) for cloud runs and to the run store for local ones, and it is
+what every reply renders. **If you want to show something new in Teams, add it there first** —
+adding it to the renderer alone will find nothing to render. Every field except
+`missing`/`mismatch`/`extra` must be read with a default: records written by older builds don't
+have them.
 
 ---
 
@@ -101,8 +116,25 @@ Teams **Outgoing Webhooks must respond in ~5 seconds** or the user sees
 - Box lookups were also parallelised (9.9 s → 2.1 s) to fit inside that budget.
 
 **If you add anything to the Teams path, keep the reply under ~3 s.** Anything slow must be
-kicked off in the background and reported later via `status`. Do not "just call the LLM" in
-`_teams_fast` — that regression has already broken this feature once.
+kicked off in the background and reported later. Do not "just call the LLM" in `_teams_fast` —
+that regression has already broken this feature once.
+
+Measured after the current changes (`help` 0.6 s cold / <25 ms warm, `runs` 24 ms, `status`
+5 ms with AWS stubbed, `ask` ack 5 ms). The only real cost on the status path is AWS, which is
+now one batched `describe_tasks` plus concurrent S3 reads — it used to be 12 serial round-trips
+for six languages.
+
+### 4.1 The escape hatch: answer asynchronously
+An unrecognised message goes to `_ask_async()`, which replies *immediately* ("looking into
+that…"), runs Claude Haiku with read-only tools over the run's full results on a background
+thread, and **pushes** the answer into the channel. That's how you get natural-language
+answers without touching the 5 s budget. It needs both an Incoming Webhook (§5.1) and
+`ANTHROPIC_API_KEY`; without either it falls back to the help text.
+
+The tools (`backend/agent.py::_ASK_TOOLS`, backed by `backend/results.py`) are
+`run_overview`, `list_findings`, `character_report`, `cross_language_check`. The system prompt
+is explicit that QC detects *whether* someone spoke, never *what* they said — if you extend
+these tools, keep that guardrail or the bot will start inventing acting notes.
 
 ---
 
@@ -119,6 +151,35 @@ Each task writes its report zip + a `status.json` to S3. `status` then aggregate
 
 Download links are short signed URLs (`/api/agent/dl?d=…`) that redirect to a presigned S3 URL,
 so Teams messages stay readable.
+
+`status` no longer just prints counts. It leads with a **verdict** (🔴 a whole character was
+never delivered · 🟠 lines missing/mistimed · 🟢 clean — the same scale in the roll-up and the
+per-language rows), sorts languages worst-first, and carries the findings that change what
+someone does next: out-of-sync tracks, script rows that failed to parse (= lines never
+checked), mapping issues, loudness flags, and the cross-language root cause. An Adaptive Card
+renders the same data as a table with a collapsed "missing-line examples" drill-down —
+embedded in the payload, so expanding costs no server call.
+
+**One caveat to preserve:** the root-cause reading is computed only from languages that
+actually produced a result. When some failed, the heading says so explicitly ("across the 3 of
+6 languages that completed") — otherwise "absent in EVERY language" would send the studio to
+the script for what is really a missing result.
+
+### 5.1 Proactive completion (setup)
+`backend/notify.py` posts the finished run into the channel so nobody polls. Outgoing Webhooks
+cannot push, so this uses an **Incoming Webhook**: in Teams, channel → ⋯ → Connectors →
+Incoming Webhook → copy the URL, then set
+
+```
+DQC_TEAMS_INCOMING       one URL (single-channel deployments — the usual case)
+DQC_TEAMS_INCOMING_MAP   {"<conversation id>": "<url>"}  for several channels
+DQC_NOTIFY_POLL_S        poll interval, default 45s
+```
+
+With neither set the watcher never starts and everything behaves as before (polling still
+works) — and the `run` confirmation says "ask status" instead of promising a message that can
+never arrive. A run is marked `notified` in the run store after one attempt, successful or
+not: retrying a rotated webhook URL every 45 s forever is worse than one lost announcement.
 
 ---
 
@@ -160,32 +221,44 @@ dialogue-qc`. **Coordinate with Rishi before restarting** — a restart kills an
 
 ---
 
-## 7. Known UX gaps — good starting projects
+## 7. Known UX gaps
 
-1. **No proactive completion message.** A run finishes silently; the user must poll `status`.
-   Teams Outgoing Webhooks *cannot* push messages — fixing this properly needs an **Incoming
-   Webhook** (or a Bot Framework app) to post into the channel when a run completes. High value.
-2. **Errors are raw.** Failures surface as truncated exception text. They should be plain
-   English with a suggested next step.
-3. **The mention must be picked from autocomplete.** Typing `@qc` as plain text silently does
-   nothing (no request reaches the server) — this confused the first users. Worth an onboarding
-   message or a pinned help card.
-4. **No `help` command** listing what the bot understands.
-5. **Intent parsing is regex** — "kick off 42", "is it done?", typos, or a bare "42" may miss.
-   Either broaden the patterns or fall back to the LLM path *asynchronously* (never inline —
-   see §4).
-6. **Only one series is registered** (Kamen Rider Gavv), so series disambiguation is untested.
-7. **Progress is coarse** — `status` says "running" with no percentage or ETA.
-8. **Long messages**: six languages × counts + links is a wall of text; an Adaptive Card table
-   would read far better than plain text.
+**Closed** (2026-07-28): proactive completion (§5.1) · plain-English errors with a next step
+(`_friendly_error`) · a `help` command (and `runs` for history) · async LLM fallback for
+unrecognised messages (§4.1) · Adaptive Card status instead of a text wall · the counts a
+reviewer actually needs (undelivered characters, sync warnings, unparsed script rows, root
+cause) · two reporting bugs where a run with failed languages could still print a green
+"✅ QC done" header.
+
+**Still open — good starting projects:**
+
+1. **The mention must be picked from autocomplete.** Typing `@qc` as plain text silently does
+   nothing (no request reaches the server) — this confused the first users. The `help` text now
+   says so, but a pinned onboarding card in the channel would be better.
+2. **Progress is coarse** — a running fan-out says "3 done, 2 running" with no ETA. The run
+   store has `created_at`/`updated_at` on every past run, so a median per-language duration is
+   available to estimate one.
+3. **Only one series is registered** (Kamen Rider Gavv), so series disambiguation is untested.
+4. **The Run button leaves Teams.** `Action.OpenUrl` → an HTML confirmation page in a browser.
+   `Action.Submit` would keep it in-channel, but that needs a real Bot Framework app rather
+   than an Outgoing Webhook — which would also remove the 5 s limit entirely and allow typing
+   indicators. That's the one remaining *structural* upgrade.
+5. **`_ask_async` answers about the channel's LATEST run only.** "Compare ep 41 and 42" or
+   "which vendor drops the most lines this month" would need the tools to take a job id.
 
 ---
 
 ## 8. Conventions & guardrails
 
 - Match the surrounding style: FastAPI + pydantic, comments explain *why* not *what*.
-- **Never** commit secrets (§0). Check `git status` before every commit.
-- Keep `_teams_fast` free of LLM/network-heavy calls (§4).
+- **Never** commit secrets (§0). Check `git status` before every commit. `.gitignore` covers
+  `.env`, `.env.*` **and** `*.env` — all three patterns are needed (`.env*` misses
+  `server-keys.env`; `*.env` misses `.env.local`).
+- Keep `_teams_fast` free of LLM/network-heavy calls (§4). Slow work goes on a thread and comes
+  back through `notify.post`.
+- New data for a reply starts in `episode_runner._lang_summary`, not in the renderer.
+- `_run_status()` returns **data**, not a formatted message, so the polled reply and the pushed
+  completion message are the same thing. Keep it that way — they drifted apart before.
 - The QC engine (`alignment.py`, `characters.py`, `content_map.py`, `excel_report.py`) is
   validated against real studio deliveries — changing it changes QC results. Stay out unless
   that's the task.
