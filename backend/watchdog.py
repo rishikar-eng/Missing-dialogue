@@ -173,9 +173,10 @@ def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
         "✅ " + ", ".join(f"{k} ({len(v)})" for k, v in list(rep["track_sets"].items())[:4])
         if rep["track_sets"] else "❌ not yet"))
     lines.append("")
+    n_missing = sum(1 for k in ("script", "original", "track_sets") if not rep[k])
     lines.append("**🎬 All set — ready to QC.** Say `@QC check <series> ep <n>` to start."
                  if rep["ready"] else
-                 f"_Waiting on the missing piece{'s' if not rep['script'] and not rep['original'] else ''} above "
+                 f"_Still waiting on {n_missing} item{'s' if n_missing != 1 else ''} above "
                  f"({n_tracks} track file{'s' if n_tracks != 1 else ''} so far)._")
     return "\n".join(lines)
 
