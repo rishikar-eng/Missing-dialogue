@@ -89,37 +89,16 @@ def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
     return out
 
 
-# Two VAD passes over the same dialogue in different languages do NOT produce the same number
-# of windows — a natural pause inside one line gets split on one side and not the other. With
-# one-to-one alignment that asymmetry alone FORCES a false "missing" (measured: 13 Hindi
-# windows vs 12 Tamil for identical content, and the flagged window scored 0.77 — a good match
-# existed but no window was left to pair it with). Gluing windows separated by less than a
-# breath makes the two sides comparably granular, which fixes the cause rather than asking the
-# aligner to paper over it afterwards.
-GLUE_GAP_S = 0.35
-
-
-def _merge_close(segs: list[tuple[float, float]], gap: float = GLUE_GAP_S) -> list[tuple[float, float]]:
-    out: list[list[float]] = []
-    for s, e in segs:
-        if out and s - out[-1][1] <= gap:
-            out[-1][1] = e
-        else:
-            out.append([s, e])
-    return [(round(a, 2), round(b, 2)) for a, b in out]
-
-
 def segment(audio16: np.ndarray) -> list[tuple[float, float]]:
-    """Silero VAD over the ISOLATED dialogue → (start, end) speech windows, with
-    near-adjacent windows glued so both languages segment at a comparable granularity."""
+    """Silero VAD over the ISOLATED dialogue → (start, end) speech windows."""
     import torch
     from silero_vad import get_speech_timestamps, load_silero_vad
     vad = getattr(segment, "_vad", None) or load_silero_vad()
     segment._vad = vad
     ts = get_speech_timestamps(torch.from_numpy(audio16), vad,
                                sampling_rate=16000, return_seconds=True)
-    merged = _merge_close([(t["start"], t["end"]) for t in ts])
-    return [(s, e) for s, e in merged if (e - s) >= MIN_SEG_S]
+    return [(round(t["start"], 2), round(t["end"], 2)) for t in ts
+            if (t["end"] - t["start"]) >= MIN_SEG_S]
 
 
 def embed(audio16: np.ndarray, segs: list[tuple[float, float]], lang3: str):
