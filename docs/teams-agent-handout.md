@@ -178,6 +178,17 @@ dialogue-qc`. **Coordinate with Rishi before restarting** — a restart kills an
 7. **Progress is coarse** — `status` says "running" with no percentage or ETA.
 8. **Long messages**: six languages × counts + links is a wall of text; an Adaptive Card table
    would read far better than plain text.
+9. **Download links render as raw URLs** ← *good first task, already agreed as yours*.
+   A finished 6-language run currently posts something like:
+   ```
+   ✅ Bengali: 4 missing, 13 mismatch — https://13-205-42-228.sslip.io/api/agent/dl?d=eyJzMyI6…
+   ```
+   The signed token is ~150 chars, so each line wraps 2–3 times and the actual counts get
+   buried. Teams renders **markdown** in webhook replies, so `[Download report](url)` collapses
+   it to one clickable word. Built in `_teams_fast`'s parallel-status branch in
+   `backend/server.py` (search for `_dl_s3(` and the `lines.append(f"✅ {lang}…")` loop).
+   Worth doing alongside #8 — an Adaptive Card with one row per language, counts in columns and
+   a Download action button, would replace the whole text blob.
 
 ---
 
