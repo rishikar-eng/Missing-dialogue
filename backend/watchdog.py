@@ -154,6 +154,54 @@ def readiness(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def series_readiness(token: str, episode: int) -> dict[str, Any] | None:
+    """Authoritative readiness for a registered series' episode, via the same check the
+    `@QC check` command uses. Far cheaper AND more complete than crawling the voiceover
+    tree: it looks up just this episode's script/original/tracks across every language
+    (~2s), instead of walking ~1000 files per language. Returns None if unavailable."""
+    try:
+        from . import box_discovery, series_registry
+        key, cfg = series_registry.resolve("gavv")
+        rep = box_discovery.check_episode(token, key, cfg, int(episode))
+        langs = rep.get("languages", {})
+        return {
+            "series": rep.get("series"), "episode": episode,
+            "script_ok": rep["script"].get("present"),
+            "original_ok": rep["original"].get("present"),
+            "ready": {l: v.get("tracks") for l, v in langs.items() if v.get("present")},
+            "not_delivered": [l for l, v in langs.items() if not v.get("present")],
+            "runnable": rep["summary"]["runnable"],
+        }
+    except Exception as e:  # noqa: BLE001 — never break a scan over the enrichment step
+        print("[watchdog] series check failed:", str(e)[:120])
+        return None
+
+
+def _fmt_series(new: list[dict[str, Any]], s: dict[str, Any]) -> str:
+    """Card for a registered series: what landed + this episode's real cross-language state."""
+    lines = [f"**📁 {s['series']} — EP {s['episode']} · {len(new)} new file"
+             f"{'s' if len(new) != 1 else ''}**", ""]
+    for f in sorted(new, key=lambda x: x["path"])[:12]:
+        loc = f"  _(in {f['folder']})_" if f.get("folder") not in ("", "root") else ""
+        lines.append(f"• **{f['name']}**{_size(f['size'])} — added by {f['who']}{loc}")
+    if len(new) > 12:
+        lines.append(f"• …and {len(new) - 12} more")
+    lines += ["",
+              f"Script: {'✅' if s['script_ok'] else '❌ not yet'}",
+              f"Original audio: {'✅' if s['original_ok'] else '❌ not yet'}"]
+    if s["ready"]:
+        lines.append("Dub speaker tracks: ✅ "
+                     + ", ".join(f"{l} ({n})" for l, n in s["ready"].items()))
+    else:
+        lines.append("Dub speaker tracks: ❌ not yet")
+    if s["not_delivered"]:
+        lines.append(f"Not delivered yet: {', '.join(s['not_delivered'])}")
+    lines.append("")
+    lines.append(f"**▶ Ready to QC.** Say `@QC check gavv ep {s['episode']}` to kick it off."
+                 if s["runnable"] else "_Not enough delivered to QC this episode yet._")
+    return "\n".join(lines)
+
+
 def _load_state() -> dict[str, Any]:
     try:
         return json.loads(_STATE.read_text(encoding="utf-8"))
@@ -265,7 +313,12 @@ def run_once(folders: list[str] | None = None, announce: bool = True) -> dict[st
         first_run = not prev and not state.get(fid)
         label = state.get(fid, {}).get("label") or _folder_name(token, fid)
         if new and announce and not first_run:
-            post_teams(_fmt(new, rep, label))
+            # If the new files name an episode of a registered series, report that episode's
+            # REAL cross-language state (cheap targeted lookup) rather than only what happens
+            # to sit in this watched folder.
+            ep = rep.get("episode")
+            srep = series_readiness(token, ep) if ep else None
+            post_teams(_fmt_series(new, srep) if srep else _fmt(new, rep, label))
         elif first_run:
             print(f"[watchdog] baseline for {fid}: {len(files)} files (no announcement)")
         state[fid] = {"files": {k: {"name": v["name"]} for k, v in files.items()},
