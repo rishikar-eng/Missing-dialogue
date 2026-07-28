@@ -143,17 +143,33 @@ def _save_state(d: dict[str, Any]) -> None:
 
 
 def post_teams(text: str, webhook: str | None = None) -> bool:
-    """Post an unprompted message into the Teams channel via an Incoming Webhook."""
+    """Post an unprompted message into the Teams channel.
+
+    The endpoint is a Power Automate 'Send webhook alerts to a channel' flow. Verified by
+    experiment against the live channel: a bare {"text": ...} body is accepted with HTTP 202
+    but **never appears in the channel** — it must be an Adaptive Card (or a legacy
+    MessageCard, kept below as a fallback). An Adaptive Card TextBlock renders a useful subset
+    of markdown (**bold**, bullets, links), so the message body is reused as-is.
+    """
     url = webhook or os.environ.get("DQC_TEAMS_INCOMING", "")
     if not url:
         print("[watchdog] no DQC_TEAMS_INCOMING set — would have posted:\n" + text)
         return False
-    try:
-        r = httpx.post(url, json={"text": text}, timeout=20)
-        return r.status_code < 300
-    except Exception as e:  # never let a posting failure break the scan loop
-        print("[watchdog] post failed:", e)
-        return False
+    card = {"type": "message", "attachments": [{
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "content": {"type": "AdaptiveCard",
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.4",
+                    "body": [{"type": "TextBlock", "text": text, "wrap": True}]}}]}
+    legacy = {"@type": "MessageCard", "@context": "http://schema.org/extensions",
+              "summary": "QC Watchdog", "text": text}
+    for body in (card, legacy):
+        try:
+            if httpx.post(url, json=body, timeout=20).status_code < 300:
+                return True
+        except Exception as e:  # never let a posting failure break the scan loop
+            print("[watchdog] post failed:", e)
+    return False
 
 
 def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
