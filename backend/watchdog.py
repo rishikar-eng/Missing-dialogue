@@ -65,6 +65,16 @@ def _list(token: str, folder_id: str) -> list[dict[str, Any]]:
         params["marker"] = marker
 
 
+def _folder_name(token: str, folder_id: str) -> str:
+    """The folder's real Box name — a raw id reads badly in a chat message."""
+    try:
+        r = httpx.get(f"{_API}/folders/{folder_id}", params={"fields": "name"},
+                      headers=_headers(token), timeout=20)
+        return r.json().get("name") or f"Box folder {folder_id}"
+    except Exception:
+        return f"Box folder {folder_id}"
+
+
 def scan_tree(token: str, folder_id: str, max_depth: int = 3) -> dict[str, dict[str, Any]]:
     """Walk a folder tree -> {file_id: {name, path, size, who, when, folder, folder_id}}.
     Depth-limited: a watched root can be huge, and we only care about episode-level files."""
@@ -172,28 +182,51 @@ def post_teams(text: str, webhook: str | None = None) -> bool:
     return False
 
 
+def _size(n: float) -> str:
+    """Human file size. Studio deliveries run to hundreds of MB, but a stray small file
+    shouldn't read as '0 MB'."""
+    if not n:
+        return ""
+    for unit, div in (("GB", 1e9), ("MB", 1e6), ("KB", 1e3)):
+        if n >= div:
+            return f" · {n/div:.1f} {unit}".replace(".0 ", " ")
+    return f" · {int(n)} B"
+
+
 def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
-    """The Teams message: what arrived (name + who), then whether QC can start."""
+    """The Teams message: what arrived (name + who), then whether QC can be STARTED.
+
+    Deliberately does NOT claim the delivery is complete. How many speaker tracks an episode
+    should have varies by studio, series and even episode — there is no reliable expected
+    count, and determining whether every character was delivered is exactly what QC itself
+    does. So this reports that the three required INGREDIENTS are present and QC can run;
+    it never asserts that nothing is missing.
+    """
     lines = [f"**📁 {label} — {len(new)} new file{'s' if len(new) != 1 else ''}**", ""]
     for f in sorted(new, key=lambda x: x["path"])[:15]:
-        mb = f" · {f['size']/1e6:.0f} MB" if f["size"] else ""
         loc = f"  _(in {f['folder']})_" if f.get("folder") not in ("", "root") else ""
-        lines.append(f"• **{f['name']}**{mb} — added by {f['who']}{loc}")
+        lines.append(f"• **{f['name']}**{_size(f['size'])} — added by {f['who']}{loc}")
     if len(new) > 15:
         lines.append(f"• …and {len(new) - 15} more")
     lines.append("")
-    n_tracks = sum(len(v) for v in rep["track_sets"].values())
     lines.append(f"Script: {'✅ ' + rep['script'][0]['name'] if rep['script'] else '❌ not yet'}")
     lines.append(f"Original audio: {'✅ ' + rep['original'][0]['name'] if rep['original'] else '❌ not yet'}")
-    lines.append("Dub speaker tracks: " + (
-        "✅ " + ", ".join(f"{k} ({len(v)})" for k, v in list(rep["track_sets"].items())[:4])
-        if rep["track_sets"] else "❌ not yet"))
+    if rep["track_sets"]:
+        sets = ", ".join(f"{k} — {len(v)} track{'s' if len(v) != 1 else ''}"
+                         for k, v in list(rep["track_sets"].items())[:5])
+        lines.append(f"Dub speaker tracks: ✅ {sets}")
+    else:
+        lines.append("Dub speaker tracks: ❌ not yet")
     lines.append("")
-    n_missing = sum(1 for k in ("script", "original", "track_sets") if not rep[k])
-    lines.append("**🎬 All set — ready to QC.** Say `@QC check <series> ep <n>` to start."
-                 if rep["ready"] else
-                 f"_Still waiting on {n_missing} item{'s' if n_missing != 1 else ''} above "
-                 f"({n_tracks} track file{'s' if n_tracks != 1 else ''} so far)._")
+    if rep["ready"]:
+        lines.append("**▶ Everything needed to start QC is here.** "
+                     "Say `@QC check <series> ep <n>` to kick it off.")
+        lines.append("_QC will confirm whether every character's track actually made it — "
+                     "track counts vary by studio, so that's what the check is for._")
+    else:
+        want = [n for n, k in (("script", "script"), ("original audio", "original"),
+                               ("dub speaker tracks", "track_sets")) if not rep[k]]
+        lines.append(f"_Still waiting on: {', '.join(want)}._")
     return "\n".join(lines)
 
 
@@ -211,7 +244,7 @@ def run_once(folders: list[str] | None = None, announce: bool = True) -> dict[st
         new = [f for k, f in files.items() if k not in prev]
         rep = readiness(files)
         first_run = not prev and not state.get(fid)
-        label = state.get(fid, {}).get("label") or f"Box folder {fid}"
+        label = state.get(fid, {}).get("label") or _folder_name(token, fid)
         if new and announce and not first_run:
             post_teams(_fmt(new, rep, label))
         elif first_run:
