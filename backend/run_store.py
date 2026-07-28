@@ -63,3 +63,23 @@ def latest_for(conv: str) -> dict[str, Any] | None:
     with _LOCK:
         recs = [r for r in _load().values() if r.get("conv") == conv]
     return max(recs, key=lambda r: r.get("updated_at", 0)) if recs else None
+
+
+def recent_for(conv: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Newest-first runs for a conversation — so a user can find an earlier episode's report
+    without scrolling the channel."""
+    with _LOCK:
+        recs = [r for r in _load().values() if r.get("conv") == conv]
+    return sorted(recs, key=lambda r: r.get("updated_at", 0), reverse=True)[:limit]
+
+
+def unnotified() -> list[dict[str, Any]]:
+    """Runs with a push target that haven't been announced yet — the proactive notifier's work
+    queue (see backend/notify.py).
+
+    Deliberately NOT filtered to status == 'running': a short local run can finish before the
+    watcher's first poll, and filtering on 'running' would drop it from the queue before it was
+    ever announced. The notifier decides whether a record has settled; this only decides whether
+    it still needs looking at."""
+    with _LOCK:
+        return [r for r in _load().values() if r.get("notify_url") and not r.get("notified")]

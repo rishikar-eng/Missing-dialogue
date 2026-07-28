@@ -85,6 +85,7 @@ def main() -> int:
         "status": r.get("status"), "episode": r.get("episode", episode),
         "series": r.get("series") or cfg.get("display_name"),
         "summary": r.get("summary_by_language"), "notes": r.get("notes"),
+        "cross_language": r.get("cross_language"),
         "why": r.get("why"), "zip_key": zip_key,
     })
     print(json.dumps({"status": r.get("status"), "zip_key": zip_key,

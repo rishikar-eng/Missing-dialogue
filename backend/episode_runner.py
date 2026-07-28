@@ -25,7 +25,7 @@ from typing import Any, Callable
 import numpy as np
 import soundfile as sf
 
-from . import box_discovery, box_fetch, box_oauth
+from . import box_discovery, box_fetch, box_oauth, xlang
 
 AUDIO_EXT = box_discovery.AUDIO_EXT
 _OUT_ROOT = Path(os.environ.get("DQC_DATA_ROOT", tempfile.gettempdir())) / "agent_out"
@@ -75,6 +75,94 @@ def _write_ref_audio(errors: list[dict], original_path: str, out_path: Path,
     if tl is not None:
         sf.write(str(timeline_path), tl, sr, format="FLAC")
     return out_path
+
+
+# How many names to carry in the compact summary before it's just "+N more". These land in
+# a Teams message, so the cap is about readability, not size.
+_TOP_N = 4
+
+
+def _hhmmss(s: float | None) -> str:
+    """Episode timecode for a chat message — the same HH:MM:SS.s the workbook uses."""
+    if s is None:
+        return ""
+    s = max(0.0, float(s))
+    return f"{int(s // 3600):02d}:{int((s % 3600) // 60):02d}:{s % 60:04.1f}"
+
+
+def _lang_summary(res: dict[str, Any]) -> dict[str, Any]:
+    """Compact, JSON-safe digest of ONE language's analysis — the record every downstream
+    consumer sees (S3 status.json for cloud runs, run_store for local ones, and from there
+    the Teams reply).
+
+    It used to carry only missing/mismatch/extra, so findings the pipeline had already
+    computed — an entire character never delivered, a track out of sync, script rows that
+    failed to parse and were therefore never checked — reached the workbook but never the
+    chat. Those are exactly the findings that change what someone does next, so they're
+    summarised here. The full detail still lives in the workbook; this is the headline.
+
+    Keys `missing`/`mismatch`/`extra` keep their original names and meaning — older records
+    already written to S3 lack the rest, so every reader must treat the new keys as optional.
+    """
+    align = res.get("alignment") or {}
+    s = align.get("summary") or {}
+    chars = res.get("characters") or []
+
+    # Characters with scripted lines but no track at all (and not bundled into a group stem):
+    # nobody delivered them. The single most actionable finding in the whole report.
+    undelivered = [c.get("name") or c.get("id") for c in chars
+                   if not c.get("channel") and not c.get("grouped_in")
+                   and (c.get("line_count") or 0) > 0]
+
+    # Who to chase first: characters ranked by how many of their lines are missing.
+    missed: dict[str, int] = {}
+    for e in align.get("errors") or []:
+        if e.get("type") == "MISSING" and e.get("character"):
+            missed[e["character"]] = missed.get(e["character"], 0) + 1
+    by_name = {c.get("id"): (c.get("name") or c.get("id")) for c in chars}
+    top = sorted(missed.items(), key=lambda kv: -kv[1])[:_TOP_N]
+
+    # A uniformly late/early track is a whole-delivery problem, not a per-line one.
+    sync = [{"channel": w.get("channel"), "offset_s": w.get("offset_s")}
+            for w in (align.get("sync_warnings") or [])][:_TOP_N]
+
+    # Dropped script rows are lines that were never checked — a "0 missing" that omits this
+    # is misleading, so it travels with the counts rather than living only in the workbook.
+    ps = res.get("parse_stats") or {}
+
+    # A few concrete missing lines (timecode + who + what was said). Enough for a reviewer to
+    # jump straight to the tape from chat without opening the workbook; the workbook still
+    # holds all of them. Capped because this rides inside a chat message.
+    samples = []
+    for e in align.get("errors") or []:
+        if e.get("type") != "MISSING" or e.get("script_start_s") is None:
+            continue
+        samples.append({
+            "at": _hhmmss(e.get("script_start_s")),
+            "character": by_name.get(e.get("character"), e.get("character")),
+            "text": (e.get("text") or "").strip()[:70],
+        })
+        if len(samples) >= 6:
+            break
+
+    return {
+        "missing": s.get("n_missing", 0),
+        "mismatch": s.get("n_mismatch", 0),
+        "extra": s.get("n_extra", 0),
+        "misaligned": s.get("n_misaligned", 0),
+        "characters_checked": s.get("n_characters_checked", 0),
+        "tracks": len(res.get("channels") or []),
+        "no_audio": len(undelivered),
+        "undelivered": undelivered[:_TOP_N],
+        "undelivered_more": max(0, len(undelivered) - _TOP_N),
+        "top_missing": [{"character": by_name.get(cid, cid), "lines": n} for cid, n in top],
+        "sync_warnings": sync,
+        "loudness_flags": len(res.get("loudness_flags") or []),
+        "naming_issues": len(res.get("naming_issues") or []),
+        "script_lines": ps.get("parsed"),
+        "script_dropped": ps.get("dropped") or 0,
+        "examples": samples,
+    }
 
 
 def _download_stems(token: str, box: box_discovery._Box, cfg: dict[str, Any],
@@ -206,12 +294,18 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
         except Exception:  # noqa: BLE001 — never fail a run over the companion JSON
             results_path = None
 
-        summary = {lang: {"missing": r["alignment"]["summary"]["n_missing"],
-                          "mismatch": r["alignment"]["summary"].get("n_mismatch", 0),
-                          "extra": r["alignment"]["summary"]["n_extra"]}
-                   for lang, r in per_lang.items()}
+        summary = {lang: _lang_summary(r) for lang, r in per_lang.items()}
+        # The cross-language reading (script problem vs one vendor's gap) — computed here so a
+        # single-task run carries it without anyone re-reading the per-language results. The
+        # per-LANGUAGE fan-out can't: each task sees one language, so its aggregate is rebuilt
+        # from the uploaded xlang.json files (fargate.ensure_summary).
+        try:
+            cross = xlang.headline(per_lang)
+        except Exception:  # noqa: BLE001 — a reporting extra must never fail the run
+            cross = []
         return {
             "status": "ok",
+            "cross_language": cross,
             "series": cfg.get("display_name", key),
             "episode": n,
             "languages": list(per_lang),
