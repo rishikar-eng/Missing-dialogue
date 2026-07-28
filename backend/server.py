@@ -1282,7 +1282,9 @@ def _lang_block(lang: str, s: dict[str, Any], dl: str | None = None) -> list[str
         out.append(f"    ⓘ {', '.join(info)} (detail in the workbook)")
 
     if dl:
-        out.append(f"    ⬇ {dl}")
+        # Markdown link, not a bare URL: the signed token is ~150 chars, so a raw link wraps
+        # two or three times in Teams and buries the counts above it.
+        out.append(f"    [⬇ Download report]({dl})")
     return out
 
 
@@ -1490,7 +1492,7 @@ def _status_text(st: dict[str, Any], report_label: str = "Cross-language summary
         parts.append(f"**Root cause — same character across {_cross_scope(st)}**\n"
                      + "\n".join(st["cross"]))
     if st.get("summary_url"):
-        parts.append(f"📊 {report_label}: {st['summary_url']}")
+        parts.append(f"[📊 {report_label}]({st['summary_url']})")
     return "\n\n".join(parts)
 
 
