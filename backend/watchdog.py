@@ -121,6 +121,21 @@ def classify(f: dict[str, Any]) -> str:
     return "other"
 
 
+def episode_of(files: dict[str, dict[str, Any]]) -> int | None:
+    """Which episode these files belong to, read from their names/paths ('Gavv_#42_…',
+    'GAVV EPI 42 …', 'EP 42'). The most common number wins so one oddly-named file can't
+    mislabel the batch. None when nothing looks like an episode."""
+    counts: dict[int, int] = {}
+    for f in files.values():
+        hay = f"{f.get('path', '')} {f['name']}"
+        m = (re.search(r"#\s*(\d{1,3})", hay)
+             or re.search(r"(?i)\bEP(?:ISODE|I)?\s*[-_]?\s*(\d{1,3})\b", hay))
+        if m:
+            n = int(m.group(1))
+            counts[n] = counts.get(n, 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
 def readiness(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Can we run QC yet? Needs a script, an original/reference audio, and dub speaker tracks.
     Tracks are grouped by their folder, since one folder = one language's speaker set."""
@@ -134,6 +149,7 @@ def readiness(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
     track_sets = {k: v for k, v in tracks.items() if len(v) >= 2}
     return {
         "script": scripts, "original": originals, "track_sets": track_sets,
+        "episode": episode_of(files),
         "ready": bool(scripts and originals and track_sets),
     }
 
@@ -202,7 +218,11 @@ def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
     does. So this reports that the three required INGREDIENTS are present and QC can run;
     it never asserts that nothing is missing.
     """
-    lines = [f"**📁 {label} — {len(new)} new file{'s' if len(new) != 1 else ''}**", ""]
+    # Lead with the EPISODE when the filenames reveal one — that's what the team tracks; the
+    # folder is just where it landed. Only Kamen Rider Gavv is a registered series today.
+    ep = rep.get("episode")
+    head = f"Kamen Rider Gavv — EP {ep}" if ep else label
+    lines = [f"**📁 {head} — {len(new)} new file{'s' if len(new) != 1 else ''}**", ""]
     for f in sorted(new, key=lambda x: x["path"])[:15]:
         loc = f"  _(in {f['folder']})_" if f.get("folder") not in ("", "root") else ""
         lines.append(f"• **{f['name']}**{_size(f['size'])} — added by {f['who']}{loc}")
@@ -219,10 +239,9 @@ def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
         lines.append("Dub speaker tracks: ❌ not yet")
     lines.append("")
     if rep["ready"]:
-        lines.append("**▶ Everything needed to start QC is here.** "
-                     "Say `@QC check <series> ep <n>` to kick it off.")
-        lines.append("_QC will confirm whether every character's track actually made it — "
-                     "track counts vary by studio, so that's what the check is for._")
+        ep = rep.get("episode")
+        cmd = f"@QC check gavv ep {ep}" if ep else "@QC check gavv ep <n>"
+        lines.append(f"**▶ Ready to QC.** Say `{cmd}` to kick it off.")
     else:
         want = [n for n, k in (("script", "script"), ("original audio", "original"),
                                ("dub speaker tracks", "track_sets")) if not rep[k]]
