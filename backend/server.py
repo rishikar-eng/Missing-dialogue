@@ -1287,6 +1287,24 @@ def _lang_block(lang: str, s: dict[str, Any], dl: str | None = None) -> list[str
 
 
 def _run_status(jid: str | None, rec: dict[str, Any] | None, job: Any) -> dict[str, Any]:
+    """Resolve a run's state AND settle the stored record once it's terminal.
+
+    A cloud fan-out run's outcome lives in ECS/S3, so `status` reported "done" correctly by
+    querying live while the run_store record sat at "running" forever — which made `runs` list
+    finished episodes as still running. Persisting here (rather than in the caller) keeps every
+    consumer consistent, since this is already the single place a run's state is resolved.
+    """
+    import time as _t                       # server.py imports time locally, not at module level
+    out = _run_status_raw(jid, rec, job)
+    if jid and out.get("settled") and (rec or {}).get("status") == "running":
+        try:
+            run_store.record(jid, status="done", finished_at=_t.time())
+        except Exception:  # noqa: BLE001 — reporting must never fail on bookkeeping
+            pass
+    return out
+
+
+def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> dict[str, Any]:
     """Everything 'status' knows about one run, as DATA rather than a formatted reply:
 
         {settled, header, verdict, lines[], cross[], summaries{}, summary_url, text}
