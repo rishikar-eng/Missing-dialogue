@@ -1235,6 +1235,28 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                 "text": f"✅ EP {ep_no} QC done:\n- " + "\n- ".join(lines)
                         + f"\n\nDownload report: {_dl_link(jid)}"}
 
+    # SCAN — check the watched Box folders right now instead of waiting for the timer.
+    # Useful when someone has just uploaded (and essential when demoing).
+    if re.search(r"\b(scan|watch|new files?|uploads?|what'?s new|anything new)\b", low):
+        import threading
+
+        from . import watchdog as _wd
+        if not os.environ.get("DQC_WATCH_FOLDERS"):
+            return {"type": "message", "text": "No Box folders are being watched yet (DQC_WATCH_FOLDERS)."}
+
+        def _scan() -> None:
+            try:
+                s = _wd.run_once(announce=True)
+                if not any(v["new"] for v in s.values()):        # nothing new -> say so, don't go quiet
+                    _wd.post_teams("🔍 Checked Box — no new files since the last scan.")
+            except Exception as e:  # noqa: BLE001
+                _wd.post_teams(f"🔍 Box scan failed: {str(e)[:160]}")
+
+        # A full tree walk can outrun Teams' ~5s reply window, so do it off-thread and let the
+        # watchdog's own webhook deliver the detail (same reason _teams_fast avoids the LLM).
+        threading.Thread(target=_scan, daemon=True).start()
+        return {"type": "message", "text": "🔍 Checking the Box watch folder now — I'll post what I find in a moment."}
+
     # episode + series (fall back to the session's last if not restated)
     m = re.search(r"(?:ep|epi|episode)\s*#?\s*(\d{1,3})", low) or re.search(r"\b(\d{1,3})\b", low)
     ep = int(m.group(1)) if m else fast.get("episode")
