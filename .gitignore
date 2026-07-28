@@ -42,5 +42,17 @@ e[0-9]*_*.txt
 .claude/settings.local.json
 
 # Local secrets — NEVER commit (Teams webhook token, etc.)
+# THIS REPO IS PUBLIC: anything committed here is world-readable, forever, even if
+# deleted later (it stays in git history). Keep every credential out of it.
 secrets.local.*
 *.secret
+# SSH private keys (e.g. the EC2 key) — comments must be on their OWN line here,
+# a trailing comment becomes part of the pattern and silently fails to match.
+*.pem
+*.ppk
+.env
+.env.*
+# studio voice-key exports etc.
+*_keys.csv
+groq.key
+*.key
