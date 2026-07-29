@@ -124,8 +124,23 @@ def embed(audio16: np.ndarray, segs: list[tuple[float, float]], lang3: str):
         p = os.path.join(d, f"{k:04d}.wav")
         sf.write(p, audio16[int(s * 16000):int(e * 16000)], 16000)
         paths.append(p)
-    emb = pipe.predict(paths, batch_size=4)
+    emb = pipe.predict(paths, batch_size=16)
     return torch.nn.functional.normalize(emb, dim=1)
+
+
+def _load16(path: str) -> np.ndarray:
+    """An audio file as 16 kHz mono float32, no separation — for inputs that are ALREADY
+    clean dialogue (e.g. a sum of delivered per-character stems)."""
+    import soundfile as sf
+    import torch
+    import torchaudio
+    data, sr = sf.read(path, dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    if sr != 16000:
+        data = torchaudio.functional.resample(
+            torch.from_numpy(data)[None], sr, 16000).squeeze(0).numpy()
+    return data.astype("float32")
 
 
 # --- second pass: confirm an absence before reporting it ------------------------------
@@ -136,26 +151,33 @@ def embed(audio16: np.ndarray, segs: list[tuple[float, float]], lang3: str):
 #
 # So every candidate is re-checked WITHOUT segmentation: slide a window of the same duration
 # across the dub audio around where the line should be, embed each position, and take the best.
-# A genuinely dropped line has no match anywhere; a segmentation artefact finds its counterpart
+# A genuinely dropped line has no match THERE; a segmentation artefact finds its counterpart
 # as soon as it isn't forced onto a window boundary. Only the few flagged windows are scanned,
 # so the cost is small.
-SCAN_SPAN_S = 15.0    # how far either side of the expected position to look
-SCAN_STEP_S = 0.5     # slide granularity
-RESCUE_SIM = 0.55     # a match this good means the content IS there (real drops score well below)
+#
+# THE SPAN MUST BE TIGHT. At ±15 s the scan reached the NEIGHBOURING lines of the same scene,
+# and same-scene speech scores high enough cross-lingually (>=0.55 measured) that a genuinely
+# silenced line was "found" in its neighbour and cleared — a false negative. The rescue's whole
+# premise is that a line which merely lost the window lottery sits at (nearly) its expected
+# time; content found only seconds away is a DIFFERENT line. So we scan ±2 s around the
+# expected position (after correcting the pair's overall sync offset) and no further, and a
+# line shifted more than that is reported — "dropped or badly mistimed" is a fair flag.
+SCAN_SPAN_S = 2.0     # how far either side of the (offset-corrected) expected position to look
+SCAN_STEP_S = 0.4     # slide granularity
+RESCUE_SIM = 0.60     # a match this good AT THE RIGHT TIME means the content is there
 
 
 def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str) -> tuple[float, float]:
-    """Best (similarity, dub_start) for this reference window anywhere near `at_s` in the dub.
-    Returns (0.0, -1) when there is nothing to scan."""
+    """Best (similarity, dub_start) for this reference window NEAR `at_s` in the dub.
+    Returns (0.0, -1) when there is nothing to scan. Never widens to the whole file —
+    a far-away match is a different line, and treating it as this one hides real drops."""
     import torch
     dur_total = len(dub16) / 16000.0
     w = max(MIN_SEG_S, window_s)
-    lo = max(0.0, at_s - SCAN_SPAN_S)
-    hi = min(dur_total - w, at_s + SCAN_SPAN_S)
-    if hi <= lo:
-        lo, hi = 0.0, max(0.0, dur_total - w)
+    lo = max(0.0, min(at_s - SCAN_SPAN_S, dur_total - w))
+    hi = max(lo, min(dur_total - w, at_s + SCAN_SPAN_S))
     starts = [round(lo + k * SCAN_STEP_S, 2) for k in range(int((hi - lo) / SCAN_STEP_S) + 1)]
-    starts = [s for s in starts if s + w <= dur_total]
+    starts = [s for s in starts if s + w <= dur_total + 1e-6] or ([lo] if lo + w <= dur_total else [])
     if not starts:
         return 0.0, -1.0
     cand = embed(dub16, [(s, s + w) for s in starts], lang3)
@@ -165,9 +187,13 @@ def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str
 
 
 def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: str,
-            dub_label: str = "dub", tol_s: float = 1.0,
+            dub_label: str = "dub", tol_s: float = 1.0, dub_is_clean: bool = False,
             stage: Any = None) -> dict[str, Any]:
     """Audio-only QC of one dub against its source.
+
+    `dub_is_clean=True` skips separation on the dub side — for a dub input that is already
+    dialogue-only (e.g. the delivered per-character stems summed into one track), where
+    running Demucs would only cost time.
 
     Returns the same report shape as `scriptless.compare_original_to_dub`:
     {errors, summary, channels, unmapped_characters, sync_warnings, tol_s}.
@@ -179,8 +205,12 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     _say("separating dialogue from the original mix")
     ov = separate_dialogue(original_path)
-    _say("separating dialogue from the dub mix")
-    dv = separate_dialogue(dub_path)
+    if dub_is_clean:
+        _say("dub is already clean dialogue — loading without separation")
+        dv = _load16(dub_path)
+    else:
+        _say("separating dialogue from the dub mix")
+        dv = separate_dialogue(dub_path)
 
     oseg, dseg = segment(ov), segment(dv)
     _say(f"speech windows: original={len(oseg)} dub={len(dseg)}")
@@ -206,12 +236,17 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     errors: list[dict[str, Any]] = []
     rescued = 0
+    # The pair's overall sync offset (median drift of the matched pairs): the rescue scan is
+    # deliberately narrow, so it must be centred where this dub actually puts its lines.
+    drifts = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
+    med_drift = drifts[len(drifts) // 2] if drifts else 0.0
     if missing:
-        _say(f"second pass: re-checking {len(missing)} candidate(s) against the dub audio")
+        _say(f"second pass: re-checking {len(missing)} candidate(s) against the dub audio "
+             f"(sync offset {med_drift:+.2f}s)")
     for i in missing:
         s, e = oseg[i]
         best_seg = float(sim[i].max()) if sim.size else 0.0
-        found, at = _rescue(dv, R[i], e - s, s, _lang3(dub_lang))
+        found, at = _rescue(dv, R[i], e - s, s + med_drift, _lang3(dub_lang))
         # Log the score: RESCUE_SIM has to sit ABOVE the similarity that unrelated speech
         # reaches, or the scan clears everything (measured: 0.55 cleared a truly silenced
         # line). These numbers are how it gets calibrated.
@@ -273,8 +308,9 @@ def _missing(i: int, s: float, e: float, ch: str, best: float) -> dict[str, Any]
         "script_start_s": round(s, 3), "script_end_s": round(e, 3),
         "audio_start_s": None, "audio_end_s": None,
         "drift_s": None, "coverage": round(best, 3), "text": None,
-        "message": (f"The original speaks at {s:.2f}–{e:.2f}s and nothing in the dub says "
-                    f"the same thing (best match {best:.0%}) — the line looks dropped."),
+        "message": (f"The original speaks at {s:.2f}–{e:.2f}s and the dub has nothing saying "
+                    f"the same thing there (best match {best:.0%}) — dropped, or moved by "
+                    f"more than a few seconds."),
     }
 
 
