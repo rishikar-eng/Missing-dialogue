@@ -109,7 +109,15 @@ def embed(audio16: np.ndarray, segs: list[tuple[float, float]], lang3: str):
     import soundfile as sf
     import torch
     from sonar.inference_pipelines.speech import SpeechToEmbeddingModelPipeline
-    pipe = SpeechToEmbeddingModelPipeline(encoder=f"sonar_speech_encoder_{lang3}")
+    # Cache per language: an encoder is ~8.6 GB and takes ~40 s to load, and the second
+    # (rescue) pass embeds against the dub language again.
+    cache = getattr(embed, "_pipes", None)
+    if cache is None:
+        cache = embed._pipes = {}
+    pipe = cache.get(lang3)
+    if pipe is None:
+        pipe = cache[lang3] = SpeechToEmbeddingModelPipeline(
+            encoder=f"sonar_speech_encoder_{lang3}")
     d = tempfile.mkdtemp()
     paths = []
     for k, (s, e) in enumerate(segs):
@@ -118,6 +126,42 @@ def embed(audio16: np.ndarray, segs: list[tuple[float, float]], lang3: str):
         paths.append(p)
     emb = pipe.predict(paths, batch_size=4)
     return torch.nn.functional.normalize(emb, dim=1)
+
+
+# --- second pass: confirm an absence before reporting it ------------------------------
+# Alignment is one-to-one, so when the two languages segment differently (measured: 13 windows
+# vs 12 for identical content) a reference window can be left unmatched simply because no dub
+# window was free — not because the line is absent. Scores alone don't separate the two cases:
+# a false "missing" scored 0.77 while a real drop scored 0.75.
+#
+# So every candidate is re-checked WITHOUT segmentation: slide a window of the same duration
+# across the dub audio around where the line should be, embed each position, and take the best.
+# A genuinely dropped line has no match anywhere; a segmentation artefact finds its counterpart
+# as soon as it isn't forced onto a window boundary. Only the few flagged windows are scanned,
+# so the cost is small.
+SCAN_SPAN_S = 15.0    # how far either side of the expected position to look
+SCAN_STEP_S = 0.5     # slide granularity
+RESCUE_SIM = 0.55     # a match this good means the content IS there (real drops score well below)
+
+
+def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str) -> tuple[float, float]:
+    """Best (similarity, dub_start) for this reference window anywhere near `at_s` in the dub.
+    Returns (0.0, -1) when there is nothing to scan."""
+    import torch
+    dur_total = len(dub16) / 16000.0
+    w = max(MIN_SEG_S, window_s)
+    lo = max(0.0, at_s - SCAN_SPAN_S)
+    hi = min(dur_total - w, at_s + SCAN_SPAN_S)
+    if hi <= lo:
+        lo, hi = 0.0, max(0.0, dur_total - w)
+    starts = [round(lo + k * SCAN_STEP_S, 2) for k in range(int((hi - lo) / SCAN_STEP_S) + 1)]
+    starts = [s for s in starts if s + w <= dur_total]
+    if not starts:
+        return 0.0, -1.0
+    cand = embed(dub16, [(s, s + w) for s in starts], lang3)
+    sims = (cand @ ref_vec).squeeze(-1) if ref_vec.ndim > 1 else cand @ ref_vec
+    best = int(torch.argmax(sims))
+    return float(sims[best]), starts[best]
 
 
 def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: str,
@@ -161,9 +205,33 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             best[i] = (j, sc)
 
     errors: list[dict[str, Any]] = []
+    rescued = 0
+    if missing:
+        _say(f"second pass: re-checking {len(missing)} candidate(s) against the dub audio")
     for i in missing:
         s, e = oseg[i]
-        errors.append(_missing(i, s, e, dub_label, float(sim[i].max()) if sim.size else 0.0))
+        best_seg = float(sim[i].max()) if sim.size else 0.0
+        found, at = _rescue(dv, R[i], e - s, s, _lang3(dub_lang))
+        if found >= RESCUE_SIM:
+            # The content IS in the dub, it just didn't get a window under one-to-one
+            # alignment. Report it as retimed if it moved, otherwise say nothing at all.
+            rescued += 1
+            drift = at - s
+            if abs(drift) > tol_s:
+                errors.append({
+                    "type": "MISALIGNED", "subtype": "shifted", "severity": "warn",
+                    "character": None, "channel": dub_label, "script_index": i,
+                    "script_start_s": round(s, 3), "script_end_s": round(e, 3),
+                    "audio_start_s": round(at, 3), "audio_end_s": round(at + (e - s), 3),
+                    "drift_s": round(drift, 2), "coverage": round(found, 3), "text": None,
+                    "message": (f"The line at {s:.2f}s is in the dub, but {abs(drift):.1f}s "
+                                f"{'late' if drift > 0 else 'early'} (match {found:.0%})."),
+                })
+            continue
+        errors.append(_missing(i, s, e, dub_label, max(best_seg, found)))
+    if missing:
+        _say(f"second pass: {rescued}/{len(missing)} cleared as present, "
+             f"{len(missing) - rescued} confirmed missing")
     # A matched line that lands well away from where it should be is present but retimed —
     # the distinction the timeline-only mode could never make.
     for i, (j, sc) in sorted(best.items()):
