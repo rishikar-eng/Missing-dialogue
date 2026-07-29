@@ -212,6 +212,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         s, e = oseg[i]
         best_seg = float(sim[i].max()) if sim.size else 0.0
         found, at = _rescue(dv, R[i], e - s, s, _lang3(dub_lang))
+        # Log the score: RESCUE_SIM has to sit ABOVE the similarity that unrelated speech
+        # reaches, or the scan clears everything (measured: 0.55 cleared a truly silenced
+        # line). These numbers are how it gets calibrated.
+        _say(f"  window @{s:.1f}-{e:.1f}s: aligned-best={best_seg:.2f} "
+             f"scan-best={found:.2f} @{at:.1f}s -> {'cleared' if found >= RESCUE_SIM else 'MISSING'}")
         if found >= RESCUE_SIM:
             # The content IS in the dub, it just didn't get a window under one-to-one
             # alignment. Report it as retimed if it moved, otherwise say nothing at all.
