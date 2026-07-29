@@ -39,6 +39,10 @@ from . import align as _align
 LANG3 = {"hindi": "hin", "tamil": "tam", "telugu": "tel", "kannada": "kan",
          "bengali": "ben", "marathi": "mar", "malayalam": "mal", "english": "eng",
          "punjabi": "pan", "japanese": "jpn"}
+# Whisper wants ISO-639-1.
+LANG1 = {"hindi": "hi", "tamil": "ta", "telugu": "te", "kannada": "kn", "bengali": "bn",
+         "marathi": "mr", "malayalam": "ml", "english": "en", "japanese": "ja",
+         "punjabi": "pa"}
 
 # A window shorter than this is a breath or a click, not a line — embedding it produces a
 # meaningless vector that matches everything, which is how false "missing" flags are born.
@@ -79,6 +83,8 @@ def _separate(path: str, cache: bool = True) -> tuple[np.ndarray, np.ndarray]:
     if data.ndim == 1:
         data = data[:, None]
     wav = torch.from_numpy(data.T).contiguous()
+    if wav.shape[0] == 1:
+        wav = wav.repeat(2, 1)                     # htdemucs is stereo-only; duplicate mono
     if sr != model.samplerate:
         wav = torchaudio.functional.resample(wav, sr, model.samplerate)
     with torch.no_grad():
@@ -160,6 +166,58 @@ def _load16(path: str) -> np.ndarray:
     return data.astype("float32")
 
 
+# --- text engine: transcribe (Groq Whisper) + match meaning (LaBSE) --------------------
+# Chosen over SONAR speech embeddings from measurement, not preference. On identical
+# material, SONAR similarities barely separate (time-matched pairs med 0.68 vs RANDOM
+# windows med 0.72 raw; still overlapping after mean-centering) — 1-3 s VAD fragments of
+# separated audio just don't carry sentence-level meaning. Transcribing first and matching
+# TEXT gives true pairs ~0.85-1.0 vs unrelated ~0.4-0.6: a margin thresholds can live on.
+# The trade: audio (the separated dialogue only) goes to the Groq API.
+
+def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
+    """Groq-hosted whisper-large-v3 → [(start, end, text)] sentence segments."""
+    import io as _io
+
+    import httpx
+    import soundfile as sf
+    buf = _io.BytesIO()
+    sf.write(buf, audio16, 16000, format="WAV")
+    buf.seek(0)
+    key = os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        raise RuntimeError("GROQ_API_KEY is not set (needed for the text engine)")
+    for attempt in range(4):
+        r = httpx.post("https://api.groq.com/openai/v1/audio/transcriptions",
+                       headers={"Authorization": f"Bearer {key}"},
+                       files={"file": ("a.wav", buf.getvalue())},
+                       data={"model": "whisper-large-v3", "language": lang1,
+                             "response_format": "verbose_json"},
+                       timeout=300)
+        if r.status_code == 429:                    # free-tier rate limit: back off and retry
+            import time as _t
+            _t.sleep(15 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        segs = []
+        for s in r.json().get("segments") or []:
+            t = (s.get("text") or "").strip()
+            if t:
+                segs.append((round(float(s["start"]), 2), round(float(s["end"]), 2), t))
+        return segs
+    raise RuntimeError("Groq transcription kept rate-limiting")
+
+
+def embed_text(texts: list[str]):
+    """LaBSE sentence embeddings, L2-normalised (cross-lingual: a line and its translation
+    land close). Model cached per process (~1.9 GB first download)."""
+    from sentence_transformers import SentenceTransformer
+    m = getattr(embed_text, "_m", None)
+    if m is None:
+        m = embed_text._m = SentenceTransformer("sentence-transformers/LaBSE")
+    import torch
+    return torch.from_numpy(m.encode(texts, normalize_embeddings=True))
+
+
 # --- second pass: confirm an absence before reporting it ------------------------------
 # Alignment is one-to-one, so when the two languages segment differently (measured: 13 windows
 # vs 12 for identical content) a reference window can be left unmatched simply because no dub
@@ -184,10 +242,13 @@ SCAN_STEP_S = 0.4     # slide granularity
 RESCUE_SIM = 0.60     # a match this good AT THE RIGHT TIME means the content is there
 
 
-def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str) -> tuple[float, float]:
+def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str,
+            mu=None) -> tuple[float, float]:
     """Best (similarity, dub_start) for this reference window NEAR `at_s` in the dub.
     Returns (0.0, -1) when there is nothing to scan. Never widens to the whole file —
-    a far-away match is a different line, and treating it as this one hides real drops."""
+    a far-away match is a different line, and treating it as this one hides real drops.
+    `mu` is the run's mean embedding: candidates are centred with it so their scores live
+    on the same scale as the (already-centred) `ref_vec`."""
     import torch
     dur_total = len(dub16) / 16000.0
     w = max(MIN_SEG_S, window_s)
@@ -198,6 +259,8 @@ def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str
     if not starts:
         return 0.0, -1.0
     cand = embed(dub16, [(s, s + w) for s in starts], lang3)
+    if mu is not None:
+        cand = torch.nn.functional.normalize(cand - mu, dim=1)
     sims = (cand @ ref_vec).squeeze(-1) if ref_vec.ndim > 1 else cand @ ref_vec
     best = int(torch.argmax(sims))
     return float(sims[best]), starts[best]
@@ -205,8 +268,14 @@ def _rescue(dub16: np.ndarray, ref_vec, window_s: float, at_s: float, lang3: str
 
 def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: str,
             dub_label: str = "dub", tol_s: float = 1.0, dub_is_clean: bool = False,
-            stage: Any = None) -> dict[str, Any]:
+            engine: str = "text", stage: Any = None) -> dict[str, Any]:
     """Audio-only QC of one dub against its source.
+
+    `engine="text"` (default): transcribe both sides (Groq whisper-large-v3) and match the
+    TEXT cross-lingually with LaBSE. Chosen from measurement — see the text-engine note above.
+    Needs GROQ_API_KEY; the separated dialogue audio is sent to the Groq API.
+    `engine="sonar"`: match the SPEECH directly with SONAR encoders — fully in-house, but its
+    similarities did not separate matches from noise on our material; kept for experiments.
 
     `dub_is_clean=True` skips separation on the dub side — for a dub input that is already
     dialogue-only (e.g. the delivered per-character stems summed into one track), where
@@ -229,29 +298,62 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _say("separating dialogue from the dub mix")
         dv = separate_dialogue(dub_path)
 
-    oseg, dseg = segment(ov), segment(dv)
-    _say(f"speech windows: original={len(oseg)} dub={len(dseg)}")
-    if not oseg:
-        return _empty("no speech found in the original after separation", tol_s, dub_label)
-    if not dseg:                                    # a totally silent dub: every line missing
-        errors = [_missing(i, s, e, dub_label, 0.0) for i, (s, e) in enumerate(oseg)]
-        return _report(errors, oseg, dub_label, tol_s)
+    otext: list[str] | None = None
+    dtext: list[str] | None = None
+    mu = None
+    if engine == "text":
+        _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
+        osegs = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
+        _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
+        dsegs = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        oseg = [(s, e) for s, e, _ in osegs]
+        dseg = [(s, e) for s, e, _ in dsegs]
+        otext = [t for _, _, t in osegs]
+        dtext = [t for _, _, t in dsegs]
+        _say(f"lines: original={len(oseg)} dub={len(dseg)}")
+        if not oseg:
+            return _empty("no speech transcribed in the original", tol_s, dub_label)
+        if not dseg:
+            errors = [_missing(i, s, e, dub_label, 0.0, (otext or [None] * len(oseg))[i])
+                      for i, (s, e) in enumerate(oseg)]
+            return _report(errors, oseg, dub_label, tol_s)
+        _say("matching meaning (LaBSE)")
+        R = embed_text(otext)
+        D = embed_text(dtext)
+        sim = (R @ D.T).numpy()
+    else:
+        oseg, dseg = segment(ov), segment(dv)
+        _say(f"speech windows: original={len(oseg)} dub={len(dseg)}")
+        if not oseg:
+            return _empty("no speech found in the original after separation", tol_s, dub_label)
+        if not dseg:                                # a totally silent dub: every line missing
+            errors = [_missing(i, s, e, dub_label, 0.0) for i, (s, e) in enumerate(oseg)]
+            return _report(errors, oseg, dub_label, tol_s)
+        _say(f"embedding {len(oseg)} original windows ({_lang3(original_lang)})")
+        R = embed(ov, oseg, _lang3(original_lang))
+        _say(f"embedding {len(dseg)} dub windows ({_lang3(dub_lang)})")
+        D = embed(dv, dseg, _lang3(dub_lang))
 
-    _say(f"embedding {len(oseg)} original windows ({_lang3(original_lang)})")
-    R = embed(ov, oseg, _lang3(original_lang))
-    _say(f"embedding {len(dseg)} dub windows ({_lang3(dub_lang)})")
-    D = embed(dv, dseg, _lang3(dub_lang))
-    sim = (R @ D.T).numpy()
+        if os.environ.get("AQC_DUMP"):
+            # RAW embeddings for offline analysis — measuring similarity floors locally
+            # beats a 10-minute container cycle per hypothesis.
+            try:
+                np.savez("/tmp/aqc_dump.npz", R=R.numpy(), D=D.numpy(),
+                         oseg=np.array(oseg, dtype="float32"),
+                         dseg=np.array(dseg, dtype="float32"))
+                _say("dumped embeddings to /tmp/aqc_dump.npz")
+            except Exception as ex:  # noqa: BLE001
+                _say(f"dump failed: {ex}")
 
-    if os.environ.get("AQC_DUMP"):
-        # Raw embeddings for offline analysis/calibration — measuring similarity floors and
-        # centering effects locally beats a 10-minute container cycle per hypothesis.
-        try:
-            np.savez("/tmp/aqc_dump.npz", R=R.numpy(), D=D.numpy(),
-                     oseg=np.array(oseg, dtype="float32"), dseg=np.array(dseg, dtype="float32"))
-            _say("dumped embeddings to /tmp/aqc_dump.npz")
-        except Exception as ex:  # noqa: BLE001
-            _say(f"dump failed: {ex}")
+        # ANISOTROPY CORRECTION for SONAR: a PURE-SILENCE window scored 0.79 raw cosine
+        # against speech, so the signal lives in a thin band at the top. Mean-centering +
+        # renormalising pushes unrelated content toward 0. (Even centred, separation on our
+        # material was weak — which is why "text" is the default engine.)
+        import torch as _torch
+        mu = _torch.cat([R, D]).mean(dim=0)
+        R = _torch.nn.functional.normalize(R - mu, dim=1)
+        D = _torch.nn.functional.normalize(D - mu, dim=1)
+        sim = (R @ D.T).numpy()
 
     _say("aligning")
     pairs, missing, extra = _align.align(sim, oseg, dseg)
@@ -262,41 +364,42 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             best[i] = (j, sc)
 
     errors: list[dict[str, Any]] = []
-    rescued = 0
-    # The pair's overall sync offset (median drift of the matched pairs): the rescue scan is
-    # deliberately narrow, so it must be centred where this dub actually puts its lines.
-    drifts = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
-    med_drift = drifts[len(drifts) // 2] if drifts else 0.0
-    if missing:
+    if engine == "text" or not missing:
+        for i in missing:
+            s, e = oseg[i]
+            txt = otext[i] if otext else None
+            best_seg = float(sim[i].max()) if sim.size else 0.0
+            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
+            errors.append(_missing(i, s, e, dub_label, best_seg, txt))
+    else:
+        # SONAR engine only: re-check each candidate against the raw dub audio near its
+        # expected (sync-corrected) position before reporting it missing.
+        rescued = 0
+        drifts = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
+        med_drift = drifts[len(drifts) // 2] if drifts else 0.0
         _say(f"second pass: re-checking {len(missing)} candidate(s) against the dub audio "
              f"(sync offset {med_drift:+.2f}s)")
-    for i in missing:
-        s, e = oseg[i]
-        best_seg = float(sim[i].max()) if sim.size else 0.0
-        found, at = _rescue(dv, R[i], e - s, s + med_drift, _lang3(dub_lang))
-        # Log the score: RESCUE_SIM has to sit ABOVE the similarity that unrelated speech
-        # reaches, or the scan clears everything (measured: 0.55 cleared a truly silenced
-        # line). These numbers are how it gets calibrated.
-        _say(f"  window @{s:.1f}-{e:.1f}s: aligned-best={best_seg:.2f} "
-             f"scan-best={found:.2f} @{at:.1f}s -> {'cleared' if found >= RESCUE_SIM else 'MISSING'}")
-        if found >= RESCUE_SIM:
-            # The content IS in the dub, it just didn't get a window under one-to-one
-            # alignment. Report it as retimed if it moved, otherwise say nothing at all.
-            rescued += 1
-            drift = at - s
-            if abs(drift) > tol_s:
-                errors.append({
-                    "type": "MISALIGNED", "subtype": "shifted", "severity": "warn",
-                    "character": None, "channel": dub_label, "script_index": i,
-                    "script_start_s": round(s, 3), "script_end_s": round(e, 3),
-                    "audio_start_s": round(at, 3), "audio_end_s": round(at + (e - s), 3),
-                    "drift_s": round(drift, 2), "coverage": round(found, 3), "text": None,
-                    "message": (f"The line at {s:.2f}s is in the dub, but {abs(drift):.1f}s "
-                                f"{'late' if drift > 0 else 'early'} (match {found:.0%})."),
-                })
-            continue
-        errors.append(_missing(i, s, e, dub_label, max(best_seg, found)))
-    if missing:
+        for i in missing:
+            s, e = oseg[i]
+            best_seg = float(sim[i].max()) if sim.size else 0.0
+            found, at = _rescue(dv, R[i], e - s, s + med_drift, _lang3(dub_lang), mu=mu)
+            _say(f"  window @{s:.1f}-{e:.1f}s: aligned-best={best_seg:.2f} "
+                 f"scan-best={found:.2f} @{at:.1f}s -> {'cleared' if found >= RESCUE_SIM else 'MISSING'}")
+            if found >= RESCUE_SIM:
+                rescued += 1
+                drift = at - s
+                if abs(drift) > tol_s:
+                    errors.append({
+                        "type": "MISALIGNED", "subtype": "shifted", "severity": "warn",
+                        "character": None, "channel": dub_label, "script_index": i,
+                        "script_start_s": round(s, 3), "script_end_s": round(e, 3),
+                        "audio_start_s": round(at, 3), "audio_end_s": round(at + (e - s), 3),
+                        "drift_s": round(drift, 2), "coverage": round(found, 3), "text": None,
+                        "message": (f"The line at {s:.2f}s is in the dub, but {abs(drift):.1f}s "
+                                    f"{'late' if drift > 0 else 'early'} (match {found:.0%})."),
+                    })
+                continue
+            errors.append(_missing(i, s, e, dub_label, max(best_seg, found)))
         _say(f"second pass: {rescued}/{len(missing)} cleared as present, "
              f"{len(missing) - rescued} confirmed missing")
     # A matched line that lands well away from where it should be is present but retimed —
@@ -316,28 +419,32 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             })
     for j in extra:
         s, e = dseg[j]
+        dt = dtext[j] if dtext else None
         errors.append({
             "type": "EXTRA", "subtype": None, "severity": "info",
             "character": None, "channel": dub_label, "script_index": None,
             "script_start_s": None, "script_end_s": None,
             "audio_start_s": round(s, 3), "audio_end_s": round(e, 3),
-            "drift_s": None, "coverage": None, "text": None,
-            "message": (f"The dub speaks at {s:.2f}–{e:.2f}s with nothing matching it in "
-                        f"the original — added or improvised."),
+            "drift_s": None, "coverage": None, "text": dt,
+            "message": (f"The dub speaks at {s:.2f}–{e:.2f}s"
+                        + (f" ({dt!r})" if dt else "")
+                        + " with nothing matching it in the original — added or improvised."),
         })
     return _report(errors, oseg, dub_label, tol_s)
 
 
-def _missing(i: int, s: float, e: float, ch: str, best: float) -> dict[str, Any]:
+def _missing(i: int, s: float, e: float, ch: str, best: float,
+             text: str | None = None) -> dict[str, Any]:
     return {
         "type": "MISSING", "subtype": None, "severity": "error",
         "character": None, "channel": ch, "script_index": i,
         "script_start_s": round(s, 3), "script_end_s": round(e, 3),
         "audio_start_s": None, "audio_end_s": None,
-        "drift_s": None, "coverage": round(best, 3), "text": None,
-        "message": (f"The original speaks at {s:.2f}–{e:.2f}s and the dub has nothing saying "
-                    f"the same thing there (best match {best:.0%}) — dropped, or moved by "
-                    f"more than a few seconds."),
+        "drift_s": None, "coverage": round(best, 3), "text": text,
+        "message": (f"The original speaks at {s:.2f}–{e:.2f}s"
+                    + (f" ({text!r})" if text else "")
+                    + f" and the dub has nothing saying the same thing (best match "
+                      f"{best:.0%}) — dropped, or moved by more than a few seconds."),
     }
 
 
