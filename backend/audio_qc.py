@@ -50,12 +50,17 @@ def _lang3(name: str) -> str:
     return LANG3.get(n, n[:3] if len(n) >= 3 else "eng")
 
 
-def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
-    """Demucs → the dialogue stem as 16 kHz mono float32.
+def _separate(path: str, cache: bool = True) -> tuple[np.ndarray, np.ndarray]:
+    """Demucs → (dialogue, accompaniment) as 16 kHz mono float32.
 
-    This step is what makes the whole thing possible on a finished mix: music reads as speech
-    to a voice detector and wrecks any downstream comparison. Cached next to the input,
-    because separation dominates the runtime and every re-run would otherwise repeat it.
+    Separation is what makes any of this possible on a finished mix: music reads as speech to
+    a voice detector and wrecks any downstream comparison. The accompaniment (everything BUT
+    the dialogue) is kept too — it's how a realistic dub mix is constructed when a delivery
+    has stems but no mix (original M&E under the dubbed dialogue, which is how real dub mixes
+    are made). It comes from Demucs' non-vocal stems rather than mix-minus-vocals, because
+    subtraction leaks the original dialogue back in — and bleed at a dropped line's slot would
+    mask exactly the finding we're after. Both outputs are cached next to the input, since
+    separation dominates the runtime.
     """
     import soundfile as sf
     import torch
@@ -63,12 +68,12 @@ def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
     from demucs.apply import apply_model
     from demucs.pretrained import get_model
 
-    npy = path + ".voc16.npy"
-    if cache and os.path.exists(npy):
-        return np.load(npy)
-    model = getattr(separate_dialogue, "_model", None)
+    vnpy, anpy = path + ".voc16.npy", path + ".acc16.npy"
+    if cache and os.path.exists(vnpy) and os.path.exists(anpy):
+        return np.load(vnpy), np.load(anpy)
+    model = getattr(_separate, "_model", None)
     if model is None:
-        model = separate_dialogue._model = get_model("htdemucs")
+        model = _separate._model = get_model("htdemucs")
         model.eval()
     data, sr = sf.read(path, dtype="float32")      # torch 2.13's loader needs torchcodec
     if data.ndim == 1:
@@ -78,15 +83,27 @@ def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
         wav = torchaudio.functional.resample(wav, sr, model.samplerate)
     with torch.no_grad():
         srcs = apply_model(model, wav[None], device="cpu", progress=False, split=True)[0]
-    vocals = srcs[model.sources.index("vocals")]
-    out = torchaudio.functional.resample(
-        vocals.mean(0, keepdim=True), model.samplerate, 16000).squeeze(0).numpy().astype("float32")
+    vi = model.sources.index("vocals")
+    vocals = srcs[vi]
+    accomp = sum(srcs[k] for k in range(len(model.sources)) if k != vi)
+
+    def _to16(x) -> np.ndarray:
+        return torchaudio.functional.resample(
+            x.mean(0, keepdim=True), model.samplerate, 16000).squeeze(0).numpy().astype("float32")
+
+    v16, a16 = _to16(vocals), _to16(accomp)
     if cache:
         try:
-            np.save(npy, out)
+            np.save(vnpy, v16)
+            np.save(anpy, a16)
         except OSError:
             pass
-    return out
+    return v16, a16
+
+
+def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
+    """The dialogue stem of a mix, as 16 kHz mono float32 (see `_separate`)."""
+    return _separate(path, cache)[0]
 
 
 def segment(audio16: np.ndarray) -> list[tuple[float, float]]:
