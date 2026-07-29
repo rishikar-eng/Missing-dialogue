@@ -243,6 +243,16 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     D = embed(dv, dseg, _lang3(dub_lang))
     sim = (R @ D.T).numpy()
 
+    if os.environ.get("AQC_DUMP"):
+        # Raw embeddings for offline analysis/calibration — measuring similarity floors and
+        # centering effects locally beats a 10-minute container cycle per hypothesis.
+        try:
+            np.savez("/tmp/aqc_dump.npz", R=R.numpy(), D=D.numpy(),
+                     oseg=np.array(oseg, dtype="float32"), dseg=np.array(dseg, dtype="float32"))
+            _say("dumped embeddings to /tmp/aqc_dump.npz")
+        except Exception as ex:  # noqa: BLE001
+            _say(f"dump failed: {ex}")
+
     _say("aligning")
     pairs, missing, extra = _align.align(sim, oseg, dseg)
 
