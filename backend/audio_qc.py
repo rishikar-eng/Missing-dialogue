@@ -175,7 +175,54 @@ def _load16(path: str) -> np.ndarray:
 # The trade: audio (the separated dialogue only) goes to the Groq API.
 
 def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
-    """Groq-hosted whisper-large-v3 → [(start, end, text)] sentence segments."""
+    """Groq-hosted whisper-large-v3 → [(start, end, text)] segments, VAD-GATED.
+
+    Whisper hallucinates over music and near-silence — measured on the EP42 source: a
+    47-second segment reading "ご視聴ありがとうございました" ("thanks for watching", a training
+    artefact), swallowing the exact region where the known-missing lines live. So only the
+    audio Silero actually calls speech is sent: windows are concatenated with short gaps and
+    a piecewise map converts Whisper's times back to the real timeline. Whisper never sees
+    the material it hallucinates on, and segment times stay honest.
+    """
+    wins = segment(audio16)
+    if not wins:
+        return []
+    GAP = 0.5
+    PAD = 0.2                                      # a little context helps word boundaries
+    gap = np.zeros(int(GAP * 16000), dtype="float32")
+    pieces: list[np.ndarray] = []
+    cmap: list[tuple[float, float, float]] = []    # (concat_start, orig_start, dur)
+    t = 0.0
+    prev_end = 0.0
+    for (s, e) in wins:
+        ps = max(prev_end, s - PAD)
+        pe = min(len(audio16) / 16000.0, e + PAD)
+        prev_end = pe
+        d = audio16[int(ps * 16000):int(pe * 16000)]
+        pieces += [d, gap]
+        cmap.append((t, ps, pe - ps))
+        t += (pe - ps) + GAP
+
+    def back(ct: float) -> float:
+        k = 0
+        for k in range(len(cmap)):
+            cs, _, dur = cmap[k]
+            if ct < cs + dur + GAP:
+                break
+        cs, os_, dur = cmap[k]
+        return os_ + min(max(ct - cs, 0.0), dur)   # inside the gap -> clamp to window edge
+
+    segs = _groq_call(np.concatenate(pieces), lang1)
+    out = []
+    for cs, ce, txt in segs:
+        s2, e2 = back(cs), back(ce)
+        if e2 - s2 >= 0.2 and txt:
+            out.append((round(s2, 2), round(e2, 2), txt))
+    return out
+
+
+def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
+    """One transcription request against the Groq API (with rate-limit retries)."""
     import io as _io
 
     import httpx
