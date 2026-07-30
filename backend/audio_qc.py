@@ -615,6 +615,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
                     continue
+            slot_cov = None
             if dwin is not None:
                 # THE ACOUSTIC TIE-BREAKER. The transcript said "no match" — but is the dub
                 # actually SILENT at this slot? A true drop is a hole in the audio (EP42's
@@ -630,6 +631,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 slot = (s + d0, e + d0)
                 dur = max(0.2, slot[1] - slot[0])
                 cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
+                slot_cov = cov / dur
                 if cov / dur >= 0.5:
                     n_unchecked += 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
@@ -648,7 +650,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
             _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
-            errors.append(_missing(i, s, e, dub_label, best_seg, txt))
+            errors.append(_missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov))
     else:
         # SONAR engine only: re-check each candidate against the raw dub audio near its
         # expected (sync-corrected) position before reporting it missing.
@@ -720,13 +722,16 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked)
 
 
-def _confidence(best: float, text: str | None) -> str:
+def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
     """How sure we are a flagged line is REALLY missing. Per the studio workflow the sound
     team quickly verifies each flag in Pro Tools, so over-flagging is fine — what they want
     is a triage order. Lower best-match = stronger evidence of absence; a full sentence is
-    stronger evidence than a one-word grunt (grunts/shouts often go undubbed by design)."""
+    stronger evidence than a one-word grunt (grunts/shouts often go undubbed by design).
+    HIGH additionally demands the dub audio be near-silent in the slot (<20% speech
+    coverage): a "verify me first" label must be backed by an acoustic hole, not just a bad
+    text match — an EP41 flag rated high despite dub speech at the slot was false by ear."""
     words = len((text or "").split())
-    if best < 0.35 and words >= 3:
+    if best < 0.35 and words >= 3 and (slot_cov is None or slot_cov < 0.2):
         return "high"
     if best < 0.5:
         return "medium"
@@ -734,18 +739,19 @@ def _confidence(best: float, text: str | None) -> str:
 
 
 def _missing(i: int, s: float, e: float, ch: str, best: float,
-             text: str | None = None) -> dict[str, Any]:
+             text: str | None = None, slot_cov: float | None = None) -> dict[str, Any]:
     return {
         "type": "MISSING", "subtype": None, "severity": "error",
         "character": None, "channel": ch, "script_index": i,
         "script_start_s": round(s, 3), "script_end_s": round(e, 3),
         "audio_start_s": None, "audio_end_s": None,
         "drift_s": None, "coverage": round(best, 3), "text": text,
-        "confidence": _confidence(best, text),
+        "slot_speech_cov": round(slot_cov, 3) if slot_cov is not None else None,
+        "confidence": _confidence(best, text, slot_cov),
         "message": (f"The original speaks at {s:.2f}–{e:.2f}s"
                     + (f" ({text!r})" if text else "")
                     + f" and the dub has nothing saying the same thing (best match "
-                      f"{best:.0%}, confidence: {_confidence(best, text)}) — dropped, "
+                      f"{best:.0%}, confidence: {_confidence(best, text, slot_cov)}) — dropped, "
                       f"or moved by more than a few seconds."),
     }
 
