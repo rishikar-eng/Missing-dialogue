@@ -256,10 +256,17 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     raise RuntimeError("Groq transcription kept rate-limiting")
 
 
-def _reliable(q: dict | None) -> bool:
+def _reliable(q: dict | None, text: str | None = None) -> bool:
     """Whisper's own confidence in a segment. A flag built on a garbled transcript is noise —
-    EP43's fight scene produced ~20 false 'missing' from exactly that."""
-    return bool(q) and q.get("nsp", 1.0) < 0.5 and q.get("alp", -9.0) > -1.0
+    EP43's fight scene produced ~20 false 'missing' from exactly that.
+
+    avg_logprob is shared by every segment of one ~30 s decode window, so one noisy window
+    poisons its good neighbours (this gated out a REAL missing line on EP42). A full sentence
+    is its own evidence of real speech, so bad alp only disqualifies SHORT segments."""
+    if not q or q.get("nsp", 1.0) >= 0.5:
+        return False
+    words = len((text or "").split())
+    return q.get("alp", -9.0) > -1.2 or words >= 4
 
 
 def _songlike(text: str) -> bool:
@@ -449,18 +456,30 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             if txt and _songlike(txt):
                 _say(f"  song-like @{s:.1f}-{e:.1f}s — not dialogue, not flagged  {txt!r}")
                 continue
-            if q is not None and not _reliable(q):
+            if (e - s) > 12.0:
+                # A single "line" spanning tens of seconds is a decode artefact or a song
+                # section, never one piece of dialogue (EP43: 28-40 s blobs passed as lines).
+                n_unchecked += 1
+                _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — {e - s:.0f}s span is not a single "
+                     f"dialogue line  {txt!r}")
+                continue
+            if q is not None and not _reliable(q, txt):
                 n_unchecked += 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
                 continue
             if dqual is not None:
-                near_ok = any(abs(dseg[j][0] - (s + drift0)) <= 10.0 and _reliable(dqual[j])
-                              for j in range(len(dseg)))
-                if not near_ok:
+                # SILENCE and GARBLE are opposite evidence. No dub speech near the slot at
+                # all = a hole = SUPPORTS missing (consecutive dropped lines look exactly
+                # like this — gating on it cost 3 real catches on EP42). Speech that's
+                # present but unreadable = we can't certify anything = UNCHECKED.
+                nearby = [j for j in range(len(dseg))
+                          if abs(dseg[j][0] - (s + drift0)) <= 10.0]
+                if nearby and not any(_reliable(dqual[j], dtext[j] if dtext else None)
+                                      for j in nearby):
                     n_unchecked += 1
-                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub unreadable near this slot; "
-                         f"cannot certify absence  {txt!r}")
+                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
+                         f"unreadable; cannot certify absence  {txt!r}")
                     continue
             _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
             errors.append(_missing(i, s, e, dub_label, best_seg, txt))
