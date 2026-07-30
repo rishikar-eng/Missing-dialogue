@@ -497,7 +497,15 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         osegs = _merge_passes(_p1, _p2)
         _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
-        dsegs = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        # Double-pass on the DUB too: a MISSING flag asserts the dub never says the line, so
+        # the dub deserves the same second reading the reference gets. Every ear-disproved
+        # EP41/EP43 flag traced to a dub line present in the audio that one nondeterministic
+        # pass failed to render — a second chance at rendering it kills the false flag and
+        # steadies the flag set between runs.
+        _q1 = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        _q2 = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        dsegs = _merge_passes(_q1, _q2)
+        _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
         oseg = [(s, e) for s, e, _, _ in osegs]
         dseg = [(s, e) for s, e, _, _ in dsegs]
         otext = [t for _, _, t, _ in osegs]
