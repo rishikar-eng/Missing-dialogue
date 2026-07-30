@@ -25,7 +25,7 @@ from typing import Any, Callable
 import numpy as np
 import soundfile as sf
 
-from . import box_discovery, box_fetch, box_oauth, xlang
+from . import box_discovery, box_fetch, box_oauth, naming, xlang
 
 AUDIO_EXT = box_discovery.AUDIO_EXT
 _OUT_ROOT = Path(os.environ.get("DQC_DATA_ROOT", tempfile.gettempdir())) / "agent_out"
@@ -253,9 +253,10 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
                 notes[lang] = f"{s['n_missing']} missing / {s['n_extra']} extra"
                 if ref_audio and op:
                     try:
+                        _series = cfg.get("display_name", key)
                         _write_ref_audio(res["alignment"]["errors"], op,
-                                         out_dir / f"EP{n:02d}_{lang}_MISSING_only.flac",
-                                         out_dir / f"EP{n:02d}_{lang}_MISSING_timeline.flac")
+                                         out_dir / naming.missing_flac(_series, n, lang, False),
+                                         out_dir / naming.missing_flac(_series, n, lang, True))
                     except Exception as e:  # noqa: BLE001
                         notes[lang] += f" (ref-audio err: {str(e)[:40]})"
             except Exception as e:  # noqa: BLE001
@@ -268,7 +269,7 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
             return {"status": "skip", "why": "no language had usable stems", "languages": notes}
 
         _stage("building workbook", len(want), len(want))
-        xlsx = out_dir / f"EP{n:02d}.xlsx"
+        xlsx = out_dir / naming.report_xlsx(cfg.get("display_name", key), n)
         build_workbook(
             meta={"episode": f"EP{n:02d}", "series": cfg.get("display_name", key),
                   "generated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -278,7 +279,7 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
         )
 
         _stage("packaging", len(want), len(want))
-        zip_path = out_dir / f"EP{n:02d}_QC.zip"
+        zip_path = out_dir / naming.bundle_zip(cfg.get("display_name", key), n)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             for p in sorted(out_dir.iterdir()):
                 if p.name != zip_path.name:

@@ -188,7 +188,8 @@ def status(task_arn: str, job_id: str) -> tuple[str, dict[str, Any] | None]:
 
 
 def ensure_summary(parent_id: str, episode: int,
-                   langs_map: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+                   langs_map: dict[str, dict[str, Any]],
+                   series: str | None = None) -> dict[str, Any] | None:
     """Build (once, then cache in S3) the cross-language view for a fanned-out run from each
     language's uploaded `xlang.json`: the Summary workbook AND the chat-sized root-cause
     headline. Returns {"key": <xlsx s3 key>, "headline": [...]} or None if nothing to
@@ -199,9 +200,10 @@ def ensure_summary(parent_id: str, episode: int,
     """
     import tempfile
 
-    from . import excel_report
+    from . import excel_report, naming
     c = _cfg()
-    key = f"{c['prefix']}/{parent_id}/EP{int(episode):02d}_Summary.xlsx"
+    fname = naming.summary_xlsx(series, episode)
+    key = f"{c['prefix']}/{parent_id}/{fname}"
     meta_key = f"{c['prefix']}/{parent_id}/EP{int(episode):02d}_Summary.json"
     s3 = _s3()
     try:
@@ -223,7 +225,7 @@ def ensure_summary(parent_id: str, episode: int,
             pass                                     # a skipped/failed language has no xlang.json
     if not per_lang:
         return None
-    tmp = f"{tempfile.mkdtemp()}/EP{int(episode):02d}_Summary.xlsx"
+    tmp = f"{tempfile.mkdtemp()}/{fname}"
     excel_report.build_summary_workbook(per_lang, tmp)
     s3.upload_file(tmp, c["bucket"], key)
     from . import xlang as _xlang

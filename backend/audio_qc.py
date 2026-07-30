@@ -212,12 +212,30 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
         cs, os_, dur = cmap[k]
         return os_ + min(max(ct - cs, 0.0), dur)   # inside the gap -> clamp to window edge
 
-    segs = _groq_call(np.concatenate(pieces), lang1)
+    # Full episodes exceed Groq's 25 MB/request cap, so the concatenated speech is sent in
+    # chunks split ONLY at VAD-window boundaries (never mid-utterance). PCM_16 mono 16 kHz is
+    # 32 kB/s, so 560 s/chunk ≈ 18 MB — comfortably under the cap.
+    CHUNK_S = 560.0
     out = []
-    for cs, ce, txt, q in segs:
-        s2, e2 = back(cs), back(ce)
-        if e2 - s2 >= 0.2 and txt:
-            out.append((round(s2, 2), round(e2, 2), txt, q))
+    start = 0
+    n_chunks = 0
+    while start < len(cmap):
+        end = start
+        t0 = cmap[start][0]
+        while end < len(cmap) and (cmap[end][0] + cmap[end][2] - t0) <= CHUNK_S:
+            end += 1
+        if end == start:
+            end = start + 1                        # one window longer than the cap: send alone
+        segs = _groq_call(np.concatenate(pieces[2 * start:2 * end]), lang1)
+        for cs, ce, txt, q in segs:
+            s2, e2 = back(cs + t0), back(ce + t0)  # chunk-local time + t0 = global concat time
+            if e2 - s2 >= 0.2 and txt:
+                out.append((round(s2, 2), round(e2, 2), txt, q))
+        start = end
+        n_chunks += 1
+    if n_chunks > 1:
+        print(f"[audio_qc] transcribed in {n_chunks} chunks (episode longer than one request)",
+              flush=True)
     return out
 
 
@@ -253,7 +271,7 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     import httpx
     import soundfile as sf
     buf = _io.BytesIO()
-    sf.write(buf, audio16, 16000, format="WAV")
+    sf.write(buf, audio16, 16000, format="WAV", subtype="PCM_16")   # half the bytes of float32
     buf.seek(0)
     key = os.environ.get("GROQ_API_KEY", "")
     if not key:
@@ -699,6 +717,8 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             n_unchecked: int = 0) -> dict[str, Any]:
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
+    conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
+            for c in ("high", "medium", "low")}
     total = len(oseg)
     return {
         "mode": "audio_only",
@@ -717,6 +737,8 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             # never guessed at — the studio must know what the tool did not see.
             "n_unchecked": n_unchecked,
             "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
+            # triage order for the sound team: verify high first, low last
+            "n_missing_by_confidence": conf,
         },
     }
 

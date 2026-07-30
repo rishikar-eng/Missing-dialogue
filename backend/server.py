@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import box_fetch, box_oauth, excel_report, jobs, run_store, scriptless
+from . import box_fetch, box_oauth, excel_report, jobs, naming, run_store, scriptless
 from .alignment import align_script_to_channels
 from .auth import login as rian_login, logout as rian_logout
 from .char_list import apply_char_list
@@ -580,7 +580,7 @@ def _run_episode(req: EpisodeRequest, on_stage: Callable[[str, int, int], None] 
         on_stage("building workbook", total, total)
     from datetime import datetime, timezone
     ep = req.episode or script_path.stem
-    out = Path(tempfile.gettempdir()) / f"dialogue-qc_{re.sub(r'[^A-Za-z0-9_.-]+', '_', ep)}.xlsx"
+    out = Path(tempfile.gettempdir()) / naming.report_xlsx(None, ep)
     excel_report.build_workbook(
         meta={
             "episode": ep,
@@ -1388,7 +1388,8 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
             # Everything finished -> build (once, cached in S3) the cross-language view.
             if done:
                 try:
-                    summ = fargate.ensure_summary(jid, ep_no, rec.get("langs") or {})
+                    summ = fargate.ensure_summary(jid, ep_no, rec.get("langs") or {},
+                                                  series=rec.get("series"))
                     if summ:
                         out["summary_url"] = _dl_s3(summ["key"])
                         out["cross"] = summ.get("headline") or []
@@ -1859,7 +1860,7 @@ def _run_box_episode(req: BoxEpisodeRequest,
         stage("building workbook", total, total)
         from datetime import datetime, timezone
         ep = req.episode or script_path.stem
-        out = Path(tempfile.gettempdir()) / f"dialogue-qc_{re.sub(r'[^A-Za-z0-9_.-]+', '_', ep)}.xlsx"
+        out = Path(tempfile.gettempdir()) / naming.report_xlsx(None, ep)
         excel_report.build_workbook(
             meta={"episode": ep,
                   "generated_at": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M"),
