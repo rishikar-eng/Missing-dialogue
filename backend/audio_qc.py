@@ -221,6 +221,31 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
     return out
 
 
+def _merge_passes(a: list, b: list) -> list:
+    """Union of two transcription passes of the SAME audio.
+
+    Groq whisper segmentation is nondeterministic (28–48 lines observed for identical
+    input), so a line one pass never renders simply cannot be flagged — EP42's 178.8s drop
+    was lost this way: pass 1 gave two 2-char alp=-2.53 fragments where pass 2 read the
+    full sentence. Pass-B segments are adopted only where reliable pass-A coverage is
+    <50% (boundary jitter between passes must not create duplicate candidates for the
+    one-to-one alignment), and junk pass-A fragments superseded by an adopted read retire.
+    """
+    def _cov(seg, others):
+        s, e = seg[0], seg[1]
+        got = sum(max(0.0, min(e, o[1]) - max(s, o[0])) for o in others)
+        return got / max(0.2, e - s)
+
+    rel_a = [x for x in a if _reliable(x[3], x[2])]
+    out = list(a)
+    for seg in b:
+        if _reliable(seg[3], seg[2]) and _cov(seg, rel_a) < 0.5:
+            out = [x for x in out if _reliable(x[3], x[2]) or _cov(x, [seg]) < 0.5]
+            out.append(seg)
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
+
+
 def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
     """One transcription request against the Groq API (with rate-limit retries)."""
     import io as _io
@@ -421,7 +446,10 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
-        osegs = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
+        _p1 = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
+        _p2 = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
+        osegs = _merge_passes(_p1, _p2)
+        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
         dsegs = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
         oseg = [(s, e) for s, e, _, _ in osegs]
