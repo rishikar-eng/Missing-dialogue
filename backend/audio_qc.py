@@ -417,6 +417,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     dtext: list[str] | None = None
     oqual: list[dict] | None = None
     dqual: list[dict] | None = None
+    dwin: list[tuple[float, float]] | None = None
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
@@ -437,6 +438,10 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                       for i, (s, e) in enumerate(oseg)]
             return _report(errors, oseg, dub_label, tol_s)
         _say("matching meaning (LaBSE)")
+        # Raw speech map of the dub — kept for the flag gate below. Text alone cannot tell
+        # "dub audio absent" from "dub audio present but Whisper couldn't render it under
+        # SFX" (EP43: lines verified present by ear produced no transcript). VAD can.
+        dwin = segment(dv)
         R = embed_text(otext)
         D = embed_text(dtext)
         sim = (R @ D.T).numpy()
@@ -527,6 +532,19 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     n_unchecked += 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
+                    continue
+            if dwin is not None:
+                # THE ACOUSTIC TIE-BREAKER. The transcript said "no match" — but is the dub
+                # actually SILENT at this slot? A true drop is a hole in the audio (EP42's
+                # verified misses all are). Speech at the slot that yielded no usable
+                # transcript means Whisper lost it under SFX/music, not that the line is
+                # absent (EP43's false flags, all verified present by ear) — UNCHECKED.
+                core = (s + drift0 + 0.3, e + drift0 - 0.3)
+                if core[1] > core[0] and any(not (w[1] < core[0] or w[0] > core[1])
+                                             for w in dwin):
+                    n_unchecked += 1
+                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub HAS speech at this slot but "
+                         f"no usable transcript; cannot certify absence  {txt!r}")
                     continue
             if txt and dtext is not None:
                 near_lines = [dtext[j] for j in range(len(dseg))
