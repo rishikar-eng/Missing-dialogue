@@ -49,6 +49,33 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "audio_check",
+        "description": ("Start AUDIO-ONLY QC for one episode + one dub language (asynchronous, "
+                        "~8 min). No script or stems needed: compares the original full mix "
+                        "against that language's delivered final mix straight from Box and flags "
+                        "missing dialogue with confidence tiers. Use when the user says audio "
+                        "check / mix check / scriptless QC, or when no script is delivered. Only "
+                        "call after the user has confirmed. Returns a job_id."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "episode": {"type": "integer"},
+                "language": {"type": "string", "description": "One dub language, e.g. Tamil"},
+            },
+            "required": ["episode", "language"],
+        },
+    },
+    {
+        "name": "get_audio_result",
+        "description": ("Check an audio-only QC run by its job_id. When done, returns missing "
+                        "counts by confidence, coverage, and the AudioQC workbook download link."),
+        "input_schema": {
+            "type": "object",
+            "properties": {"job_id": {"type": "string"}},
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "get_result",
         "description": ("Check the status of a QC run by its job_id. When done, returns the "
                         "per-language missing/extra summary and a download link for the report zip."),
@@ -94,6 +121,14 @@ def _dispatch(series_key: str, cfg: dict[str, Any], name: str, inp: dict[str, An
         return {"job_id": job.id, "status": job.status,
                 "note": "QC started; poll get_result with this job_id."}
 
+    if name == "audio_check":
+        from . import audio_jobs
+        return audio_jobs.launch(series_key, cfg, int(inp["episode"]), str(inp["language"]))
+
+    if name == "get_audio_result":
+        from . import audio_jobs
+        return audio_jobs.status(str(inp["job_id"]))
+
     if name == "get_result":
         job = jobs.get(str(inp["job_id"]))
         if not job:
@@ -131,6 +166,12 @@ def _system(cfg: dict[str, Any]) -> str:
         "languages). Tell them it's running and they can ask for the result.\n"
         "- When the user asks for status/result, or you already hold a job_id, call get_result. "
         "When it's done, give the per-language missing/extra counts and the download link.\n"
+        "- AUDIO-ONLY QC: when the user asks for an audio check / mix check / scriptless QC, or "
+        "wants QC but no script is delivered, call audio_check with the episode and ONE language "
+        "(confirm first, same as run_qc). It compares the original full mix to that language's "
+        "delivered final mix (~8 min). Poll get_audio_result; when done, report missing counts "
+        "BY CONFIDENCE (high = verify first), coverage, and the workbook link. Over-flagging is "
+        "expected — the sound team verifies flags in Pro Tools, confidence gives the order.\n"
         "- Keep replies short and Teams-friendly. Episode numbers are integers. Never invent data — "
         "report only what the tools return. If an episode has no script or no delivered languages, "
         "say so plainly."

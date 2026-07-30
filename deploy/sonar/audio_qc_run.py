@@ -31,7 +31,39 @@ BUCKET = os.environ.get("DQC_S3_BUCKET", "dialogue-qc-output-848005667477")
 _SEP_CACHE: dict[str, tuple[str, str, list[str]]] = {}   # local -> (bucket, base, hit sufs)
 
 
+def _cache_attach(dst: str, base: str) -> None:
+    """Pull any cached separation for `base` next to `dst` and remember what to push back."""
+    import boto3
+    s3 = boto3.client("s3")
+    hits = []
+    for suf in (".voc16.npy", ".acc16.npy"):
+        try:
+            s3.download_file(BUCKET, base + suf, dst + suf)
+            hits.append(suf)
+            print(f"[run] separation cache HIT {base + suf}", flush=True)
+        except Exception:
+            pass
+    _SEP_CACHE[dst] = (BUCKET, base, hits)
+
+
 def _local(p: str) -> str:
+    if p.startswith("box://"):
+        # Teams-triggered runs pass Box file ids + a short-lived access token in the env.
+        import httpx
+
+        from backend import box_fetch
+        fid = p[6:]
+        tok = os.environ["BOX_ACCESS_TOKEN"]
+        info = httpx.get(f"https://api.box.com/2.0/files/{fid}?fields=name,sha1",
+                         headers={"Authorization": f"Bearer {tok}"}, timeout=60).json()
+        name = info.get("name") or f"box_{fid}.wav"
+        print(f"[run] downloading box:{fid} ({name})", flush=True)
+        dst = str(box_fetch.download_file(tok, fid, "/tmp", name=name))
+        try:
+            _cache_attach(dst, f"sepcache/{name}.{info.get('sha1') or fid}")
+        except Exception as e:  # cache is an optimization, never a blocker
+            print(f"[run] separation cache unavailable: {e}", flush=True)
+        return dst
     if not p.startswith("s3://"):
         return p
     import boto3
@@ -42,16 +74,7 @@ def _local(p: str) -> str:
     s3.download_file(bucket, key, dst)
     try:
         etag = s3.head_object(Bucket=bucket, Key=key)["ETag"].strip('"').replace("-", "_")
-        base = f"sepcache/{os.path.basename(key)}.{etag}"
-        hits = []
-        for suf in (".voc16.npy", ".acc16.npy"):
-            try:
-                s3.download_file(bucket, base + suf, dst + suf)
-                hits.append(suf)
-                print(f"[run] separation cache HIT {base + suf}", flush=True)
-            except Exception:
-                pass
-        _SEP_CACHE[dst] = (bucket, base, hits)
+        _cache_attach(dst, f"sepcache/{os.path.basename(key)}.{etag}")
     except Exception as e:  # cache is an optimization, never a blocker
         print(f"[run] separation cache unavailable: {e}", flush=True)
     return dst

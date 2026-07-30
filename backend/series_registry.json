@@ -3,9 +3,11 @@
     "display_name": "Kamen Rider Gavv",
     "aliases": ["gavv", "krg", "kamen rider gavv", "kamen rider", "kr gavv"],
     "languages": ["Malayalam", "Tamil", "Telugu", "Kannada", "Bengali", "Marathi"],
+    "original_language": "hindi",
     "box": {
       "scripts_folder": "375861426771",
       "premix_folder": "377097256586",
+      "mixes_folder": "379102077184",
       "voiceover": {
         "Malayalam": "383066346413",
         "Tamil": "379646596612",
