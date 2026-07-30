@@ -480,6 +480,19 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     return _report(errors, oseg, dub_label, tol_s)
 
 
+def _confidence(best: float, text: str | None) -> str:
+    """How sure we are a flagged line is REALLY missing. Per the studio workflow the sound
+    team quickly verifies each flag in Pro Tools, so over-flagging is fine — what they want
+    is a triage order. Lower best-match = stronger evidence of absence; a full sentence is
+    stronger evidence than a one-word grunt (grunts/shouts often go undubbed by design)."""
+    words = len((text or "").split())
+    if best < 0.35 and words >= 3:
+        return "high"
+    if best < 0.5:
+        return "medium"
+    return "low"
+
+
 def _missing(i: int, s: float, e: float, ch: str, best: float,
              text: str | None = None) -> dict[str, Any]:
     return {
@@ -488,10 +501,12 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
         "script_start_s": round(s, 3), "script_end_s": round(e, 3),
         "audio_start_s": None, "audio_end_s": None,
         "drift_s": None, "coverage": round(best, 3), "text": text,
+        "confidence": _confidence(best, text),
         "message": (f"The original speaks at {s:.2f}–{e:.2f}s"
                     + (f" ({text!r})" if text else "")
                     + f" and the dub has nothing saying the same thing (best match "
-                      f"{best:.0%}) — dropped, or moved by more than a few seconds."),
+                      f"{best:.0%}, confidence: {_confidence(best, text)}) — dropped, "
+                      f"or moved by more than a few seconds."),
     }
 
 
