@@ -25,15 +25,49 @@ from backend import audio_qc
 BUCKET = os.environ.get("DQC_S3_BUCKET", "dialogue-qc-output-848005667477")
 
 
+# Demucs separation is the wall-time cost, and one original serves every dub language of the
+# episode — so separations computed here are pushed to S3 keyed by source ETag, and later
+# runs of the same file skip Demucs for it entirely.
+_SEP_CACHE: dict[str, tuple[str, str, list[str]]] = {}   # local -> (bucket, base, hit sufs)
+
+
 def _local(p: str) -> str:
     if not p.startswith("s3://"):
         return p
     import boto3
+    s3 = boto3.client("s3")
     bucket, key = p[5:].split("/", 1)
     dst = "/tmp/" + os.path.basename(key)
     print(f"[run] downloading {p}", flush=True)
-    boto3.client("s3").download_file(bucket, key, dst)
+    s3.download_file(bucket, key, dst)
+    try:
+        etag = s3.head_object(Bucket=bucket, Key=key)["ETag"].strip('"').replace("-", "_")
+        base = f"sepcache/{os.path.basename(key)}.{etag}"
+        hits = []
+        for suf in (".voc16.npy", ".acc16.npy"):
+            try:
+                s3.download_file(bucket, base + suf, dst + suf)
+                hits.append(suf)
+                print(f"[run] separation cache HIT {base + suf}", flush=True)
+            except Exception:
+                pass
+        _SEP_CACHE[dst] = (bucket, base, hits)
+    except Exception as e:  # cache is an optimization, never a blocker
+        print(f"[run] separation cache unavailable: {e}", flush=True)
     return dst
+
+
+def _push_sep_cache() -> None:
+    import boto3
+    s3 = boto3.client("s3")
+    for local, (bucket, base, hits) in _SEP_CACHE.items():
+        for suf in (".voc16.npy", ".acc16.npy"):
+            if suf not in hits and os.path.exists(local + suf):
+                try:
+                    s3.upload_file(local + suf, bucket, base + suf)
+                    print(f"[run] separation cached -> {base + suf}", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[run] cache upload failed: {e}", flush=True)
 
 
 args = sys.argv[1:]
@@ -86,6 +120,7 @@ for e in rep["errors"]:
     if e["type"] == "MISALIGNED":
         print(f"   MISALIGNED @{e['script_start_s']:7.1f}s drift={e['drift_s']:+.1f}s match={e['coverage']:.2f}")
 json.dump(rep, open("/tmp/report.json", "w"), default=str)
+_push_sep_cache()
 
 if out_prefix:
     from backend import audio_report, naming

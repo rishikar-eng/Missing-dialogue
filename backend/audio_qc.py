@@ -112,6 +112,29 @@ def separate_dialogue(path: str, cache: bool = True) -> np.ndarray:
     return _separate(path, cache)[0]
 
 
+def _warm_separation(path: str) -> None:
+    """Child-process worker: populate one file's .voc16/.acc16 cache, using half the cores
+    so two workers share the machine instead of fighting over one torch thread pool."""
+    import torch
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
+    _separate(path)
+
+
+def _warm_pair(paths: list[str]) -> bool:
+    """Separate two cold files concurrently (Demucs dominates full-episode wall time and the
+    two files are independent). Returns True if the caches were populated; any failure falls
+    back to the sequential path, which redoes the work safely."""
+    import concurrent.futures as _cf
+    try:
+        with _cf.ProcessPoolExecutor(max_workers=2) as ex:
+            list(ex.map(_warm_separation, paths))
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[audio_qc] parallel separation unavailable ({e}); separating sequentially",
+              flush=True)
+        return False
+
+
 def segment(audio16: np.ndarray) -> list[tuple[float, float]]:
     """Silero VAD over the ISOLATED dialogue → (start, end) speech windows."""
     import torch
@@ -447,6 +470,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             stage(m, 0, 0)
         print(f"[audio_qc] {m}", flush=True)
 
+    _cold = [p for p in ([original_path] + ([] if dub_is_clean else [dub_path]))
+             if not (os.path.exists(p + ".voc16.npy") and os.path.exists(p + ".acc16.npy"))]
+    if len(_cold) == 2:
+        _say("separating original and dub concurrently (2 workers)")
+        _warm_pair(_cold)
     _say("separating dialogue from the original mix")
     ov = separate_dialogue(original_path)
     if dub_is_clean:
