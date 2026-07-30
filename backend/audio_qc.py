@@ -536,15 +536,23 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             if dwin is not None:
                 # THE ACOUSTIC TIE-BREAKER. The transcript said "no match" — but is the dub
                 # actually SILENT at this slot? A true drop is a hole in the audio (EP42's
-                # verified misses all are). Speech at the slot that yielded no usable
+                # verified misses all are). Speech OCCUPYING the slot with no usable
                 # transcript means Whisper lost it under SFX/music, not that the line is
                 # absent (EP43's false flags, all verified present by ear) — UNCHECKED.
-                core = (s + drift0 + 0.3, e + drift0 - 0.3)
-                if core[1] > core[0] and any(not (w[1] < core[0] or w[0] > core[1])
-                                             for w in dwin):
+                # MAJORITY coverage, not any-overlap: in dense dialogue a neighbouring
+                # line's edge always clips the slot, and any-overlap marked 34/48 real
+                # slots "occupied" and collapsed EP42 recall to 1/5. A dropped line leaves
+                # most of its slot silent. Drift is clamped: a garbage median from poor
+                # pairing must not shift every slot onto its neighbour.
+                d0 = max(-3.0, min(3.0, drift0))
+                slot = (s + d0, e + d0)
+                dur = max(0.2, slot[1] - slot[0])
+                cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
+                if cov / dur >= 0.5:
                     n_unchecked += 1
-                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub HAS speech at this slot but "
-                         f"no usable transcript; cannot certify absence  {txt!r}")
+                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
+                         f"{cov / dur:.0%} of this slot but gave no usable transcript; "
+                         f"cannot certify absence  {txt!r}")
                     continue
             if txt and dtext is not None:
                 near_lines = [dtext[j] for j in range(len(dseg))
