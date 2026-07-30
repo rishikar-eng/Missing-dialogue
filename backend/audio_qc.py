@@ -251,7 +251,8 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
             if t:
                 segs.append((round(float(s["start"]), 2), round(float(s["end"]), 2), t,
                              {"nsp": float(s.get("no_speech_prob") or 0.0),
-                              "alp": float(s.get("avg_logprob") or 0.0)}))
+                              "alp": float(s.get("avg_logprob") or 0.0),
+                              "cr": float(s.get("compression_ratio") or 1.0)}))
         return segs
     raise RuntimeError("Groq transcription kept rate-limiting")
 
@@ -265,8 +266,54 @@ def _reliable(q: dict | None, text: str | None = None) -> bool:
     is its own evidence of real speech, so bad alp only disqualifies SHORT segments."""
     if not q or q.get("nsp", 1.0) >= 0.5:
         return False
+    # compression_ratio is PER SEGMENT (unlike alp) — the standard whisper garble signal.
+    # Repetitive junk compresses well (>2.4); that's what multi-word fight-scene garble is.
+    if q.get("cr", 1.0) > 2.4:
+        return False
     words = len((text or "").split())
     return q.get("alp", -9.0) > -1.2 or words >= 4
+
+
+def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) -> str:
+    """Last gate before a MISSING flag: a cheap LLM look at the actual text, doing exactly
+    what a human reviewer does — 'is this original line even coherent dialogue, and does any
+    nearby dub line say roughly the same thing?' Embedding scores can't reject fluent-looking
+    ASR garble; a language model can. Fails OPEN (keeps the flag) — over-flagging is the
+    acceptable error here. Returns 'missing' | 'present' | 'garble'."""
+    import json as _json
+    import time as _t
+
+    import httpx
+    key = os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        return "missing"
+    listing = "\n".join(f"{k + 1}. {t}" for k, t in enumerate(dub_lines)) or "(none)"
+    prompt = (f"You are QC-checking a dubbed TV episode.\n"
+              f"Original line ({ref_lang}): {ref_text}\n"
+              f"Dub lines spoken near that same moment ({dub_lang}):\n{listing}\n\n"
+              'Reply with STRICT JSON only: {"coherent": true|false, "conveyed": true|false}. '
+              '"coherent" = the original line reads as a real piece of dialogue, not '
+              'speech-recognition gibberish. "conveyed" = at least one dub line expresses '
+              "roughly the same meaning (translations are loose; judge meaning, not words).")
+    for attempt in range(3):
+        try:
+            r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                           headers={"Authorization": f"Bearer {key}"},
+                           json={"model": "llama-3.3-70b-versatile", "temperature": 0,
+                                 "response_format": {"type": "json_object"},
+                                 "messages": [{"role": "user", "content": prompt}]},
+                           timeout=60)
+            if r.status_code == 429:
+                _t.sleep(10 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            v = _json.loads(r.json()["choices"][0]["message"]["content"])
+            if not v.get("coherent"):
+                return "garble"
+            return "present" if v.get("conveyed") else "missing"
+        except Exception:  # noqa: BLE001 — judge trouble must never suppress a real flag
+            return "missing"
+    return "missing"
 
 
 def _songlike(text: str) -> bool:
@@ -480,6 +527,17 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     n_unchecked += 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
+                    continue
+            if txt and dtext is not None:
+                near_lines = [dtext[j] for j in range(len(dseg))
+                              if abs(dseg[j][0] - (s + drift0)) <= 12.0]
+                verdict = _judge(txt, original_lang, near_lines, dub_lang)
+                if verdict == "garble":
+                    n_unchecked += 1
+                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — judge: not coherent dialogue  {txt!r}")
+                    continue
+                if verdict == "present":
+                    _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
             _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
             errors.append(_missing(i, s, e, dub_label, best_seg, txt))
