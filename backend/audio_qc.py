@@ -214,10 +214,10 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
 
     segs = _groq_call(np.concatenate(pieces), lang1)
     out = []
-    for cs, ce, txt in segs:
+    for cs, ce, txt, q in segs:
         s2, e2 = back(cs), back(ce)
         if e2 - s2 >= 0.2 and txt:
-            out.append((round(s2, 2), round(e2, 2), txt))
+            out.append((round(s2, 2), round(e2, 2), txt, q))
     return out
 
 
@@ -249,9 +249,23 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
         for s in r.json().get("segments") or []:
             t = (s.get("text") or "").strip()
             if t:
-                segs.append((round(float(s["start"]), 2), round(float(s["end"]), 2), t))
+                segs.append((round(float(s["start"]), 2), round(float(s["end"]), 2), t,
+                             {"nsp": float(s.get("no_speech_prob") or 0.0),
+                              "alp": float(s.get("avg_logprob") or 0.0)}))
         return segs
     raise RuntimeError("Groq transcription kept rate-limiting")
+
+
+def _reliable(q: dict | None) -> bool:
+    """Whisper's own confidence in a segment. A flag built on a garbled transcript is noise —
+    EP43's fight scene produced ~20 false 'missing' from exactly that."""
+    return bool(q) and q.get("nsp", 1.0) < 0.5 and q.get("alp", -9.0) > -1.0
+
+
+def _songlike(text: str) -> bool:
+    """Lyrics repeat; dialogue doesn't. Catches ED/insert songs that survive VAD."""
+    w = (text or "").split()
+    return len(w) >= 6 and len(set(w)) / len(w) < 0.5
 
 
 def embed_text(texts: list[str]):
@@ -347,16 +361,20 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     otext: list[str] | None = None
     dtext: list[str] | None = None
+    oqual: list[dict] | None = None
+    dqual: list[dict] | None = None
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
         osegs = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
         dsegs = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
-        oseg = [(s, e) for s, e, _ in osegs]
-        dseg = [(s, e) for s, e, _ in dsegs]
-        otext = [t for _, _, t in osegs]
-        dtext = [t for _, _, t in dsegs]
+        oseg = [(s, e) for s, e, _, _ in osegs]
+        dseg = [(s, e) for s, e, _, _ in dsegs]
+        otext = [t for _, _, t, _ in osegs]
+        dtext = [t for _, _, t, _ in dsegs]
+        oqual = [q for _, _, _, q in osegs]
+        dqual = [q for _, _, _, q in dsegs]
         _say(f"lines: original={len(oseg)} dub={len(dseg)}")
         if not oseg:
             return _empty("no speech transcribed in the original", tol_s, dub_label)
@@ -411,11 +429,39 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             best[i] = (j, sc)
 
     errors: list[dict[str, Any]] = []
+    n_unchecked = 0
     if engine == "text" or not missing:
+        # EVIDENCE-GATED flagging: "no match found" is NOT the same claim as "this dialogue
+        # line is absent". EP43's fight scene produced ~20 false MISSING (all disproved by
+        # ear) because garbled shouts on both sides can never match. A flag now requires:
+        #   A. the reference segment is a confidently-read dialogue line (Whisper quality,
+        #      not song-like);
+        #   B. the dub transcription near the expected slot is itself trustworthy — if the
+        #      dub is unreadable there, the region is UNCHECKED, never MISSING;
+        #   C. the semantic no-match (the alignment gap that got us here).
+        drifts0 = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
+        drift0 = drifts0[len(drifts0) // 2] if drifts0 else 0.0
         for i in missing:
             s, e = oseg[i]
             txt = otext[i] if otext else None
+            q = oqual[i] if oqual else None
             best_seg = float(sim[i].max()) if sim.size else 0.0
+            if txt and _songlike(txt):
+                _say(f"  song-like @{s:.1f}-{e:.1f}s — not dialogue, not flagged  {txt!r}")
+                continue
+            if q is not None and not _reliable(q):
+                n_unchecked += 1
+                _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
+                     f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
+                continue
+            if dqual is not None:
+                near_ok = any(abs(dseg[j][0] - (s + drift0)) <= 10.0 and _reliable(dqual[j])
+                              for j in range(len(dseg)))
+                if not near_ok:
+                    n_unchecked += 1
+                    _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub unreadable near this slot; "
+                         f"cannot certify absence  {txt!r}")
+                    continue
             _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
             errors.append(_missing(i, s, e, dub_label, best_seg, txt))
     else:
@@ -467,6 +513,12 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     for j in extra:
         s, e = dseg[j]
         dt = dtext[j] if dtext else None
+        # Same evidence bar for EXTRA: an unreliable or song-like dub segment is noise,
+        # not an improvised line.
+        if dqual is not None and not _reliable(dqual[j]):
+            continue
+        if dt is not None and (_songlike(dt) or len(dt.split()) < 2):
+            continue
         errors.append({
             "type": "EXTRA", "subtype": None, "severity": "info",
             "character": None, "channel": dub_label, "script_index": None,
@@ -477,7 +529,10 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                         + (f" ({dt!r})" if dt else "")
                         + " with nothing matching it in the original — added or improvised."),
         })
-    return _report(errors, oseg, dub_label, tol_s)
+    if n_unchecked:
+        _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
+             f"({n_unchecked} unchecked — transcript unreliable on one side)")
+    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked)
 
 
 def _confidence(best: float, text: str | None) -> str:
@@ -510,8 +565,10 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
     }
 
 
-def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float) -> dict[str, Any]:
+def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
+            n_unchecked: int = 0) -> dict[str, Any]:
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
+    total = len(oseg)
     return {
         "mode": "audio_only",
         "tol_s": tol_s,
@@ -523,7 +580,12 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float) -> 
             "n_characters_checked": 0,
             "n_missing": n["MISSING"], "n_misaligned": n["MISALIGNED"],
             "n_extra": n["EXTRA"], "n_mismatch": 0, "n_unmapped": 0,
-            "n_sync_warnings": 0, "n_original_regions": len(oseg),
+            "n_sync_warnings": 0, "n_original_regions": total,
+            # HONESTY METRIC: how much of the original's dialogue we could actually verify.
+            # A region where either side's transcript is unreliable is declared UNCHECKED,
+            # never guessed at — the studio must know what the tool did not see.
+            "n_unchecked": n_unchecked,
+            "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
         },
     }
 
