@@ -582,24 +582,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         #   C. the semantic no-match (the alignment gap that got us here).
         drifts0 = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
         drift0 = drifts0[len(drifts0) // 2] if drifts0 else 0.0
-        # LOCAL drift, not one global median. Dub mixes don't hold a constant offset across a
-        # whole episode — EP38's runs from -19s to +19s (recaps/eyecatches/ad bumpers land
-        # differently) — and every one of its 16 flags sat where the local offset was 15-22s
-        # from the global one. With the slot placed that far off, the acoustic coverage test
-        # and the neighbour lookup both examine the wrong audio, so present dialogue reads as
-        # a hole. Each candidate now uses the median offset of the matched pairs around it.
-        anchors = sorted((oseg[i][0], dseg[j][0] - oseg[i][0]) for i, j, _ in pairs)
-
-        def _drift_at(t: float) -> float:
-            for win in (30.0, 60.0, 120.0):
-                near = [d for a, d in anchors if abs(a - t) <= win]
-                if len(near) >= 3:
-                    return sorted(near)[len(near) // 2]
-            return drift0
-
         for i in missing:
             s, e = oseg[i]
-            drift_i = _drift_at(s)
             txt = otext[i] if otext else None
             q = oqual[i] if oqual else None
             best_seg = float(sim[i].max()) if sim.size else 0.0
@@ -624,7 +608,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # like this — gating on it cost 3 real catches on EP42). Speech that's
                 # present but unreadable = we can't certify anything = UNCHECKED.
                 nearby = [j for j in range(len(dseg))
-                          if abs(dseg[j][0] - (s + drift_i)) <= 10.0]
+                          if abs(dseg[j][0] - (s + drift0)) <= 10.0]
                 if nearby and not any(_reliable(dqual[j], dtext[j] if dtext else None)
                                       for j in nearby):
                     n_unchecked += 1
@@ -643,7 +627,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # slots "occupied" and collapsed EP42 recall to 1/5. A dropped line leaves
                 # most of its slot silent. Drift is clamped: a garbage median from poor
                 # pairing must not shift every slot onto its neighbour.
-                d0 = drift_i if abs(drift_i - drift0) > 3.0 else max(-3.0, min(3.0, drift0))
+                d0 = max(-3.0, min(3.0, drift0))
                 slot = (s + d0, e + d0)
                 dur = max(0.2, slot[1] - slot[0])
                 cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
@@ -656,7 +640,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     continue
             if txt and dtext is not None:
                 near_lines = [dtext[j] for j in range(len(dseg))
-                              if abs(dseg[j][0] - (s + drift_i)) <= 12.0]
+                              if abs(dseg[j][0] - (s + drift0)) <= 12.0]
                 verdict = _judge(txt, original_lang, near_lines, dub_lang)
                 if verdict == "garble":
                     n_unchecked += 1
