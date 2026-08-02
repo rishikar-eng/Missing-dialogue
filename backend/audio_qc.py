@@ -207,9 +207,20 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
     a piecewise map converts Whisper's times back to the real timeline. Whisper never sees
     the material it hallucinates on, and segment times stay honest.
     """
+    prep = _prep_chunks(audio16)
+    return _decode(prep, lang1) if prep else []
+
+
+def _prep_chunks(audio16: np.ndarray):
+    """VAD + concatenation + chunking — the DETERMINISTIC half of transcription.
+
+    Split out from the API calls so the two independent readings of one side share a single
+    Silero pass (it was being run once per pass, i.e. four times per episode) and so every
+    chunk request can be issued concurrently.
+    """
     wins = segment(audio16)
     if not wins:
-        return []
+        return None
     GAP = 0.5
     PAD = 0.2                                      # a little context helps word boundaries
     gap = np.zeros(int(GAP * 16000), dtype="float32")
@@ -239,9 +250,8 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
     # chunks split ONLY at VAD-window boundaries (never mid-utterance). PCM_16 mono 16 kHz is
     # 32 kB/s, so 560 s/chunk ≈ 18 MB — comfortably under the cap.
     CHUNK_S = 560.0
-    out = []
+    chunks: list[tuple[np.ndarray, float]] = []
     start = 0
-    n_chunks = 0
     while start < len(cmap):
         end = start
         t0 = cmap[start][0]
@@ -249,17 +259,48 @@ def transcribe_groq(audio16: np.ndarray, lang1: str) -> list[tuple[float, float,
             end += 1
         if end == start:
             end = start + 1                        # one window longer than the cap: send alone
-        segs = _groq_call(np.concatenate(pieces[2 * start:2 * end]), lang1)
-        for cs, ce, txt, q in segs:
-            s2, e2 = back(cs + t0), back(ce + t0)  # chunk-local time + t0 = global concat time
-            if e2 - s2 >= 0.2 and txt:
-                out.append((round(s2, 2), round(e2, 2), txt, q))
+        chunks.append((np.concatenate(pieces[2 * start:2 * end]), t0))
         start = end
-        n_chunks += 1
-    if n_chunks > 1:
-        print(f"[audio_qc] transcribed in {n_chunks} chunks (episode longer than one request)",
-              flush=True)
-    return out
+    return chunks, back
+
+
+def _decode(prep, lang1: str, passes: int = 1) -> list:
+    """Issue every (pass × chunk) transcription request CONCURRENTLY.
+
+    These are pure network waits against Groq, and they were running strictly in sequence —
+    eight of them for a double-passed 25-minute episode, which dominated the run once
+    separation was cached. Concurrency is capped so the account's rate limit isn't tripped
+    (a 429 already costs a 15 s+ backoff in _groq_call, which would undo the win).
+    """
+    import concurrent.futures as _cf
+    chunks, back = prep
+    out: list[list] = [[] for _ in range(passes)]
+    tasks = [(p, c) for p in range(passes) for c in range(len(chunks))]
+    if len(tasks) > 1:
+        print(f"[audio_qc] {len(tasks)} transcription requests in flight "
+              f"({passes} pass(es) × {len(chunks)} chunk(s))", flush=True)
+    with _cf.ThreadPoolExecutor(max_workers=min(4, len(tasks))) as ex:
+        futs = {ex.submit(_groq_call, chunks[c][0], lang1): (p, c) for p, c in tasks}
+        for f in _cf.as_completed(futs):
+            p, c = futs[f]
+            t0 = chunks[c][1]
+            for cs, ce, txt, q in f.result():
+                s2, e2 = back(cs + t0), back(ce + t0)   # chunk-local + t0 = global concat time
+                if e2 - s2 >= 0.2 and txt:
+                    out[p].append((round(s2, 2), round(e2, 2), txt, q))
+    for lst in out:
+        lst.sort(key=lambda x: (x[0], x[1]))       # completion order isn't timeline order
+    return out[0] if passes == 1 else out
+
+
+def transcribe_two_passes(audio16: np.ndarray, lang1: str) -> tuple[list, list]:
+    """Two independent readings of the same audio (Groq's ASR is nondeterministic), sharing
+    one VAD pass and issuing all requests at once."""
+    prep = _prep_chunks(audio16)
+    if not prep:
+        return [], []
+    a, b = _decode(prep, lang1, passes=2)
+    return a, b
 
 
 def _merge_passes(a: list, b: list) -> list:
@@ -492,8 +533,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
-        _p1 = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
-        _p2 = transcribe_groq(ov, LANG1.get(original_lang.lower(), original_lang))
+        _p1, _p2 = transcribe_two_passes(ov, LANG1.get(original_lang.lower(), original_lang))
         osegs = _merge_passes(_p1, _p2)
         _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
@@ -502,8 +542,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         # EP41/EP43 flag traced to a dub line present in the audio that one nondeterministic
         # pass failed to render — a second chance at rendering it kills the false flag and
         # steadies the flag set between runs.
-        _q1 = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
-        _q2 = transcribe_groq(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        _q1, _q2 = transcribe_two_passes(dv, LANG1.get(dub_lang.lower(), dub_lang))
         dsegs = _merge_passes(_q1, _q2)
         _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
         oseg = [(s, e) for s, e, _, _ in osegs]
