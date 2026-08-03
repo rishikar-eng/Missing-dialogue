@@ -59,3 +59,8 @@ secrets.local.*
 *_keys.csv
 groq.key
 *.key
+
+# API keys dropped in the repo root (public repo — never commit)
+elevenlabs.txt
+*_key.txt
+*api_key*.txt
