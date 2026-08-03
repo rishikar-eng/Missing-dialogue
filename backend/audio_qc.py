@@ -327,11 +327,34 @@ def transcribe_lines(audio16: np.ndarray, lang1: str) -> list:
 
 def _window_lines(wins: list[tuple[float, float]], passes: list[list]) -> list:
     """Collapse N transcription passes onto fixed VAD windows -> [(start, end, text, q)]."""
+    # Assign by OVERLAP, to the window each segment overlaps MOST — never by midpoint.
+    # Whisper segments the CONCATENATED speech, so its segments routinely straddle the gaps
+    # between windows; a midpoint test drops those on the floor, which silently lost ~45% of
+    # EP38's reference lines (220 -> 120) including a verified drop.
+    per_pass: list[dict[int, list]] = []
+    for segs in passes:
+        buckets: dict[int, list] = {}
+        for p in segs:
+            best_k, best_ov = None, 0.0
+            for k, (ws, we) in enumerate(wins):
+                if p[0] >= we:
+                    continue
+                if p[1] <= ws:
+                    break                          # wins is sorted: no later window can overlap
+                o = min(we, p[1]) - max(ws, p[0])
+                if o > best_ov:
+                    best_ov, best_k = o, k
+            if best_k is not None:
+                buckets.setdefault(best_k, []).append(p)
+        per_pass.append(buckets)
+
     out = []
-    for (ws, we) in wins:
+    for k, (ws, we) in enumerate(wins):
         cands = []
-        for segs in passes:
-            parts = [p for p in segs if ws - 0.25 <= (p[0] + p[1]) / 2.0 <= we + 0.25]
+        for buckets in per_pass:
+            parts = sorted(buckets.get(k, []), key=lambda p: p[0])
+            if not parts:
+                continue
             txt = " ".join(p[2] for p in parts).strip()
             if not txt:
                 continue
