@@ -198,6 +198,18 @@
    "dub_lang": "tamil",
    "verified_missing": [],
    "note_expected": "Any MISSING flag is a false positive. History: 20 flags ungated -> 1-2 after the evidence gates."
+  },
+  "ep41-stems-VOID": {
+   "description": "PLANNED GT CASE, VOIDED 2026-08-03 before adoption: EP41 Hindi premix vs today's summed Tamil stems. Script-QC (July) recorded 12 lines missing from the stems, but the studio RE-DELIVERED PATCHED STEMS since — the user ear-confirmed the 'snacks cafe Hidamari' line audible in the current stems sum. The production build's 2/12 'recall' was CORRECT behaviour against current audio. THIRD instance of stale ground truth masquerading as a tool failure. RULE: ground truth derived from a delivery is only valid against that exact delivery (pin by Box sha1).",
+   "verified_present": [
+    {
+     "start": 640.52,
+     "end": 643.12,
+     "confidence": "certain",
+     "note": "'snacks cafe Hidamari' — ear-confirmed in the CURRENT stems sum 2026-08-03"
+    }
+   ],
+   "verified_missing": []
   }
  }
 }
