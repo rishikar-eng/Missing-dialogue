@@ -93,151 +93,157 @@ def _push_sep_cache() -> None:
                     print(f"[run] cache upload failed: {e}", flush=True)
 
 
-args = sys.argv[1:]
+def _main():
+    args = sys.argv[1:]
 
 
-def _opt(name: str) -> str | None:
-    if name in args:
-        v = args[args.index(name) + 1]
-        args.remove(name)
-        args.remove(v)
-        return v
-    return None
+    def _opt(name: str) -> str | None:
+        if name in args:
+            v = args[args.index(name) + 1]
+            args.remove(name)
+            args.remove(v)
+            return v
+        return None
 
 
-dump_key = _opt("--dump")
-series = _opt("--series") or ""
-episode = _opt("--episode") or ""
-out_prefix = _opt("--out")
-clean = "--clean-dub" in args
-mkmix = "--make-dub-mix" in args
-args = [a for a in args if not a.startswith("--")]
-o, d, ol, dl = args[:4]
-o, d = _local(o), _local(d)
+    dump_key = _opt("--dump")
+    series = _opt("--series") or ""
+    episode = _opt("--episode") or ""
+    out_prefix = _opt("--out")
+    clean = "--clean-dub" in args
+    mkmix = "--make-dub-mix" in args
+    args = [a for a in args if not a.startswith("--")]
+    o, d, ol, dl = args[:4]
+    o, d = _local(o), _local(d)
 
-if mkmix:
-    print("[run] constructing dub mix = original accompaniment + clean dub dialogue", flush=True)
-    acc = audio_qc._separate(o)[1]
-    tam = audio_qc._load16(d)
-    n = min(len(acc), len(tam))
-    mix = acc[:n] + tam[:n]
-    peak = float(np.abs(mix).max())
-    if peak > 0.95:
-        mix = mix / peak * 0.9
-    sf.write("/tmp/dubmix.wav", mix.astype("float32"), 16000)
-    d, clean = "/tmp/dubmix.wav", False
+    if mkmix:
+        print("[run] constructing dub mix = original accompaniment + clean dub dialogue", flush=True)
+        acc = audio_qc._separate(o)[1]
+        tam = audio_qc._load16(d)
+        n = min(len(acc), len(tam))
+        mix = acc[:n] + tam[:n]
+        peak = float(np.abs(mix).max())
+        if peak > 0.95:
+            mix = mix / peak * 0.9
+        sf.write("/tmp/dubmix.wav", mix.astype("float32"), 16000)
+        d, clean = "/tmp/dubmix.wav", False
 
-t = time.time()
-# AQC_DRAWS>1: run detection N times and UNION the MISSING flags. Groq's transcription is
-# nondeterministic and every gate downstream inherits that lottery — measured on the ear-truth
-# window: single draws score 2-5/6 recall, the union of 5 draws scores 6/6 (the only full-recall
-# configuration ever observed). Separation is cached after draw 1, so extra draws cost only the
-# transcribe+detect stage. Each union flag reports its stability (seen in k/N draws) — a free,
-# honest confidence signal. Default (unset/1) = exactly the old single-draw behaviour.
-N = max(1, int(os.environ.get("AQC_DRAWS", "1")))
-reps = []
-# Draw 1 runs alone: it warms the Demucs caches so later draws can never race the separator.
-print(f"[run] draw 1/{N}", flush=True)
-reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
-                             dub_is_clean=clean))
-if N > 1:
-    # Draws 2..N run CONCURRENTLY in spawned processes: they are pure network wait
-    # (separation cache-hits from disk; transcription is API calls), so the union costs
-    # roughly one draw's wall-clock instead of N. Spawn, not fork — draw 1 leaves torch
-    # state and finished threads behind, and forking across OpenMP locks can deadlock.
-    # A failed draw is dropped with a warning: a union of N-1 beats a dead task.
-    import multiprocessing as _mp
-    ctx = _mp.get_context("spawn")
-    import concurrent.futures as _cf
-    with _cf.ProcessPoolExecutor(max_workers=min(N - 1, 4), mp_context=ctx) as _ex:
-        _futs = [_ex.submit(audio_qc._spawn_draw, o, d, ol, dl, clean) for _ in range(N - 1)]
-        for _f in _cf.as_completed(_futs):
-            try:
-                reps.append(_f.result())
-            except Exception as _e:  # noqa: BLE001
-                print(f"[run] concurrent draw failed ({_e}); union proceeds with fewer",
-                      flush=True)
-    print(f"[run] {len(reps)}/{N} draws completed", flush=True)
-rep = max(reps, key=lambda r: r["summary"].get("coverage") or 0)
-if N > 1:
-    TOL = 2.5
-    def _ov(a, b):
-        return not (a["script_end_s"] + TOL < b["script_start_s"]
-                    or b["script_end_s"] + TOL < a["script_start_s"])
-    clusters = []                     # [(representative_flag, seen_count)]
-    for r in reps:
-        for e in r["errors"]:
-            if e["type"] != "MISSING":
-                continue
-            for k, (c0, n0) in enumerate(clusters):
-                if _ov(c0, e):
-                    order = {"high": 2, "medium": 1, "low": 0}
-                    best = e if order.get(e.get("confidence"), 0) > order.get(c0.get("confidence"), 0) else c0
-                    clusters[k] = (best, n0 + 1)
-                    break
-            else:
-                clusters.append((dict(e), 1))
-    union = []
-    for c0, n0 in clusters:
-        c0["stability"] = f"{min(n0, N)}/{N}"
-        c0["message"] = (c0.get("message") or "") + f" [seen in {min(n0, N)}/{N} independent reads]"
-        union.append(c0)
-    union.sort(key=lambda e: e["script_start_s"])
-    rep["errors"] = union + [e for e in rep["errors"] if e["type"] != "MISSING"]
-    n_conf = {}
-    for c in ("high", "medium", "low"):
-        n_conf[c] = sum(1 for e in union if e.get("confidence") == c)
-    rep["summary"]["n_missing"] = len(union)
-    rep["summary"]["n_missing_by_confidence"] = n_conf
-    rep["summary"]["n_draws"] = N
-    print(f"[run] union of {N} draws: {len(union)} missing "
-          f"(per-draw: {[r['summary']['n_missing'] for r in reps]})", flush=True)
-s = rep["summary"]
-conf = s.get("n_missing_by_confidence", {}) or {}
-print(f"ELAPSED {time.time()-t:.0f}s")
-print(f"RESULT missing={s['n_missing']} (high={conf.get('high', 0)} med={conf.get('medium', 0)} "
-      f"low={conf.get('low', 0)}) misaligned={s['n_misaligned']} "
-      f"extra={s['n_extra']} of {s['n_original_regions']} original windows")
-for e in rep["errors"]:
-    if e["type"] == "MISSING":
-        print(f"   MISSING    @{e['script_start_s']:7.1f}-{e['script_end_s']:7.1f}s "
-              f"best={e['coverage']:.2f} conf={e.get('confidence', '?')}")
-for e in rep["errors"]:
-    if e["type"] == "MISALIGNED":
-        print(f"   MISALIGNED @{e['script_start_s']:7.1f}s drift={e['drift_s']:+.1f}s match={e['coverage']:.2f}")
-json.dump(rep, open("/tmp/report.json", "w"), default=str)
-_push_sep_cache()
+    t = time.time()
+    # AQC_DRAWS>1: run detection N times and UNION the MISSING flags. Groq's transcription is
+    # nondeterministic and every gate downstream inherits that lottery — measured on the ear-truth
+    # window: single draws score 2-5/6 recall, the union of 5 draws scores 6/6 (the only full-recall
+    # configuration ever observed). Separation is cached after draw 1, so extra draws cost only the
+    # transcribe+detect stage. Each union flag reports its stability (seen in k/N draws) — a free,
+    # honest confidence signal. Default (unset/1) = exactly the old single-draw behaviour.
+    N = max(1, int(os.environ.get("AQC_DRAWS", "1")))
+    reps = []
+    # Draw 1 runs alone: it warms the Demucs caches so later draws can never race the separator.
+    print(f"[run] draw 1/{N}", flush=True)
+    reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
+                                 dub_is_clean=clean))
+    if N > 1:
+        # Draws 2..N run CONCURRENTLY in spawned processes: they are pure network wait
+        # (separation cache-hits from disk; transcription is API calls), so the union costs
+        # roughly one draw's wall-clock instead of N. Spawn, not fork — draw 1 leaves torch
+        # state and finished threads behind, and forking across OpenMP locks can deadlock.
+        # A failed draw is dropped with a warning: a union of N-1 beats a dead task.
+        import multiprocessing as _mp
+        ctx = _mp.get_context("spawn")
+        import concurrent.futures as _cf
+        with _cf.ProcessPoolExecutor(max_workers=min(N - 1, 4), mp_context=ctx) as _ex:
+            _futs = [_ex.submit(audio_qc._spawn_draw, o, d, ol, dl, clean) for _ in range(N - 1)]
+            for _f in _cf.as_completed(_futs):
+                try:
+                    reps.append(_f.result())
+                except Exception as _e:  # noqa: BLE001
+                    print(f"[run] concurrent draw failed ({_e}); union proceeds with fewer",
+                          flush=True)
+        print(f"[run] {len(reps)}/{N} draws completed", flush=True)
+    rep = max(reps, key=lambda r: r["summary"].get("coverage") or 0)
+    if N > 1:
+        TOL = 2.5
+        def _ov(a, b):
+            return not (a["script_end_s"] + TOL < b["script_start_s"]
+                        or b["script_end_s"] + TOL < a["script_start_s"])
+        clusters = []                     # [(representative_flag, seen_count)]
+        for r in reps:
+            for e in r["errors"]:
+                if e["type"] != "MISSING":
+                    continue
+                for k, (c0, n0) in enumerate(clusters):
+                    if _ov(c0, e):
+                        order = {"high": 2, "medium": 1, "low": 0}
+                        best = e if order.get(e.get("confidence"), 0) > order.get(c0.get("confidence"), 0) else c0
+                        clusters[k] = (best, n0 + 1)
+                        break
+                else:
+                    clusters.append((dict(e), 1))
+        union = []
+        for c0, n0 in clusters:
+            c0["stability"] = f"{min(n0, N)}/{N}"
+            c0["message"] = (c0.get("message") or "") + f" [seen in {min(n0, N)}/{N} independent reads]"
+            union.append(c0)
+        union.sort(key=lambda e: e["script_start_s"])
+        rep["errors"] = union + [e for e in rep["errors"] if e["type"] != "MISSING"]
+        n_conf = {}
+        for c in ("high", "medium", "low"):
+            n_conf[c] = sum(1 for e in union if e.get("confidence") == c)
+        rep["summary"]["n_missing"] = len(union)
+        rep["summary"]["n_missing_by_confidence"] = n_conf
+        rep["summary"]["n_draws"] = N
+        print(f"[run] union of {N} draws: {len(union)} missing "
+              f"(per-draw: {[r['summary']['n_missing'] for r in reps]})", flush=True)
+    s = rep["summary"]
+    conf = s.get("n_missing_by_confidence", {}) or {}
+    print(f"ELAPSED {time.time()-t:.0f}s")
+    print(f"RESULT missing={s['n_missing']} (high={conf.get('high', 0)} med={conf.get('medium', 0)} "
+          f"low={conf.get('low', 0)}) misaligned={s['n_misaligned']} "
+          f"extra={s['n_extra']} of {s['n_original_regions']} original windows")
+    for e in rep["errors"]:
+        if e["type"] == "MISSING":
+            print(f"   MISSING    @{e['script_start_s']:7.1f}-{e['script_end_s']:7.1f}s "
+                  f"best={e['coverage']:.2f} conf={e.get('confidence', '?')}")
+    for e in rep["errors"]:
+        if e["type"] == "MISALIGNED":
+            print(f"   MISALIGNED @{e['script_start_s']:7.1f}s drift={e['drift_s']:+.1f}s match={e['coverage']:.2f}")
+    json.dump(rep, open("/tmp/report.json", "w"), default=str)
+    _push_sep_cache()
 
-if out_prefix:
-    from backend import audio_report, naming
-    fname = naming.audio_qc_xlsx(series or None, episode or 0, dl)
-    audio_report.build_audio_workbook(
-        rep,
-        meta={"series": series, "episode": f"EP{int(episode):02d}" if episode.isdigit() else episode,
-              "original": f"{os.path.basename(o)} ({ol})", "dub": f"{os.path.basename(d)} ({dl})",
-              "generated_at": time.strftime("%Y-%m-%d %H:%M")},
-        out_path=f"/tmp/{fname}")
-    import boto3
-    s3 = boto3.client("s3")
-    pre = out_prefix.strip("/")
-    s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
-    s3.upload_file("/tmp/report.json", BUCKET, f"{pre}/report.json")
-    print(f"WORKBOOK s3://{BUCKET}/{pre}/{fname}", flush=True)
+    if out_prefix:
+        from backend import audio_report, naming
+        fname = naming.audio_qc_xlsx(series or None, episode or 0, dl)
+        audio_report.build_audio_workbook(
+            rep,
+            meta={"series": series, "episode": f"EP{int(episode):02d}" if episode.isdigit() else episode,
+                  "original": f"{os.path.basename(o)} ({ol})", "dub": f"{os.path.basename(d)} ({dl})",
+                  "generated_at": time.strftime("%Y-%m-%d %H:%M")},
+            out_path=f"/tmp/{fname}")
+        import boto3
+        s3 = boto3.client("s3")
+        pre = out_prefix.strip("/")
+        s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
+        s3.upload_file("/tmp/report.json", BUCKET, f"{pre}/report.json")
+        print(f"WORKBOOK s3://{BUCKET}/{pre}/{fname}", flush=True)
 
-if dump_key:
-    print("[run] embedding probe windows (silence + random) for calibration", flush=True)
-    dv = audio_qc._load16(d) if clean else audio_qc.separate_dialogue(d)
-    dur = len(dv) / 16000.0
-    sil = np.zeros(int(1.2 * 16000), dtype="float32")
-    dv_probe = np.concatenate([dv, sil])
-    probes = [(dur + 0.05, dur + 1.15)]                       # one pure-silence window
-    rng = np.random.RandomState(7)
-    probes += [(t0, t0 + 1.2) for t0 in sorted(rng.uniform(0, dur - 1.3, 6))]
-    lang3 = audio_qc._lang3(dl)
-    P = audio_qc.embed(dv_probe, probes, lang3).numpy()
-    base = np.load("/tmp/aqc_dump.npz")
-    np.savez("/tmp/aqc_full.npz", P=P, probes=np.array(probes, dtype="float32"),
-             **{k: base[k] for k in base.files})
-    import boto3
-    boto3.client("s3").upload_file("/tmp/aqc_full.npz", BUCKET, dump_key)
-    print(f"[run] dump uploaded to s3://{BUCKET}/{dump_key}")
+    if dump_key:
+        print("[run] embedding probe windows (silence + random) for calibration", flush=True)
+        dv = audio_qc._load16(d) if clean else audio_qc.separate_dialogue(d)
+        dur = len(dv) / 16000.0
+        sil = np.zeros(int(1.2 * 16000), dtype="float32")
+        dv_probe = np.concatenate([dv, sil])
+        probes = [(dur + 0.05, dur + 1.15)]                       # one pure-silence window
+        rng = np.random.RandomState(7)
+        probes += [(t0, t0 + 1.2) for t0 in sorted(rng.uniform(0, dur - 1.3, 6))]
+        lang3 = audio_qc._lang3(dl)
+        P = audio_qc.embed(dv_probe, probes, lang3).numpy()
+        base = np.load("/tmp/aqc_dump.npz")
+        np.savez("/tmp/aqc_full.npz", P=P, probes=np.array(probes, dtype="float32"),
+                 **{k: base[k] for k in base.files})
+        import boto3
+        boto3.client("s3").upload_file("/tmp/aqc_full.npz", BUCKET, dump_key)
+        print(f"[run] dump uploaded to s3://{BUCKET}/{dump_key}")
+
+
+
+if __name__ == "__main__":
+    _main()
