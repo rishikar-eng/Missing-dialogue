@@ -1321,6 +1321,37 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                            "summaries": {}, "summary_url": None, "episode": None,
                            "series": (rec or {}).get("series")}
 
+    # --- audio-only (scriptless) run: one task, one language, results in S3 --------------
+    if rec and rec.get("compute") == "audio":
+        from . import audio_jobs
+        lang = rec.get("lang") or "dub"
+        out["episode"] = rec.get("episode")
+        st = audio_jobs.status(jid or "")
+        if st.get("status") == "done":
+            s = st.get("summary") or {}
+            conf = s.get("missing_by_confidence") or {}
+            out["settled"] = True
+            out["lines"] = [
+                f"🎧 **{lang} — audio-only QC** (no script, mix vs mix)",
+                f"- **{s.get('missing', 0)} possible missing lines** "
+                f"(high {conf.get('high', 0)} / medium {conf.get('medium', 0)} / low {conf.get('low', 0)})",
+                f"- checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} original lines "
+                f"({s.get('unchecked', 0)} unreadable on one side)",
+            ]
+            if st.get("download_url"):
+                out["lines"].append(f"- [AudioQC workbook]({st['download_url']}) — flags in verify order")
+            out["verdict"] = ("Nothing flagged — every original line was either matched or unverifiable."
+                              if not s.get("missing") else
+                              "Verify the high-confidence flags first; low ones are usually present but quiet.")
+        elif st.get("status") == "error":
+            out["settled"] = True
+            out["lines"] = [f"⚠️ **{lang} — audio-only QC failed**: {_friendly_error(st.get('error'))}"]
+        else:
+            out["lines"] = [f"🔄 **{lang} — audio-only QC** {st.get('stage') or 'running'} "
+                            f"(separation + transcription take a few minutes)"]
+        out["header"] = f"EP {rec.get('episode')} — audio-only QC ({lang})"
+        return out
+
     # --- cloud run fanned out one task PER LANGUAGE: aggregate their outcomes -----------
     if rec and rec.get("compute") == "fargate-parallel":
         per = fargate.status_parallel(rec.get("langs") or {})
@@ -1594,6 +1625,8 @@ _HELP = (
     "- `check ep 42` — what's in Box for that episode (script, original audio, each dub "
     "language) + a ▶ Run button\n"
     "- `run ep 42` — start QC across every delivered language\n"
+    "- `audio check ep 42 tamil` — audio-only QC when there's no script: compares the "
+    "original mix against that language's delivered mix and flags missing dialogue\n"
     "- `status` — progress, then per-language results, root cause and download links\n"
     "- `runs` — the recent runs in this channel\n"
     "- `help` — this message\n\n"
@@ -1670,6 +1703,39 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     # episode + series (fall back to the session's last if not restated)
     m = re.search(r"(?:ep|epi|episode)\s*#?\s*(\d{1,3})", low) or re.search(r"\b(\d{1,3})\b", low)
     ep = int(m.group(1)) if m else fast.get("episode")
+
+    # AUDIO-ONLY QC — must be tested BEFORE run/check, because "audio check ep 41" contains
+    # neither a run verb nor anything the status branch wants, so it used to fall through to
+    # the script availability card and silently do the wrong thing.
+    if re.search(r"\b(audio|mix|scriptless|no.?script)\b", low) and \
+            re.search(r"\b(check|qc|compare|run|start|go)\b", low):
+        from . import audio_jobs
+        if ep is None:
+            return {"type": "message", "text": "Which episode? e.g. 'audio check ep 41 tamil'."}
+        if not series_key:
+            return {"type": "message",
+                    "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
+        key, cfg = series_registry.resolve(series_key)
+        langs = list(cfg.get("languages", []))
+        want = next((l for l in langs if re.search(rf"\b{l.lower()}\b", low)), None)
+        if not want:
+            return {"type": "message",
+                    "text": f"Which language? Audio QC compares ONE dub mix at a time — "
+                            f"e.g. 'audio check ep {ep} tamil'. Available: {', '.join(langs)}."}
+        try:
+            info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
+        except Exception as e:  # noqa: BLE001
+            return {"type": "message", "text": f"Couldn't start the audio check: {str(e)[:160]}"}
+        if info.get("error"):
+            return {"type": "message", "text": f"⚠️ {info['error']}"}
+        fast.update(job=info["job_id"], episode=int(ep), series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
+        return {"type": "message",
+                "text": f"🎧 Audio-only QC started for EP {ep} {want} ({cfg.get('display_name')}).\n"
+                        f"- original: `{info['original']}` ({info.get('original_stage')})\n"
+                        f"- dub: `{info['dub']}`\n\n"
+                        f"No script or stems needed — I'm comparing the two mixes directly. "
+                        f"About {info.get('eta_min', 8)} minutes; ask `status` for the result."}
     hits = _router._rule_match(text)
     all_s = series_registry.all_series()
     series_key = (next(iter(hits)) if len(hits) == 1

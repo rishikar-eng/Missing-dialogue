@@ -57,7 +57,7 @@ def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
 
 
 def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
-           original_stage: str = "mix") -> dict[str, Any]:
+           original_stage: str = "mix", conv: str | None = None) -> dict[str, Any]:
     """Discover the pair in Box and start the Fargate audio-QC task. Returns
     {job_id, original, dub, eta_min} or {error}."""
     groq = os.environ.get("GROQ_API_KEY", "")
@@ -103,6 +103,16 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     arn = r["tasks"][0]["taskArn"]
     _JOBS[job_id] = {"task_arn": arn, "series": series_key, "episode": int(episode),
                      "lang": lang, "prefix": prefix}
+    # Register under the Teams conversation exactly like a script run, so `status` and `runs`
+    # find it. Without this an audio check was invisible to every other command.
+    if conv:
+        try:
+            from . import run_store
+            run_store.record(job_id, conv=conv, episode=int(episode),
+                             series=cfg.get("display_name", series_key), status="running",
+                             compute="audio", lang=lang, prefix=prefix, task_arn=arn)
+        except Exception:  # noqa: BLE001 — bookkeeping must never break a launch
+            pass
     return {"job_id": job_id, "original": orig["name"], "original_stage": stage_used,
             "dub": dub["name"], "eta_min": 8,
             "note": "audio QC started; poll get_audio_result with this job_id"}
@@ -112,7 +122,14 @@ def status(job_id: str) -> dict[str, Any]:
     """S3-first: a published report.json means done regardless of task/server lifecycle."""
     import json
     c = fargate._cfg()
-    prefix = (_JOBS.get(job_id) or {}).get("prefix") or f"{c['prefix']}/audioqc/{job_id}"
+    rec = _JOBS.get(job_id) or {}
+    if not rec:                                    # in-memory map is lost on restart
+        try:
+            from . import run_store
+            rec = run_store.get(job_id) or {}
+        except Exception:  # noqa: BLE001
+            rec = {}
+    prefix = rec.get("prefix") or f"{c['prefix']}/audioqc/{job_id}"
     s3 = fargate._s3()
     try:
         rep = json.loads(s3.get_object(Bucket=c["bucket"],
@@ -135,8 +152,7 @@ def status(job_id: str) -> dict[str, Any]:
         return out
     except Exception:
         pass                                        # not published yet — fall through to ECS
-    rec = _JOBS.get(job_id)
-    if not rec:
+    if not rec.get("task_arn"):
         return {"error": "unknown or expired job_id"}
     try:
         t = fargate._ecs().describe_tasks(cluster=c["cluster"],
