@@ -1350,6 +1350,7 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
             out["lines"] = [f"🔄 **{lang} — audio-only QC** {st.get('stage') or 'running'} "
                             f"(separation + transcription take a few minutes)"]
         out["header"] = f"EP {rec.get('episode')} — audio-only QC ({lang})"
+        out["text"] = _status_text(out)            # every consumer expects a rendered text
         return out
 
     # --- cloud run fanned out one task PER LANGUAGE: aggregate their outcomes -----------
