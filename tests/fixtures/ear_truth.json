@@ -210,6 +210,47 @@
     }
    ],
    "verified_missing": []
+  },
+  "ep38-synthetic": {
+   "description": "SYNTHETIC recall case with a HINDI reference (the only one — every natural verified-drops case has a Japanese ref, so Hindi-ref configs like Sarvam-ref had no recall test). Built 2026-08-03 from the real EP38 pair by digitally silencing three CERTAIN verified-present lines in the Tamil ST_MIX (+5.8s measured offset applied). Truth is exact by construction.",
+   "original_box_id": "2192586093173",
+   "dub_s3": "s3://dialogue-qc-output-848005667477/inputs/ep38/ep38_tamil_synthdrops.wav",
+   "original_lang": "hindi",
+   "dub_lang": "tamil",
+   "verified_missing": [
+    {
+     "start": 78.8,
+     "end": 88.0,
+     "note": "Granute line — silenced in the synthetic dub",
+     "confidence": "certain"
+    },
+    {
+     "start": 605.6,
+     "end": 614.2,
+     "note": "'thank you so much' — silenced in the synthetic dub",
+     "confidence": "certain"
+    },
+    {
+     "start": 617.3,
+     "end": 620.0,
+     "note": "silenced in the synthetic dub",
+     "confidence": "certain"
+    }
+   ],
+   "verified_present": [
+    {
+     "start": 477.8,
+     "end": 480.0,
+     "note": "untouched; speech in both",
+     "confidence": "medium"
+    },
+    {
+     "start": 1215.2,
+     "end": 1218.0,
+     "note": "untouched; speech in both",
+     "confidence": "medium"
+    }
+   ]
   }
  }
 }
