@@ -39,7 +39,25 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
     return (mixes or [f for f in files if "premix" in _sq(f["name"])] or [None])[0]
 
 
-def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str) -> dict[str, Any]:
+def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
+                      n: int) -> dict[str, Any] | None:
+    """The original's FINAL mix (…_HINDI_ST_MIX.wav), which is the like-for-like reference
+    for a delivered dub ST_MIX. The premix is an earlier stage: different SFX and levels, and
+    for some episodes a different length outright (EP38/EP40's mixes run ~16 s longer than
+    their premixes) — comparing across stages manufactures drift and false flags."""
+    folder = cfg["box"].get("original_mix_folder")
+    if not folder:
+        return None
+    cands = [f for f in box.listing(folder)["files"]
+             if f["name"].lower().endswith(".wav")
+             and box_discovery.ep_of(f["name"]) == n
+             and "premix" not in _sq(f["name"]) and "stmix" in _sq(f["name"])]
+    cands.sort(key=lambda f: len(f["name"]))
+    return cands[0] if cands else None
+
+
+def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
+           original_stage: str = "mix") -> dict[str, Any]:
     """Discover the pair in Box and start the Fargate audio-QC task. Returns
     {job_id, original, dub, eta_min} or {error}."""
     groq = os.environ.get("GROQ_API_KEY", "")
@@ -50,9 +68,13 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str) -> dic
         return {"error": "Fargate compute is not configured (subnets/sg/bucket)"}
     token = box_oauth.get_token()
     box = box_discovery._Box(token)
-    orig = box_discovery.find_original(box, cfg, int(episode))
+    orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
+    stage_used = "ST_MIX"
+    if not orig:                                   # fall back to the premix stage
+        orig = box_discovery.find_original(box, cfg, int(episode))
+        stage_used = "ST_PREMIX"
     if not orig:
-        return {"error": f"no original premix found in Box for EP{int(episode):02d}"}
+        return {"error": f"no original mix or premix found in Box for EP{int(episode):02d}"}
     dub = find_dub_mix(box, cfg, lang, int(episode))
     if not dub:
         return {"error": f"no {lang} full mix (ST_MIX) delivered for EP{int(episode):02d}"}
@@ -81,8 +103,9 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str) -> dic
     arn = r["tasks"][0]["taskArn"]
     _JOBS[job_id] = {"task_arn": arn, "series": series_key, "episode": int(episode),
                      "lang": lang, "prefix": prefix}
-    return {"job_id": job_id, "original": orig["name"], "dub": dub["name"],
-            "eta_min": 8, "note": "audio QC started; poll get_audio_result with this job_id"}
+    return {"job_id": job_id, "original": orig["name"], "original_stage": stage_used,
+            "dub": dub["name"], "eta_min": 8,
+            "note": "audio QC started; poll get_audio_result with this job_id"}
 
 
 def status(job_id: str) -> dict[str, Any]:
