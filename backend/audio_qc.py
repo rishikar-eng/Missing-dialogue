@@ -353,7 +353,7 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
             r = httpx.post("https://api.groq.com/openai/v1/audio/transcriptions",
                            headers={"Authorization": f"Bearer {key}"},
                            files={"file": ("a.wav", buf.getvalue())},
-                           data={"model": "whisper-large-v3", "language": lang1,
+                           data={"model": os.environ.get("AQC_ASR_MODEL", "whisper-large-v3"), "language": lang1,
                                  "response_format": "verbose_json"},
                            timeout=300)
         except httpx.RequestError as e:             # connection reset / read timeout
@@ -846,8 +846,14 @@ def _empty(why: str, tol_s: float, ch: str) -> dict[str, Any]:
     return r
 
 
-def _spawn_draw(o: str, d: str, ol: str, dl: str, clean: bool) -> dict:
+def _spawn_draw(o: str, d: str, ol: str, dl: str, clean: bool,
+                model: str | None = None) -> dict:
     """Entry point for a spawned draw process. Lives HERE (an importable module) because
     multiprocessing 'spawn' re-imports the worker's module — and the runner script executes
     its whole pipeline at import, which is exactly what killed the first concurrent flight."""
+    if model:
+        # Per-draw model choice. Free-tier Groq rate ceilings are PER MODEL, so turbo draws
+        # ride a separate pool from the large-v3 anchor draw — real parallelism without a
+        # paid tier, and turbo is 2.8x cheaper if a paid tier ever arrives.
+        os.environ["AQC_ASR_MODEL"] = model
     return compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub", dub_is_clean=clean)

@@ -114,7 +114,11 @@ def _main():
     mkmix = "--make-dub-mix" in args
     args = [a for a in args if not a.startswith("--")]
     o, d, ol, dl = args[:4]
-    o, d = _local(o), _local(d)
+    # the two ~450MB inputs download CONCURRENTLY — pure network wait
+    import concurrent.futures as _cfdl
+    with _cfdl.ThreadPoolExecutor(max_workers=2) as _dl:
+        _fo, _fd = _dl.submit(_local, o), _dl.submit(_local, d)
+        o, d = _fo.result(), _fd.result()
 
     if mkmix:
         print("[run] constructing dub mix = original accompaniment + clean dub dialogue", flush=True)
@@ -151,7 +155,10 @@ def _main():
         ctx = _mp.get_context("spawn")
         import concurrent.futures as _cf
         with _cf.ProcessPoolExecutor(max_workers=min(N - 1, 4), mp_context=ctx) as _ex:
-            _futs = [_ex.submit(audio_qc._spawn_draw, o, d, ol, dl, clean) for _ in range(N - 1)]
+            _model = ("whisper-large-v3-turbo"
+                      if os.environ.get("AQC_TURBO", "").strip() == "1" else None)
+            _futs = [_ex.submit(audio_qc._spawn_draw, o, d, ol, dl, clean, _model)
+                     for _ in range(N - 1)]
             for _f in _cf.as_completed(_futs):
                 try:
                     reps.append(_f.result())
