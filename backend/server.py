@@ -1744,7 +1744,7 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     # the script availability card and silently do the wrong thing.
     if re.search(r"\b(audio|mix|scriptless|no.?script)\b", low) and \
             re.search(r"\b(check|qc|compare|run|start|go)\b", low):
-        from . import audio_jobs
+        from . import audio_jobs, notify
         if ep is None:
             return {"type": "message", "text": "Which episode? e.g. 'audio check ep 41 tamil'."}
         if not series_key:
