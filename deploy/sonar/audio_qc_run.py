@@ -57,13 +57,18 @@ def _local(p: str) -> str:
         info = httpx.get(f"https://api.box.com/2.0/files/{fid}?fields=name,sha1",
                          headers={"Authorization": f"Bearer {tok}"}, timeout=60).json()
         name = info.get("name") or f"box_{fid}.wav"
-        print(f"[run] downloading box:{fid} ({name})", flush=True)
-        dst = str(box_fetch.download_file(tok, fid, "/tmp", name=name))
+        dst = "/tmp/" + name
         try:
+            # Cache FIRST: when both separation stems are cached, the source wav is never
+            # read (Demucs loads the .npy pair), so skipping its ~450MB download is free.
             _cache_attach(dst, f"sepcache/{name}.{info.get('sha1') or fid}")
+            if len(_SEP_CACHE.get(dst, (None, None, []))[2]) == 2:
+                print(f"[run] both stems cached — skipping download of {name}", flush=True)
+                return dst
         except Exception as e:  # cache is an optimization, never a blocker
             print(f"[run] separation cache unavailable: {e}", flush=True)
-        return dst
+        print(f"[run] downloading box:{fid} ({name})", flush=True)
+        return str(box_fetch.download_file(tok, fid, "/tmp", name=name))
     if not p.startswith("s3://"):
         return p
     import boto3

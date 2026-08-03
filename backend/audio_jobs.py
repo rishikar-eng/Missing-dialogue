@@ -92,7 +92,10 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     c = fargate._cfg()
     if not (c["subnets"] and c["sg"] and c["bucket"]):
         return {"error": "Fargate compute is not configured (subnets/sg/bucket)"}
-    token = box_oauth.get_token()
+    # force_refresh: get_token() can hand out a nearly-expired cached token, which dies
+    # mid-download inside the task (the task cannot refresh — it never sees the refresh
+    # token). A task launch always deserves a fresh one.
+    token = box_oauth.get_token(force_refresh=True)
     box = box_discovery._Box(token)
     orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
     stage_used = "ST_MIX"

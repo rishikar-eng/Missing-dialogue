@@ -77,6 +77,10 @@ def _separate(path: str, cache: bool = True) -> tuple[np.ndarray, np.ndarray]:
         return np.load(vnpy), np.load(anpy)
     model = getattr(_separate, "_model", None)
     if model is None:
+        # The image pins OMP_NUM_THREADS=4, which silently capped a SOLO separation (the
+        # steady state once caches exist: original warm, dub cold) at 4 of the task's cores.
+        # Pair-warm workers set their own split; a solo run should use the whole machine.
+        torch.set_num_threads(max(1, os.cpu_count() or 4))
         model = _separate._model = get_model("htdemucs")
         model.eval()
     data, sr = sf.read(path, dtype="float32")      # torch 2.13's loader needs torchcodec
@@ -341,7 +345,7 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     import httpx
     import soundfile as sf
     buf = _io.BytesIO()
-    sf.write(buf, audio16, 16000, format="WAV", subtype="PCM_16")   # half the bytes of float32
+    sf.write(buf, audio16, 16000, format="FLAC")   # lossless, ~2-3x smaller than PCM WAV
     buf.seek(0)
     key = os.environ.get("GROQ_API_KEY", "")
     if not key:
@@ -352,7 +356,7 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
         try:
             r = httpx.post("https://api.groq.com/openai/v1/audio/transcriptions",
                            headers={"Authorization": f"Bearer {key}"},
-                           files={"file": ("a.wav", buf.getvalue())},
+                           files={"file": ("a.flac", buf.getvalue())},
                            data={"model": os.environ.get("AQC_ASR_MODEL", "whisper-large-v3"), "language": lang1,
                                  "response_format": "verbose_json"},
                            timeout=300)
@@ -548,18 +552,23 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     dwin: list[tuple[float, float]] | None = None
     mu = None
     if engine == "text":
-        _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
-        _p1, _p2 = transcribe_two_passes(ov, LANG1.get(original_lang.lower(), original_lang))
+        # Both sides transcribe CONCURRENTLY — they are independent API work, and the dub
+        # used to wait for the original's slowest request (including any 429 backoff).
+        # The dub is double-passed for the same reason as the reference: a MISSING flag
+        # asserts the dub never says the line, and every ear-disproved EP41/EP43 flag traced
+        # to a present dub line that one nondeterministic pass failed to render.
+        import concurrent.futures as _cfs
+        _say("transcribing original + dub via Groq (concurrent)")
+        with _cfs.ThreadPoolExecutor(max_workers=2) as _tp:
+            _fo = _tp.submit(transcribe_two_passes, ov,
+                             LANG1.get(original_lang.lower(), original_lang))
+            _fd = _tp.submit(transcribe_two_passes, dv,
+                             LANG1.get(dub_lang.lower(), dub_lang))
+            _p1, _p2 = _fo.result()
+            _q1, _q2 = _fd.result()
         osegs = _merge_passes(_p1, _p2)
-        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
-        _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
-        # Double-pass on the DUB too: a MISSING flag asserts the dub never says the line, so
-        # the dub deserves the same second reading the reference gets. Every ear-disproved
-        # EP41/EP43 flag traced to a dub line present in the audio that one nondeterministic
-        # pass failed to render — a second chance at rendering it kills the false flag and
-        # steadies the flag set between runs.
-        _q1, _q2 = transcribe_two_passes(dv, LANG1.get(dub_lang.lower(), dub_lang))
         dsegs = _merge_passes(_q1, _q2)
+        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
         _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
         oseg = [(s, e) for s, e, _, _ in osegs]
         dseg = [(s, e) for s, e, _, _ in dsegs]
