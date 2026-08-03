@@ -93,6 +93,13 @@ def _push_sep_cache() -> None:
                     print(f"[run] cache upload failed: {e}", flush=True)
 
 
+def _draw_worker(o, d, ol, dl, clean):
+    """One detection draw in a clean process (loads its own VAD/LaBSE; Demucs cache-hits)."""
+    from backend import audio_qc as _aq
+    return _aq.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
+                       dub_is_clean=clean)
+
+
 args = sys.argv[1:]
 
 
@@ -136,11 +143,28 @@ t = time.time()
 # honest confidence signal. Default (unset/1) = exactly the old single-draw behaviour.
 N = max(1, int(os.environ.get("AQC_DRAWS", "1")))
 reps = []
-for _i in range(N):
-    if N > 1:
-        print(f"[run] draw {_i + 1}/{N}", flush=True)
-    reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
-                                 dub_is_clean=clean))
+# Draw 1 runs alone: it warms the Demucs caches so later draws can never race the separator.
+print(f"[run] draw 1/{N}", flush=True)
+reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
+                             dub_is_clean=clean))
+if N > 1:
+    # Draws 2..N run CONCURRENTLY in spawned processes: they are pure network wait
+    # (separation cache-hits from disk; transcription is API calls), so the union costs
+    # roughly one draw's wall-clock instead of N. Spawn, not fork — draw 1 leaves torch
+    # state and finished threads behind, and forking across OpenMP locks can deadlock.
+    # A failed draw is dropped with a warning: a union of N-1 beats a dead task.
+    import multiprocessing as _mp
+    ctx = _mp.get_context("spawn")
+    import concurrent.futures as _cf
+    with _cf.ProcessPoolExecutor(max_workers=min(N - 1, 4), mp_context=ctx) as _ex:
+        _futs = [_ex.submit(_draw_worker, o, d, ol, dl, clean) for _ in range(N - 1)]
+        for _f in _cf.as_completed(_futs):
+            try:
+                reps.append(_f.result())
+            except Exception as _e:  # noqa: BLE001
+                print(f"[run] concurrent draw failed ({_e}); union proceeds with fewer",
+                      flush=True)
+    print(f"[run] {len(reps)}/{N} draws completed", flush=True)
 rep = max(reps, key=lambda r: r["summary"].get("coverage") or 0)
 if N > 1:
     TOL = 2.5
