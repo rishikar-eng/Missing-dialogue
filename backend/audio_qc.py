@@ -54,6 +54,14 @@ MIN_SEG_S = 0.6
 # candidate's measured ratio is logged so this can be retuned from data instead of guessed.
 MUSIC_MARGIN_DB = 12.0
 
+# ...but the relative test alone is not safe: in a premix where dialogue dominates, the
+# episode baseline is huge (+43 dB measured on EP42) and normal variation exceeds any sane
+# margin — it rejected a VERIFIED drop whose voice was still +28.6 dB above the music. A line
+# that loud is speech whatever the baseline says. So a candidate must ALSO fail an absolute
+# floor before we call it music. Measured: true music passages sit at -4.2..-1.2 dB, real
+# dialogue at +28.6 dB, so +6 dB separates them with room on both sides.
+MUSIC_ABS_DB = 6.0
+
 
 def _lang3(name: str) -> str:
     n = (name or "").strip().lower()
@@ -692,10 +700,12 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
                 continue
-            if vr_base is not None and vr[i] < vr_base - MUSIC_MARGIN_DB:
+            if (vr_base is not None and vr[i] < vr_base - MUSIC_MARGIN_DB
+                    and vr[i] < MUSIC_ABS_DB):
                 n_unchecked += 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference slot is music, not dialogue "
-                     f"(voice/music {vr[i]:+.1f} dB vs {vr_base:+.1f} dB baseline)  {txt!r}")
+                     f"(voice/music {vr[i]:+.1f} dB: below the {vr_base - MUSIC_MARGIN_DB:+.1f} dB "
+                     f"episode floor AND the {MUSIC_ABS_DB:+.1f} dB absolute floor)  {txt!r}")
                 continue
             if dqual is not None:
                 # SILENCE and GARBLE are opposite evidence. No dub speech near the slot at
