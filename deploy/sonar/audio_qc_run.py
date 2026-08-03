@@ -128,7 +128,53 @@ if mkmix:
     d, clean = "/tmp/dubmix.wav", False
 
 t = time.time()
-rep = audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub", dub_is_clean=clean)
+# AQC_DRAWS>1: run detection N times and UNION the MISSING flags. Groq's transcription is
+# nondeterministic and every gate downstream inherits that lottery — measured on the ear-truth
+# window: single draws score 2-5/6 recall, the union of 5 draws scores 6/6 (the only full-recall
+# configuration ever observed). Separation is cached after draw 1, so extra draws cost only the
+# transcribe+detect stage. Each union flag reports its stability (seen in k/N draws) — a free,
+# honest confidence signal. Default (unset/1) = exactly the old single-draw behaviour.
+N = max(1, int(os.environ.get("AQC_DRAWS", "1")))
+reps = []
+for _i in range(N):
+    if N > 1:
+        print(f"[run] draw {_i + 1}/{N}", flush=True)
+    reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
+                                 dub_is_clean=clean))
+rep = max(reps, key=lambda r: r["summary"].get("coverage") or 0)
+if N > 1:
+    TOL = 2.5
+    def _ov(a, b):
+        return not (a["script_end_s"] + TOL < b["script_start_s"]
+                    or b["script_end_s"] + TOL < a["script_start_s"])
+    clusters = []                     # [(representative_flag, seen_count)]
+    for r in reps:
+        for e in r["errors"]:
+            if e["type"] != "MISSING":
+                continue
+            for k, (c0, n0) in enumerate(clusters):
+                if _ov(c0, e):
+                    order = {"high": 2, "medium": 1, "low": 0}
+                    best = e if order.get(e.get("confidence"), 0) > order.get(c0.get("confidence"), 0) else c0
+                    clusters[k] = (best, n0 + 1)
+                    break
+            else:
+                clusters.append((dict(e), 1))
+    union = []
+    for c0, n0 in clusters:
+        c0["stability"] = f"{min(n0, N)}/{N}"
+        c0["message"] = (c0.get("message") or "") + f" [seen in {min(n0, N)}/{N} independent reads]"
+        union.append(c0)
+    union.sort(key=lambda e: e["script_start_s"])
+    rep["errors"] = union + [e for e in rep["errors"] if e["type"] != "MISSING"]
+    n_conf = {}
+    for c in ("high", "medium", "low"):
+        n_conf[c] = sum(1 for e in union if e.get("confidence") == c)
+    rep["summary"]["n_missing"] = len(union)
+    rep["summary"]["n_missing_by_confidence"] = n_conf
+    rep["summary"]["n_draws"] = N
+    print(f"[run] union of {N} draws: {len(union)} missing "
+          f"(per-draw: {[r['summary']['n_missing'] for r in reps]})", flush=True)
 s = rep["summary"]
 conf = s.get("n_missing_by_confidence", {}) or {}
 print(f"ELAPSED {time.time()-t:.0f}s")
