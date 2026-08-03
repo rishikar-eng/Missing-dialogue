@@ -275,7 +275,7 @@ def _prep_chunks(audio16: np.ndarray):
             end = start + 1                        # one window longer than the cap: send alone
         chunks.append((np.concatenate(pieces[2 * start:2 * end]), t0))
         start = end
-    return chunks, back
+    return chunks, back, wins
 
 
 def _decode(prep, lang1: str, passes: int = 1) -> list:
@@ -287,7 +287,7 @@ def _decode(prep, lang1: str, passes: int = 1) -> list:
     (a 429 already costs a 15 s+ backoff in _groq_call, which would undo the win).
     """
     import concurrent.futures as _cf
-    chunks, back = prep
+    chunks, back = prep[0], prep[1]
     out: list[list] = [[] for _ in range(passes)]
     tasks = [(p, c) for p in range(passes) for c in range(len(chunks))]
     if len(tasks) > 1:
@@ -307,39 +307,46 @@ def _decode(prep, lang1: str, passes: int = 1) -> list:
     return out[0] if passes == 1 else out
 
 
-def transcribe_two_passes(audio16: np.ndarray, lang1: str) -> tuple[list, list]:
-    """Two independent readings of the same audio (Groq's ASR is nondeterministic), sharing
-    one VAD pass and issuing all requests at once."""
+def transcribe_lines(audio16: np.ndarray, lang1: str) -> list:
+    """Transcribe to a DETERMINISTIC set of lines: one per Silero VAD window.
+
+    Whisper's own segment boundaries move between identical runs, and because those
+    boundaries defined our candidate lines, the whole finding set moved with them — two
+    identical EP41 runs shared 1 of 8 flags, and EP42's verified 147.6/178.8 drops came and
+    went depending on where a boundary happened to fall. Silero VAD is deterministic, so the
+    windows become the units and transcription only supplies TEXT for them. Two independent
+    readings are still taken (ASR nondeterminism is real), but they now compete per fixed
+    window instead of redrawing the map: the more trustworthy reading of each window wins.
+    """
     prep = _prep_chunks(audio16)
     if not prep:
-        return [], []
-    a, b = _decode(prep, lang1, passes=2)
-    return a, b
+        return []
+    passes = _decode(prep, lang1, passes=2)
+    return _window_lines(prep[2], passes)
 
 
-def _merge_passes(a: list, b: list) -> list:
-    """Union of two transcription passes of the SAME audio.
-
-    Groq whisper segmentation is nondeterministic (28–48 lines observed for identical
-    input), so a line one pass never renders simply cannot be flagged — EP42's 178.8s drop
-    was lost this way: pass 1 gave two 2-char alp=-2.53 fragments where pass 2 read the
-    full sentence. Pass-B segments are adopted only where reliable pass-A coverage is
-    <50% (boundary jitter between passes must not create duplicate candidates for the
-    one-to-one alignment), and junk pass-A fragments superseded by an adopted read retire.
-    """
-    def _cov(seg, others):
-        s, e = seg[0], seg[1]
-        got = sum(max(0.0, min(e, o[1]) - max(s, o[0])) for o in others)
-        return got / max(0.2, e - s)
-
-    rel_a = [x for x in a if _reliable(x[3], x[2])]
-    out = list(a)
-    for seg in b:
-        if _reliable(seg[3], seg[2]) and _cov(seg, rel_a) < 0.5:
-            out = [x for x in out if _reliable(x[3], x[2]) or _cov(x, [seg]) < 0.5]
-            out.append(seg)
-    out.sort(key=lambda x: (x[0], x[1]))
+def _window_lines(wins: list[tuple[float, float]], passes: list[list]) -> list:
+    """Collapse N transcription passes onto fixed VAD windows -> [(start, end, text, q)]."""
+    out = []
+    for (ws, we) in wins:
+        cands = []
+        for segs in passes:
+            parts = [p for p in segs if ws - 0.25 <= (p[0] + p[1]) / 2.0 <= we + 0.25]
+            txt = " ".join(p[2] for p in parts).strip()
+            if not txt:
+                continue
+            # Pessimistic aggregation: a window is only as trustworthy as its worst piece.
+            q = {"nsp": max(p[3].get("nsp", 0.0) for p in parts),
+                 "alp": min(p[3].get("alp", 0.0) for p in parts),
+                 "cr": max(p[3].get("cr", 1.0) for p in parts)}
+            cands.append((txt, q))
+        if not cands:
+            continue
+        cands.sort(key=lambda c: (_reliable(c[1], c[0]), len(c[0].split())), reverse=True)
+        txt, q = cands[0]
+        out.append((round(ws, 2), round(we, 2), txt, q))
     return out
+
 
 
 def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
@@ -580,18 +587,16 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
-        _p1, _p2 = transcribe_two_passes(ov, LANG1.get(original_lang.lower(), original_lang))
-        osegs = _merge_passes(_p1, _p2)
-        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
+        osegs = transcribe_lines(ov, LANG1.get(original_lang.lower(), original_lang))
+        _say(f"reference: {len(osegs)} lines on fixed VAD windows")
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
         # Double-pass on the DUB too: a MISSING flag asserts the dub never says the line, so
         # the dub deserves the same second reading the reference gets. Every ear-disproved
         # EP41/EP43 flag traced to a dub line present in the audio that one nondeterministic
         # pass failed to render — a second chance at rendering it kills the false flag and
         # steadies the flag set between runs.
-        _q1, _q2 = transcribe_two_passes(dv, LANG1.get(dub_lang.lower(), dub_lang))
-        dsegs = _merge_passes(_q1, _q2)
-        _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
+        dsegs = transcribe_lines(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        _say(f"dub: {len(dsegs)} lines on fixed VAD windows")
         oseg = [(s, e) for s, e, _, _ in osegs]
         dseg = [(s, e) for s, e, _, _ in dsegs]
         otext = [t for _, _, t, _ in osegs]
