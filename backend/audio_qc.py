@@ -48,6 +48,20 @@ LANG1 = {"hindi": "hi", "tamil": "ta", "telugu": "te", "kannada": "kn", "bengali
 # meaningless vector that matches everything, which is how false "missing" flags are born.
 MIN_SEG_S = 0.6
 
+# How far below an episode's own confident-dialogue voice/music ratio a reference line must
+# sit before we call it music rather than speech. Deliberately conservative: the cost of
+# rejecting a real line (a missed drop) is far higher than one extra false flag, and every
+# candidate's measured ratio is logged so this can be retuned from data instead of guessed.
+MUSIC_MARGIN_DB = 12.0
+
+# ...but the relative test alone is not safe: in a premix where dialogue dominates, the
+# episode baseline is huge (+43 dB measured on EP42) and normal variation exceeds any sane
+# margin — it rejected a VERIFIED drop whose voice was still +28.6 dB above the music. A line
+# that loud is speech whatever the baseline says. So a candidate must ALSO fail an absolute
+# floor before we call it music. Measured: true music passages sit at -4.2..-1.2 dB, real
+# dialogue at +28.6 dB, so +6 dB separates them with room on both sides.
+MUSIC_ABS_DB = 6.0
+
 
 def _lang3(name: str) -> str:
     n = (name or "").strip().lower()
@@ -380,6 +394,23 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     raise RuntimeError(f"Groq transcription failed after 5 attempts (last: {last})")
 
 
+def _rms(a: np.ndarray, s: float, e: float) -> float:
+    seg = a[int(max(0.0, s) * 16000):int(max(0.0, e) * 16000)]
+    return float(np.sqrt(np.mean(seg.astype("float64") ** 2))) if seg.size else 0.0
+
+
+def _voice_ratio_db(voc: np.ndarray, acc: np.ndarray, s: float, e: float) -> float:
+    """How much louder the separated dialogue is than the music/effects under it, in dB.
+
+    On a music-only passage Demucs' vocal stem is just leaked singing and instruments, so this
+    ratio collapses — while Whisper will still happily invent a coherent sentence over it and
+    report high confidence in its own output (every quality gate we have measures Whisper's
+    self-confidence, which is exactly what a hallucination fakes). EP38's 9:51.2 flag was this:
+    a fluent Hindi line where the user confirmed there is no dialogue in either language.
+    """
+    return 20.0 * np.log10((_rms(voc, s, e) + 1e-9) / (_rms(acc, s, e) + 1e-9))
+
+
 def _reliable(q: dict | None, text: str | None = None) -> bool:
     """Whisper's own confidence in a segment. A flag built on a garbled transcript is noise —
     EP43's fight scene produced ~20 false 'missing' from exactly that.
@@ -533,7 +564,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _say("separating original and dub concurrently (2 workers)")
         _warm_pair(_cold)
     _say("separating dialogue from the original mix")
-    ov = separate_dialogue(original_path)
+    ov, oacc = _separate(original_path)
     if dub_is_clean:
         _say("dub is already clean dialogue — loading without separation")
         dv = _load16(dub_path)
@@ -637,6 +668,18 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         #   C. the semantic no-match (the alignment gap that got us here).
         drifts0 = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
         drift0 = drifts0[len(drifts0) // 2] if drifts0 else 0.0
+        # Music-passage baseline, calibrated PER EPISODE (an absolute dB threshold would not
+        # survive different mixes). Reference lines whose voice-over-music ratio sits far below
+        # what this episode's confident dialogue looks like are transcription over music.
+        vr = [_voice_ratio_db(ov, oacc, s, e) for s, e in oseg] if oacc is not None else None
+        vr_base = None
+        if vr:
+            ok = [vr[k] for k in range(len(oseg))
+                  if _reliable(oqual[k] if oqual else None, otext[k] if otext else None)]
+            pool = sorted(ok or vr)
+            vr_base = pool[len(pool) // 2]
+            _say(f"voice-vs-music baseline {vr_base:+.1f} dB "
+                 f"(rejecting reference lines below {vr_base - MUSIC_MARGIN_DB:+.1f} dB)")
         for i in missing:
             s, e = oseg[i]
             txt = otext[i] if otext else None
@@ -656,6 +699,13 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 n_unchecked += 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
+                continue
+            if (vr_base is not None and vr[i] < vr_base - MUSIC_MARGIN_DB
+                    and vr[i] < MUSIC_ABS_DB):
+                n_unchecked += 1
+                _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference slot is music, not dialogue "
+                     f"(voice/music {vr[i]:+.1f} dB: below the {vr_base - MUSIC_MARGIN_DB:+.1f} dB "
+                     f"episode floor AND the {MUSIC_ABS_DB:+.1f} dB absolute floor)  {txt!r}")
                 continue
             if dqual is not None:
                 # SILENCE and GARBLE are opposite evidence. No dub speech near the slot at
@@ -704,7 +754,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 if verdict == "present":
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
-            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
+            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}"
+                 + (f" vr={vr[i]:+.1f}dB" if vr else "") + f"  {txt!r}")
             errors.append(_missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov))
     else:
         # SONAR engine only: re-check each candidate against the raw dub audio near its
