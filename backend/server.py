@@ -1704,6 +1704,11 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     m = re.search(r"(?:ep|epi|episode)\s*#?\s*(\d{1,3})", low) or re.search(r"\b(\d{1,3})\b", low)
     ep = int(m.group(1)) if m else fast.get("episode")
 
+    hits = _router._rule_match(text)
+    all_s = series_registry.all_series()
+    series_key = (next(iter(hits)) if len(hits) == 1
+                  else fast.get("series_key") or (all_s[0]["key"] if len(all_s) == 1 else None))
+
     # AUDIO-ONLY QC — must be tested BEFORE run/check, because "audio check ep 41" contains
     # neither a run verb nor anything the status branch wants, so it used to fall through to
     # the script availability card and silently do the wrong thing.
@@ -1736,10 +1741,6 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                         f"- dub: `{info['dub']}`\n\n"
                         f"No script or stems needed — I'm comparing the two mixes directly. "
                         f"About {info.get('eta_min', 8)} minutes; ask `status` for the result."}
-    hits = _router._rule_match(text)
-    all_s = series_registry.all_series()
-    series_key = (next(iter(hits)) if len(hits) == 1
-                  else fast.get("series_key") or (all_s[0]["key"] if len(all_s) == 1 else None))
 
     # RUN
     if re.search(r"\b(run|start|go|proceed|yes|do it|launch|kick)\b", low):
