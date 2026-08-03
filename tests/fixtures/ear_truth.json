@@ -66,20 +66,19 @@
    ]
   },
   "ep38-mix": {
-   "description": "EP38 full episode, Hindi ST_MIX vs Tamil ST_MIX. Script-QC ground truth does NOT apply here: the studio patches lines before mixing, so lines missing from the stems are audibly present in the delivered mix (proven on EP41 and EP42). Re-listen also confirmed the Tamil runs slightly BEHIND the Hindi (matches the measured +5.8s local drift).",
+   "description": "EP38 full episode, Hindi ST_MIX vs Tamil ST_MIX. NO verified drops (605.6 retracted on stems re-listen). Script-QC ground truth does NOT apply here: the studio patches lines before mixing, so lines missing from the stems are audibly present in the delivered mix (proven on EP41 and EP42). Re-listen also confirmed the Tamil runs slightly BEHIND the Hindi (matches the measured +5.8s local drift).",
    "original_box_id": "2192586093173",
    "dub_box_id": "auto:mixes_folder/EP 38/*_TAMIL_ST_MIX.wav",
    "original_lang": "hindi",
    "dub_lang": "tamil",
-   "verified_missing": [
+   "verified_missing": [],
+   "verified_present": [
     {
      "start": 605.6,
      "end": 614.2,
-     "note": "Hindi speaks ('thank you so much' by ear, ~601-606) and the Tamil has a ~3.5s hole. Consumed in later runs by a 0.39-similarity 'match' — align.py:50 lowers the acceptance floor on garbled episodes (0.62 x level). RE-CONFIRMED 2026-08-03 on dialogue-only stems.",
-     "confidence": "certain"
-    }
-   ],
-   "verified_present": [
+     "confidence": "certain",
+     "note": "'thank you so much' — RETRACTED AS A DROP 2026-08-03: on the normalised dialogue-only stems the user hears it in BOTH languages. The earlier 'missing' verdict (raw drift-shifted mix pair) was wrong. Second EP38 verdict revised once the music was stripped: raw-mix ear-checks on drifted audio are unreliable; verify on separated stems."
+    },
     {
      "start": 78.8,
      "end": 88.0,
@@ -135,7 +134,8 @@
      "end": 1010.8,
      "note": "transformation sting, -1.2 dB. Music gate should reject."
     }
-   ]
+   ],
+   "note_expected": "ZERO verified drops on this episode — every MISSING flag ever raised on EP38 was false. Pure noise-floor case, like EP41."
   },
   "ep41-mix": {
    "description": "EP41 full episode, Hindi vs Tamil ST_MIX. Ear-checked across 8 window pairs on 2026-07-30: EVERY flag was false, and all 12 lines that script QC called missing from the STEMS are audibly PRESENT in the delivered mix (the studio patched them post-QC). Use this as the false-positive / noise-floor case.",
