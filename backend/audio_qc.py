@@ -48,20 +48,6 @@ LANG1 = {"hindi": "hi", "tamil": "ta", "telugu": "te", "kannada": "kn", "bengali
 # meaningless vector that matches everything, which is how false "missing" flags are born.
 MIN_SEG_S = 0.6
 
-# How far below an episode's own confident-dialogue voice/music ratio a reference line must
-# sit before we call it music rather than speech. Deliberately conservative: the cost of
-# rejecting a real line (a missed drop) is far higher than one extra false flag, and every
-# candidate's measured ratio is logged so this can be retuned from data instead of guessed.
-MUSIC_MARGIN_DB = 12.0
-
-# ...but the relative test alone is not safe: in a premix where dialogue dominates, the
-# episode baseline is huge (+43 dB measured on EP42) and normal variation exceeds any sane
-# margin — it rejected a VERIFIED drop whose voice was still +28.6 dB above the music. A line
-# that loud is speech whatever the baseline says. So a candidate must ALSO fail an absolute
-# floor before we call it music. Measured: true music passages sit at -4.2..-1.2 dB, real
-# dialogue at +28.6 dB, so +6 dB separates them with room on both sides.
-MUSIC_ABS_DB = 6.0
-
 
 def _lang3(name: str) -> str:
     n = (name or "").strip().lower()
@@ -275,7 +261,7 @@ def _prep_chunks(audio16: np.ndarray):
             end = start + 1                        # one window longer than the cap: send alone
         chunks.append((np.concatenate(pieces[2 * start:2 * end]), t0))
         start = end
-    return chunks, back, wins
+    return chunks, back
 
 
 def _decode(prep, lang1: str, passes: int = 1) -> list:
@@ -287,7 +273,7 @@ def _decode(prep, lang1: str, passes: int = 1) -> list:
     (a 429 already costs a 15 s+ backoff in _groq_call, which would undo the win).
     """
     import concurrent.futures as _cf
-    chunks, back = prep[0], prep[1]
+    chunks, back = prep
     out: list[list] = [[] for _ in range(passes)]
     tasks = [(p, c) for p in range(passes) for c in range(len(chunks))]
     if len(tasks) > 1:
@@ -307,69 +293,39 @@ def _decode(prep, lang1: str, passes: int = 1) -> list:
     return out[0] if passes == 1 else out
 
 
-def transcribe_lines(audio16: np.ndarray, lang1: str) -> list:
-    """Transcribe to a DETERMINISTIC set of lines: one per Silero VAD window.
-
-    Whisper's own segment boundaries move between identical runs, and because those
-    boundaries defined our candidate lines, the whole finding set moved with them — two
-    identical EP41 runs shared 1 of 8 flags, and EP42's verified 147.6/178.8 drops came and
-    went depending on where a boundary happened to fall. Silero VAD is deterministic, so the
-    windows become the units and transcription only supplies TEXT for them. Two independent
-    readings are still taken (ASR nondeterminism is real), but they now compete per fixed
-    window instead of redrawing the map: the more trustworthy reading of each window wins.
-    """
+def transcribe_two_passes(audio16: np.ndarray, lang1: str) -> tuple[list, list]:
+    """Two independent readings of the same audio (Groq's ASR is nondeterministic), sharing
+    one VAD pass and issuing all requests at once."""
     prep = _prep_chunks(audio16)
     if not prep:
-        return []
-    passes = _decode(prep, lang1, passes=2)
-    return _window_lines(prep[2], passes)
+        return [], []
+    a, b = _decode(prep, lang1, passes=2)
+    return a, b
 
 
-def _window_lines(wins: list[tuple[float, float]], passes: list[list]) -> list:
-    """Collapse N transcription passes onto fixed VAD windows -> [(start, end, text, q)]."""
-    # Assign by OVERLAP, to the window each segment overlaps MOST — never by midpoint.
-    # Whisper segments the CONCATENATED speech, so its segments routinely straddle the gaps
-    # between windows; a midpoint test drops those on the floor, which silently lost ~45% of
-    # EP38's reference lines (220 -> 120) including a verified drop.
-    per_pass: list[dict[int, list]] = []
-    for segs in passes:
-        buckets: dict[int, list] = {}
-        for p in segs:
-            best_k, best_ov = None, 0.0
-            for k, (ws, we) in enumerate(wins):
-                if p[0] >= we:
-                    continue
-                if p[1] <= ws:
-                    break                          # wins is sorted: no later window can overlap
-                o = min(we, p[1]) - max(ws, p[0])
-                if o > best_ov:
-                    best_ov, best_k = o, k
-            if best_k is not None:
-                buckets.setdefault(best_k, []).append(p)
-        per_pass.append(buckets)
+def _merge_passes(a: list, b: list) -> list:
+    """Union of two transcription passes of the SAME audio.
 
-    out = []
-    for k, (ws, we) in enumerate(wins):
-        cands = []
-        for buckets in per_pass:
-            parts = sorted(buckets.get(k, []), key=lambda p: p[0])
-            if not parts:
-                continue
-            txt = " ".join(p[2] for p in parts).strip()
-            if not txt:
-                continue
-            # Pessimistic aggregation: a window is only as trustworthy as its worst piece.
-            q = {"nsp": max(p[3].get("nsp", 0.0) for p in parts),
-                 "alp": min(p[3].get("alp", 0.0) for p in parts),
-                 "cr": max(p[3].get("cr", 1.0) for p in parts)}
-            cands.append((txt, q))
-        if not cands:
-            continue
-        cands.sort(key=lambda c: (_reliable(c[1], c[0]), len(c[0].split())), reverse=True)
-        txt, q = cands[0]
-        out.append((round(ws, 2), round(we, 2), txt, q))
+    Groq whisper segmentation is nondeterministic (28–48 lines observed for identical
+    input), so a line one pass never renders simply cannot be flagged — EP42's 178.8s drop
+    was lost this way: pass 1 gave two 2-char alp=-2.53 fragments where pass 2 read the
+    full sentence. Pass-B segments are adopted only where reliable pass-A coverage is
+    <50% (boundary jitter between passes must not create duplicate candidates for the
+    one-to-one alignment), and junk pass-A fragments superseded by an adopted read retire.
+    """
+    def _cov(seg, others):
+        s, e = seg[0], seg[1]
+        got = sum(max(0.0, min(e, o[1]) - max(s, o[0])) for o in others)
+        return got / max(0.2, e - s)
+
+    rel_a = [x for x in a if _reliable(x[3], x[2])]
+    out = list(a)
+    for seg in b:
+        if _reliable(seg[3], seg[2]) and _cov(seg, rel_a) < 0.5:
+            out = [x for x in out if _reliable(x[3], x[2]) or _cov(x, [seg]) < 0.5]
+            out.append(seg)
+    out.sort(key=lambda x: (x[0], x[1]))
     return out
-
 
 
 def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
@@ -422,23 +378,6 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
                               "cr": float(s.get("compression_ratio") or 1.0)}))
         return segs
     raise RuntimeError(f"Groq transcription failed after 5 attempts (last: {last})")
-
-
-def _rms(a: np.ndarray, s: float, e: float) -> float:
-    seg = a[int(max(0.0, s) * 16000):int(max(0.0, e) * 16000)]
-    return float(np.sqrt(np.mean(seg.astype("float64") ** 2))) if seg.size else 0.0
-
-
-def _voice_ratio_db(voc: np.ndarray, acc: np.ndarray, s: float, e: float) -> float:
-    """How much louder the separated dialogue is than the music/effects under it, in dB.
-
-    On a music-only passage Demucs' vocal stem is just leaked singing and instruments, so this
-    ratio collapses — while Whisper will still happily invent a coherent sentence over it and
-    report high confidence in its own output (every quality gate we have measures Whisper's
-    self-confidence, which is exactly what a hallucination fakes). EP38's 9:51.2 flag was this:
-    a fluent Hindi line where the user confirmed there is no dialogue in either language.
-    """
-    return 20.0 * np.log10((_rms(voc, s, e) + 1e-9) / (_rms(acc, s, e) + 1e-9))
 
 
 def _reliable(q: dict | None, text: str | None = None) -> bool:
@@ -594,7 +533,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _say("separating original and dub concurrently (2 workers)")
         _warm_pair(_cold)
     _say("separating dialogue from the original mix")
-    ov, oacc = _separate(original_path)
+    ov = separate_dialogue(original_path)
     if dub_is_clean:
         _say("dub is already clean dialogue — loading without separation")
         dv = _load16(dub_path)
@@ -610,16 +549,18 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     mu = None
     if engine == "text":
         _say(f"transcribing original ({LANG1.get(original_lang.lower(), 'auto')}) via Groq")
-        osegs = transcribe_lines(ov, LANG1.get(original_lang.lower(), original_lang))
-        _say(f"reference: {len(osegs)} lines on fixed VAD windows")
+        _p1, _p2 = transcribe_two_passes(ov, LANG1.get(original_lang.lower(), original_lang))
+        osegs = _merge_passes(_p1, _p2)
+        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
         _say(f"transcribing dub ({LANG1.get(dub_lang.lower(), 'auto')}) via Groq")
         # Double-pass on the DUB too: a MISSING flag asserts the dub never says the line, so
         # the dub deserves the same second reading the reference gets. Every ear-disproved
         # EP41/EP43 flag traced to a dub line present in the audio that one nondeterministic
         # pass failed to render — a second chance at rendering it kills the false flag and
         # steadies the flag set between runs.
-        dsegs = transcribe_lines(dv, LANG1.get(dub_lang.lower(), dub_lang))
-        _say(f"dub: {len(dsegs)} lines on fixed VAD windows")
+        _q1, _q2 = transcribe_two_passes(dv, LANG1.get(dub_lang.lower(), dub_lang))
+        dsegs = _merge_passes(_q1, _q2)
+        _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
         oseg = [(s, e) for s, e, _, _ in osegs]
         dseg = [(s, e) for s, e, _, _ in dsegs]
         otext = [t for _, _, t, _ in osegs]
@@ -676,12 +617,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         sim = (R @ D.T).numpy()
 
     _say("aligning")
-    # AQC_MATCH_FLOOR: fixed match-acceptance floor for the text engine. Unset = the legacy
-    # adaptive rule. True cross-lingual pairs score 0.85-1.0 and unrelated ones 0.4-0.6, so
-    # 0.65 sits in the gap; validated against the ear-truth fixture before becoming default.
-    _floor = os.environ.get("AQC_MATCH_FLOOR", "").strip()
-    pairs, missing, extra = _align.align(sim, oseg, dseg,
-                                         floor=float(_floor) if _floor else None)
+    pairs, missing, extra = _align.align(sim, oseg, dseg)
 
     best: dict[int, tuple[int, float]] = {}
     for i, j, sc in pairs:
@@ -690,7 +626,6 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     errors: list[dict[str, Any]] = []
     n_unchecked = 0
-    unchecked_by: dict[str, int] = {}
     if engine == "text" or not missing:
         # EVIDENCE-GATED flagging: "no match found" is NOT the same claim as "this dialogue
         # line is absent". EP43's fight scene produced ~20 false MISSING (all disproved by
@@ -702,32 +637,6 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         #   C. the semantic no-match (the alignment gap that got us here).
         drifts0 = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
         drift0 = drifts0[len(drifts0) // 2] if drifts0 else 0.0
-        # ONE drift authority for every acoustic gate. The flag block previously read THREE
-        # different regions of dub audio for the same candidate (±10 s at the global median,
-        # a ±3 s-clamped slot, ±12 s for the judge) — and the clamp was 14+ s wrong on EP38,
-        # where the true offset swings +1..+17 s within the episode. The envelope map carries
-        # per-window confidence and falls back to the global median where it has none.
-        try:
-            from . import drift_map as _dm
-            _map = _dm.build(_load16(original_path),
-                             dv if dub_is_clean else _load16(dub_path), fallback=drift0)
-            _say(f"drift map: {_map.summary()}")
-            drift_at = _map.at
-        except Exception as _e:  # noqa: BLE001 — the map is an upgrade, never a blocker
-            _say(f"drift map unavailable ({_e}); using global median {drift0:+.1f}s")
-            drift_at = lambda _t: drift0  # noqa: E731
-        # Music-passage baseline, calibrated PER EPISODE (an absolute dB threshold would not
-        # survive different mixes). Reference lines whose voice-over-music ratio sits far below
-        # what this episode's confident dialogue looks like are transcription over music.
-        vr = [_voice_ratio_db(ov, oacc, s, e) for s, e in oseg] if oacc is not None else None
-        vr_base = None
-        if vr:
-            ok = [vr[k] for k in range(len(oseg))
-                  if _reliable(oqual[k] if oqual else None, otext[k] if otext else None)]
-            pool = sorted(ok or vr)
-            vr_base = pool[len(pool) // 2]
-            _say(f"voice-vs-music baseline {vr_base:+.1f} dB "
-                 f"(rejecting reference lines below {vr_base - MUSIC_MARGIN_DB:+.1f} dB)")
         for i in missing:
             s, e = oseg[i]
             txt = otext[i] if otext else None
@@ -740,23 +649,13 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # A single "line" spanning tens of seconds is a decode artefact or a song
                 # section, never one piece of dialogue (EP43: 28-40 s blobs passed as lines).
                 n_unchecked += 1
-                unchecked_by["span-too-long"] = unchecked_by.get("span-too-long", 0) + 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — {e - s:.0f}s span is not a single "
                      f"dialogue line  {txt!r}")
                 continue
             if q is not None and not _reliable(q, txt):
                 n_unchecked += 1
-                unchecked_by["ref-unreliable"] = unchecked_by.get("ref-unreliable", 0) + 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
-                continue
-            if (vr_base is not None and vr[i] < vr_base - MUSIC_MARGIN_DB
-                    and vr[i] < MUSIC_ABS_DB):
-                n_unchecked += 1
-                unchecked_by["ref-is-music"] = unchecked_by.get("ref-is-music", 0) + 1
-                _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference slot is music, not dialogue "
-                     f"(voice/music {vr[i]:+.1f} dB: below the {vr_base - MUSIC_MARGIN_DB:+.1f} dB "
-                     f"episode floor AND the {MUSIC_ABS_DB:+.1f} dB absolute floor)  {txt!r}")
                 continue
             if dqual is not None:
                 # SILENCE and GARBLE are opposite evidence. No dub speech near the slot at
@@ -764,11 +663,10 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # like this — gating on it cost 3 real catches on EP42). Speech that's
                 # present but unreadable = we can't certify anything = UNCHECKED.
                 nearby = [j for j in range(len(dseg))
-                          if abs(dseg[j][0] - (s + drift_at(s))) <= 10.0]
+                          if abs(dseg[j][0] - (s + drift0)) <= 10.0]
                 if nearby and not any(_reliable(dqual[j], dtext[j] if dtext else None)
                                       for j in nearby):
                     n_unchecked += 1
-                    unchecked_by["dub-garbled-nearby"] = unchecked_by.get("dub-garbled-nearby", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
                     continue
@@ -784,32 +682,29 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # slots "occupied" and collapsed EP42 recall to 1/5. A dropped line leaves
                 # most of its slot silent. Drift is clamped: a garbage median from poor
                 # pairing must not shift every slot onto its neighbour.
-                d0 = drift_at(s)
+                d0 = max(-3.0, min(3.0, drift0))
                 slot = (s + d0, e + d0)
                 dur = max(0.2, slot[1] - slot[0])
                 cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
                 slot_cov = cov / dur
                 if cov / dur >= 0.5:
                     n_unchecked += 1
-                    unchecked_by["dub-covers-slot"] = unchecked_by.get("dub-covers-slot", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
                          f"{cov / dur:.0%} of this slot but gave no usable transcript; "
                          f"cannot certify absence  {txt!r}")
                     continue
             if txt and dtext is not None:
                 near_lines = [dtext[j] for j in range(len(dseg))
-                              if abs(dseg[j][0] - (s + drift_at(s))) <= 12.0]
+                              if abs(dseg[j][0] - (s + drift0)) <= 12.0]
                 verdict = _judge(txt, original_lang, near_lines, dub_lang)
                 if verdict == "garble":
                     n_unchecked += 1
-                    unchecked_by["judge-garble"] = unchecked_by.get("judge-garble", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — judge: not coherent dialogue  {txt!r}")
                     continue
                 if verdict == "present":
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
-            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}"
-                 + (f" vr={vr[i]:+.1f}dB" if vr else "") + f"  {txt!r}")
+            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
             errors.append(_missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov))
     else:
         # SONAR engine only: re-check each candidate against the raw dub audio near its
@@ -879,8 +774,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     if n_unchecked:
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
              f"({n_unchecked} unchecked — transcript unreliable on one side)")
-    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
-                   unchecked_by=unchecked_by)
+    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked)
 
 
 def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
@@ -918,7 +812,7 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
-            n_unchecked: int = 0, unchecked_by: dict[str, int] | None = None) -> dict[str, Any]:
+            n_unchecked: int = 0) -> dict[str, Any]:
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
             for c in ("high", "medium", "low")}
@@ -939,9 +833,6 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             # A region where either side's transcript is unreliable is declared UNCHECKED,
             # never guessed at — the studio must know what the tool did not see.
             "n_unchecked": n_unchecked,
-            # which gate declared each line unverifiable — 35-46% of lines were
-            # UNCHECKED with no record of WHY; now the report says where coverage goes
-            "unchecked_by_gate": unchecked_by or {},
             "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
             # triage order for the sound team: verify high first, low last
             "n_missing_by_confidence": conf,
