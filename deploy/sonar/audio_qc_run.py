@@ -93,13 +93,6 @@ def _push_sep_cache() -> None:
                     print(f"[run] cache upload failed: {e}", flush=True)
 
 
-def _draw_worker(o, d, ol, dl, clean):
-    """One detection draw in a clean process (loads its own VAD/LaBSE; Demucs cache-hits)."""
-    from backend import audio_qc as _aq
-    return _aq.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
-                       dub_is_clean=clean)
-
-
 args = sys.argv[1:]
 
 
@@ -157,7 +150,7 @@ if N > 1:
     ctx = _mp.get_context("spawn")
     import concurrent.futures as _cf
     with _cf.ProcessPoolExecutor(max_workers=min(N - 1, 4), mp_context=ctx) as _ex:
-        _futs = [_ex.submit(_draw_worker, o, d, ol, dl, clean) for _ in range(N - 1)]
+        _futs = [_ex.submit(audio_qc._spawn_draw, o, d, ol, dl, clean) for _ in range(N - 1)]
         for _f in _cf.as_completed(_futs):
             try:
                 reps.append(_f.result())

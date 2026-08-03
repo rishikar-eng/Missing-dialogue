@@ -844,3 +844,10 @@ def _empty(why: str, tol_s: float, ch: str) -> dict[str, Any]:
     r = _report([], [], ch, tol_s)
     r["why"] = why
     return r
+
+
+def _spawn_draw(o: str, d: str, ol: str, dl: str, clean: bool) -> dict:
+    """Entry point for a spawned draw process. Lives HERE (an importable module) because
+    multiprocessing 'spawn' re-imports the worker's module — and the runner script executes
+    its whole pipeline at import, which is exactly what killed the first concurrent flight."""
+    return compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub", dub_is_clean=clean)
