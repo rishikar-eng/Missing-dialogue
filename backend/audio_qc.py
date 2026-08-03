@@ -329,7 +329,13 @@ def _merge_passes(a: list, b: list) -> list:
 
 
 def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]]:
-    """One transcription request against the Groq API (with rate-limit retries)."""
+    """One transcription request against the Groq API, retrying anything transient.
+
+    A single upstream hiccup must not throw away the whole run: one chunk of one pass got a
+    500 from Groq and killed a four-minute EP41 job outright. Rate limits (429) and server
+    errors (5xx) are both retried with backoff; only a genuine client error (bad key,
+    oversized payload) is allowed to propagate.
+    """
     import io as _io
 
     import httpx
@@ -340,16 +346,26 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     key = os.environ.get("GROQ_API_KEY", "")
     if not key:
         raise RuntimeError("GROQ_API_KEY is not set (needed for the text engine)")
-    for attempt in range(4):
-        r = httpx.post("https://api.groq.com/openai/v1/audio/transcriptions",
-                       headers={"Authorization": f"Bearer {key}"},
-                       files={"file": ("a.wav", buf.getvalue())},
-                       data={"model": "whisper-large-v3", "language": lang1,
-                             "response_format": "verbose_json"},
-                       timeout=300)
-        if r.status_code == 429:                    # free-tier rate limit: back off and retry
-            import time as _t
-            _t.sleep(15 * (attempt + 1))
+    import time as _t
+    last = ""
+    for attempt in range(5):
+        try:
+            r = httpx.post("https://api.groq.com/openai/v1/audio/transcriptions",
+                           headers={"Authorization": f"Bearer {key}"},
+                           files={"file": ("a.wav", buf.getvalue())},
+                           data={"model": "whisper-large-v3", "language": lang1,
+                                 "response_format": "verbose_json"},
+                           timeout=300)
+        except httpx.RequestError as e:             # connection reset / read timeout
+            last = f"{type(e).__name__}"
+            _t.sleep(5 * (attempt + 1))
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            last = f"HTTP {r.status_code}"
+            wait = 15 * (attempt + 1) if r.status_code == 429 else 5 * (attempt + 1)
+            print(f"[audio_qc] Groq {last}; retrying in {wait}s "
+                  f"(attempt {attempt + 1}/5)", flush=True)
+            _t.sleep(wait)
             continue
         r.raise_for_status()
         segs = []
@@ -361,7 +377,7 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
                               "alp": float(s.get("avg_logprob") or 0.0),
                               "cr": float(s.get("compression_ratio") or 1.0)}))
         return segs
-    raise RuntimeError("Groq transcription kept rate-limiting")
+    raise RuntimeError(f"Groq transcription failed after 5 attempts (last: {last})")
 
 
 def _reliable(q: dict | None, text: str | None = None) -> bool:
