@@ -307,6 +307,67 @@ def transcribe_two_passes(audio16: np.ndarray, lang1: str) -> tuple[list, list]:
     return a, b
 
 
+def _sarvam_call(audio16: np.ndarray, s0: float, e0: float) -> tuple | None:
+    """One Sarvam Saaras-v3 request for ONE VAD window (their sync API caps at 30 s — which
+    fits us perfectly: one window per request means the transcript maps to the window
+    exactly, so Sarvam draws carry ZERO segmentation jitter). Quality signals are synthesized:
+    Sarvam has no no-speech/logprob, so nsp/alp are neutral and compression_ratio is computed
+    from the text itself (the same repetition-garble signal, different source)."""
+    import io as _io
+    import zlib
+
+    import httpx
+    import soundfile as sf
+    key = os.environ.get("SARVAM_API_KEY", "")
+    if not key:
+        return None
+    buf = _io.BytesIO()
+    sf.write(buf, audio16[int(s0 * 16000):int(e0 * 16000)], 16000, format="WAV",
+             subtype="PCM_16")
+    buf.seek(0)
+    for attempt in range(3):
+        try:
+            r = httpx.post("https://api.sarvam.ai/speech-to-text",
+                           headers={"api-subscription-key": key},
+                           files={"file": ("w.wav", buf.getvalue())},
+                           data={"model": "saaras:v3"}, timeout=120)
+        except httpx.RequestError:
+            import time as _t
+            _t.sleep(3 * (attempt + 1))
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            import time as _t
+            _t.sleep(5 * (attempt + 1))
+            continue
+        if r.status_code != 200:
+            return None
+        txt = (r.json().get("transcript") or "").strip()
+        if not txt:
+            return None
+        raw = txt.encode("utf-8")
+        cr = len(raw) / max(1, len(zlib.compress(raw)))
+        return (round(s0, 2), round(e0, 2), txt, {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2)})
+    return None
+
+
+def transcribe_sarvam(audio16: np.ndarray) -> list:
+    """Sarvam pass: one concurrent request per VAD window (windows >28 s are split)."""
+    import concurrent.futures as _cf
+    wins = []
+    for (s0, e0) in segment(audio16):
+        while e0 - s0 > 28.0:
+            wins.append((s0, s0 + 28.0))
+            s0 += 28.0
+        wins.append((s0, e0))
+    out = []
+    with _cf.ThreadPoolExecutor(max_workers=8) as ex:
+        for r in ex.map(lambda w: _sarvam_call(audio16, w[0], w[1]), wins):
+            if r:
+                out.append(r)
+    out.sort(key=lambda x: x[0])
+    return out
+
+
 def _merge_passes(a: list, b: list) -> list:
     """Union of two transcription passes of the SAME audio.
 
@@ -562,10 +623,18 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         with _cfs.ThreadPoolExecutor(max_workers=2) as _tp:
             _fo = _tp.submit(transcribe_two_passes, ov,
                              LANG1.get(original_lang.lower(), original_lang))
-            _fd = _tp.submit(transcribe_two_passes, dv,
-                             LANG1.get(dub_lang.lower(), dub_lang))
-            _p1, _p2 = _fo.result()
-            _q1, _q2 = _fd.result()
+            if os.environ.get("AQC_SARVAM_DUB", "").strip() == "1":
+                # Sarvam carries the dub's second reading: an Indic-specialist engine on the
+                # side where OUR false flags are born (dub lines Whisper fails to render).
+                _fd = _tp.submit(transcribe_groq, dv, LANG1.get(dub_lang.lower(), dub_lang))
+                _fs = _tp.submit(transcribe_sarvam, dv)
+                _p1, _p2 = _fo.result()
+                _q1, _q2 = _fd.result(), _fs.result()
+            else:
+                _fd = _tp.submit(transcribe_two_passes, dv,
+                                 LANG1.get(dub_lang.lower(), dub_lang))
+                _p1, _p2 = _fo.result()
+                _q1, _q2 = _fd.result()
         osegs = _merge_passes(_p1, _p2)
         dsegs = _merge_passes(_q1, _q2)
         _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
