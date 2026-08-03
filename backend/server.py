@@ -1321,35 +1321,64 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                            "summaries": {}, "summary_url": None, "episode": None,
                            "series": (rec or {}).get("series")}
 
-    # --- audio-only (scriptless) run: one task, one language, results in S3 --------------
-    if rec and rec.get("compute") == "audio":
+    # --- audio-only (scriptless) run: one task PER LANGUAGE, results in S3 ---------------
+    if rec and rec.get("compute") in ("audio", "audio-parallel"):
         from . import audio_jobs
-        lang = rec.get("lang") or "dub"
         out["episode"] = rec.get("episode")
-        st = audio_jobs.status(jid or "")
-        if st.get("status") == "done":
-            s = st.get("summary") or {}
-            conf = s.get("missing_by_confidence") or {}
-            out["settled"] = True
-            out["lines"] = [
-                f"🎧 **{lang} — audio-only QC** (no script, mix vs mix)",
-                f"- **{s.get('missing', 0)} possible missing lines** "
-                f"(high {conf.get('high', 0)} / medium {conf.get('medium', 0)} / low {conf.get('low', 0)})",
-                f"- checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} original lines "
-                f"({s.get('unchecked', 0)} unreadable on one side)",
-            ]
-            if st.get("download_url"):
-                out["lines"].append(f"- [AudioQC workbook]({st['download_url']}) — flags in verify order")
-            out["verdict"] = ("Nothing flagged — every original line was either matched or unverifiable."
-                              if not s.get("missing") else
-                              "Verify the high-confidence flags first; low ones are usually present but quiet.")
-        elif st.get("status") == "error":
-            out["settled"] = True
-            out["lines"] = [f"⚠️ **{lang} — audio-only QC failed**: {_friendly_error(st.get('error'))}"]
+        # Normalise both shapes to {lang: job_id} so one renderer covers single and fan-out.
+        if rec.get("compute") == "audio":
+            per = {rec.get("lang") or "dub": {"job_id": jid}}
         else:
-            out["lines"] = [f"🔄 **{lang} — audio-only QC** {st.get('stage') or 'running'} "
-                            f"(separation + transcription take a few minutes)"]
-        out["header"] = f"EP {rec.get('episode')} — audio-only QC ({lang})"
+            per = rec.get("langs") or {}
+        done = running = failed = skipped = 0
+        blocks: list[tuple[int, int, str, list[str]]] = []
+        total_missing = 0
+        for lang in sorted(per):
+            v = per[lang] or {}
+            if v.get("skipped"):
+                skipped += 1
+                blocks.append((3, 0, lang, [f"⏭ **{lang}** — not delivered"]))
+                continue
+            if v.get("error") or not v.get("job_id"):
+                failed += 1
+                blocks.append((0, 0, lang,
+                               [f"⚠️ **{lang}** — {_friendly_error(v.get('error') or 'never started')}"]))
+                continue
+            st = audio_jobs.status(str(v["job_id"]))
+            if st.get("status") == "done":
+                done += 1
+                s = st.get("summary") or {}
+                conf = s.get("missing_by_confidence") or {}
+                n_missing = int(s.get("missing") or 0)
+                total_missing += n_missing
+                icon = "🟢" if not n_missing else ("🟠" if conf.get("high") else "🟡")
+                ln = [f"{icon} **{lang}** — {n_missing} possible missing "
+                      f"(high {conf.get('high', 0)} / med {conf.get('medium', 0)} / low {conf.get('low', 0)})",
+                      f"   checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} "
+                      f"original lines · {s.get('unchecked', 0)} unreadable on one side"]
+                if st.get("download_url"):
+                    ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
+                blocks.append((1, -n_missing, lang, ln))
+            elif st.get("status") == "error":
+                failed += 1
+                blocks.append((0, 0, lang,
+                               [f"⚠️ **{lang}** — {_friendly_error(st.get('error'))}"]))
+            else:
+                running += 1
+                blocks.append((2, 0, lang, [f"🔄 **{lang}** — {st.get('stage') or 'running'}"]))
+        out["lines"] = [ln for b in sorted(blocks, key=lambda b: (b[0], b[1], b[2])) for ln in b[3]]
+        out["settled"] = running == 0
+        head = f"EP {rec.get('episode')} — audio-only QC (no script, mix vs mix)"
+        if running:
+            head += f" — {done + failed + skipped}/{len(per)} finished"
+        out["header"] = head
+        if out["settled"]:
+            out["verdict"] = (
+                f"⚠️ {failed} language(s) failed — see below." if failed else
+                "🟢 Nothing flagged; every original line was matched or reported unverifiable."
+                if not total_missing else
+                f"🟠 {total_missing} line(s) to verify — start with the high-confidence ones; "
+                f"low-confidence flags are usually present but quiet.")
         out["text"] = _status_text(out)            # every consumer expects a rendered text
         return out
 
@@ -1724,24 +1753,38 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         key, cfg = series_registry.resolve(series_key)
         langs = list(cfg.get("languages", []))
         want = next((l for l in langs if re.search(rf"\b{l.lower()}\b", low)), None)
-        if not want:
-            return {"type": "message",
-                    "text": f"Which language? Audio QC compares ONE dub mix at a time — "
-                            f"e.g. 'audio check ep {ep} tamil'. Available: {', '.join(langs)}."}
+        fast.update(episode=int(ep), series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
         try:
-            info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
+            if want:                                  # a language was named explicitly
+                info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
+                if info.get("error"):
+                    return {"type": "message", "text": f"⚠️ {info['error']}"}
+                jid, names = info["job_id"], {want: info}
+            else:                                     # default: EVERY delivered language
+                res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv)
+                jid, names = res["parent_id"], res["langs"]
+                if not res["launched"]:
+                    why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"
+                                    for k, v in names.items()) or "no delivered mixes"
+                    return {"type": "message",
+                            "text": f"⚠️ Nothing to audio-check for EP {ep} — {why[:300]}"}
         except Exception as e:  # noqa: BLE001
             return {"type": "message", "text": f"Couldn't start the audio check: {str(e)[:160]}"}
-        if info.get("error"):
-            return {"type": "message", "text": f"⚠️ {info['error']}"}
-        fast.update(job=info["job_id"], episode=int(ep), series_key=key)
-        sess["series_key"], sess["cfg"] = key, cfg
-        return {"type": "message",
-                "text": f"🎧 Audio-only QC started for EP {ep} {want} ({cfg.get('display_name')}).\n"
-                        f"- original: `{info['original']}` ({info.get('original_stage')})\n"
-                        f"- dub: `{info['dub']}`\n\n"
-                        f"No script or stems needed — I'm comparing the two mixes directly. "
-                        f"About {info.get('eta_min', 8)} minutes; ask `status` for the result."}
+        fast["job"] = jid
+        pushed = notify.watch(jid, conv)              # same completion push as a script run
+        tail = ("I'll post the results here when they're done (or ask `status` any time)."
+                if pushed else "Ask `status` for the results.")
+        ran = ", ".join(k for k, v in names.items() if v.get("job_id"))
+        skipped = [k for k, v in names.items() if v.get("skipped")]
+        lines = [f"🎧 Audio-only QC started for EP {ep} ({cfg.get('display_name')}) — **{ran}**."]
+        if skipped:
+            lines.append(f"- not delivered: {', '.join(skipped)}")
+        lines.append("")
+        lines.append("No script or stems needed — comparing the original mix against each "
+                     f"delivered dub mix. ~8 minutes. {tail}")
+        body = "\n".join(lines)
+        return {"type": "message", "text": body}
 
     # RUN
     if re.search(r"\b(run|start|go|proceed|yes|do it|launch|kick)\b", low):

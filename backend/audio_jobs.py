@@ -56,6 +56,32 @@ def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
     return cands[0] if cands else None
 
 
+def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, Any]:
+    """What audio-only QC needs for this episode: the original's mix and, per language, the
+    delivered full mix. The script path has `check` before `run`; this is its counterpart, so
+    the studio can see what is checkable before starting an 8-minute job."""
+    token = box_oauth.get_token()
+    box = box_discovery._Box(token)
+    n = int(episode)
+    orig = find_original_mix(box, cfg, n)
+    stage = "ST_MIX"
+    if not orig:
+        orig = box_discovery.find_original(box, cfg, n)
+        stage = "ST_PREMIX"
+    ready, missing = {}, []
+    for lang in cfg.get("languages", []):
+        d = find_dub_mix(box, cfg, lang, n)
+        if d:
+            ready[lang] = d["name"]
+        else:
+            missing.append(lang)
+    return {"series": cfg.get("display_name", series_key), "series_key": series_key,
+            "episode": n, "original": orig["name"] if orig else None,
+            "original_stage": stage if orig else None,
+            "languages_ready": ready, "not_delivered": missing,
+            "runnable": bool(orig and ready)}
+
+
 def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
            original_stage: str = "mix", conv: str | None = None) -> dict[str, Any]:
     """Discover the pair in Box and start the Fargate audio-QC task. Returns
@@ -116,6 +142,40 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     return {"job_id": job_id, "original": orig["name"], "original_stage": stage_used,
             "dub": dub["name"], "eta_min": 8,
             "note": "audio QC started; poll get_audio_result with this job_id"}
+
+
+def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
+               conv: str | None = None) -> dict[str, Any]:
+    """Audio-QC every delivered language for an episode, one Fargate task each — the audio
+    counterpart of fargate.launch_parallel, so `audio check ep 42` behaves like `run ep 42`.
+
+    Returns {parent_id, langs: {lang: {...}}, launched, errors}. A language whose task fails to
+    start (vCPU quota is the usual reason) is recorded with its error rather than dropped, so
+    status can report it instead of silently showing fewer languages than were asked for.
+    """
+    parent_id = uuid.uuid4().hex[:12]
+    langs: dict[str, dict[str, Any]] = {}
+    for lang in cfg.get("languages", []):
+        r = launch(series_key, cfg, int(episode), lang)      # no conv: parent owns the record
+        if r.get("error"):
+            if "no " + lang.lower() in r["error"].lower():
+                langs[lang] = {"skipped": r["error"]}        # not delivered — expected
+            else:
+                langs[lang] = {"error": r["error"]}
+        else:
+            langs[lang] = {"job_id": r["job_id"], "original": r.get("original"),
+                           "dub": r.get("dub"), "original_stage": r.get("original_stage")}
+    launched = sum(1 for v in langs.values() if v.get("job_id"))
+    if conv:
+        try:
+            from . import run_store
+            run_store.record(parent_id, conv=conv, episode=int(episode),
+                             series=cfg.get("display_name", series_key), status="running",
+                             compute="audio-parallel", langs=langs)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"parent_id": parent_id, "langs": langs, "launched": launched,
+            "errors": {k: v["error"] for k, v in langs.items() if v.get("error")}}
 
 
 def status(job_id: str) -> dict[str, Any]:
