@@ -31,7 +31,7 @@ TIME_BAND = 25.0    # s — a match may not shift more than this (guards wild lo
 
 def align(sim: np.ndarray, ref_t: list[tuple[float, float]], dub_t: list[tuple[float, float]],
           gap: float = GAP, min_sim: float = MIN_SIM, band: float = TIME_BAND,
-          allow_merge: bool = True):
+          allow_merge: bool = True, floor: float | None = None):
     """Globally align two timed line sequences by similarity.
 
     sim: [n_ref, n_dub] cosine similarities. ref_t/dub_t: (start, end) per line.
@@ -47,7 +47,17 @@ def align(sim: np.ndarray, ref_t: list[tuple[float, float]], dub_t: list[tuple[f
     # Calibrate off the data: the typical best-match score sets the scale.
     if n and m:
         level = float(np.median(sim.max(axis=1)))
-        min_sim = max(0.30, min(min_sim, 0.62 * level))
+        if floor is not None:
+            # An explicit floor OVERRIDES the adaptive rule. The adaptive rule points the
+            # wrong way for cross-lingual text: a garbled episode has a low median best-match
+            # (level), which LOWERS the bar exactly when more evidence should be demanded —
+            # measured accepting 0.39 (EP38) and 0.42 (EP42) "matches" that each consumed an
+            # ear-verified real drop, while unrelated LaBSE pairs score 0.4-0.6.
+            min_sim = max(0.30, floor)
+        else:
+            # legacy adaptive behaviour, unchanged (min() also means a caller could only
+            # ever LOWER the effective bar — kept for the callers tuned against it)
+            min_sim = max(0.30, min(min_sim, 0.62 * level))
         gap = max(0.20, 0.55 * level)      # unmatched must cost near a real match's worth
 
 

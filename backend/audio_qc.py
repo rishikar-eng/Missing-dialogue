@@ -676,7 +676,12 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         sim = (R @ D.T).numpy()
 
     _say("aligning")
-    pairs, missing, extra = _align.align(sim, oseg, dseg)
+    # AQC_MATCH_FLOOR: fixed match-acceptance floor for the text engine. Unset = the legacy
+    # adaptive rule. True cross-lingual pairs score 0.85-1.0 and unrelated ones 0.4-0.6, so
+    # 0.65 sits in the gap; validated against the ear-truth fixture before becoming default.
+    _floor = os.environ.get("AQC_MATCH_FLOOR", "").strip()
+    pairs, missing, extra = _align.align(sim, oseg, dseg,
+                                         floor=float(_floor) if _floor else None)
 
     best: dict[int, tuple[int, float]] = {}
     for i, j, sc in pairs:
@@ -685,6 +690,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     errors: list[dict[str, Any]] = []
     n_unchecked = 0
+    unchecked_by: dict[str, int] = {}
     if engine == "text" or not missing:
         # EVIDENCE-GATED flagging: "no match found" is NOT the same claim as "this dialogue
         # line is absent". EP43's fight scene produced ~20 false MISSING (all disproved by
@@ -696,6 +702,20 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         #   C. the semantic no-match (the alignment gap that got us here).
         drifts0 = sorted(dseg[j][0] - oseg[i][0] for i, j, _ in pairs)
         drift0 = drifts0[len(drifts0) // 2] if drifts0 else 0.0
+        # ONE drift authority for every acoustic gate. The flag block previously read THREE
+        # different regions of dub audio for the same candidate (±10 s at the global median,
+        # a ±3 s-clamped slot, ±12 s for the judge) — and the clamp was 14+ s wrong on EP38,
+        # where the true offset swings +1..+17 s within the episode. The envelope map carries
+        # per-window confidence and falls back to the global median where it has none.
+        try:
+            from . import drift_map as _dm
+            _map = _dm.build(_load16(original_path),
+                             dv if dub_is_clean else _load16(dub_path), fallback=drift0)
+            _say(f"drift map: {_map.summary()}")
+            drift_at = _map.at
+        except Exception as _e:  # noqa: BLE001 — the map is an upgrade, never a blocker
+            _say(f"drift map unavailable ({_e}); using global median {drift0:+.1f}s")
+            drift_at = lambda _t: drift0  # noqa: E731
         # Music-passage baseline, calibrated PER EPISODE (an absolute dB threshold would not
         # survive different mixes). Reference lines whose voice-over-music ratio sits far below
         # what this episode's confident dialogue looks like are transcription over music.
@@ -720,17 +740,20 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # A single "line" spanning tens of seconds is a decode artefact or a song
                 # section, never one piece of dialogue (EP43: 28-40 s blobs passed as lines).
                 n_unchecked += 1
+                unchecked_by["span-too-long"] = unchecked_by.get("span-too-long", 0) + 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — {e - s:.0f}s span is not a single "
                      f"dialogue line  {txt!r}")
                 continue
             if q is not None and not _reliable(q, txt):
                 n_unchecked += 1
+                unchecked_by["ref-unreliable"] = unchecked_by.get("ref-unreliable", 0) + 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
                 continue
             if (vr_base is not None and vr[i] < vr_base - MUSIC_MARGIN_DB
                     and vr[i] < MUSIC_ABS_DB):
                 n_unchecked += 1
+                unchecked_by["ref-is-music"] = unchecked_by.get("ref-is-music", 0) + 1
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference slot is music, not dialogue "
                      f"(voice/music {vr[i]:+.1f} dB: below the {vr_base - MUSIC_MARGIN_DB:+.1f} dB "
                      f"episode floor AND the {MUSIC_ABS_DB:+.1f} dB absolute floor)  {txt!r}")
@@ -741,10 +764,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # like this — gating on it cost 3 real catches on EP42). Speech that's
                 # present but unreadable = we can't certify anything = UNCHECKED.
                 nearby = [j for j in range(len(dseg))
-                          if abs(dseg[j][0] - (s + drift0)) <= 10.0]
+                          if abs(dseg[j][0] - (s + drift_at(s))) <= 10.0]
                 if nearby and not any(_reliable(dqual[j], dtext[j] if dtext else None)
                                       for j in nearby):
                     n_unchecked += 1
+                    unchecked_by["dub-garbled-nearby"] = unchecked_by.get("dub-garbled-nearby", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
                     continue
@@ -760,23 +784,25 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # slots "occupied" and collapsed EP42 recall to 1/5. A dropped line leaves
                 # most of its slot silent. Drift is clamped: a garbage median from poor
                 # pairing must not shift every slot onto its neighbour.
-                d0 = max(-3.0, min(3.0, drift0))
+                d0 = drift_at(s)
                 slot = (s + d0, e + d0)
                 dur = max(0.2, slot[1] - slot[0])
                 cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
                 slot_cov = cov / dur
                 if cov / dur >= 0.5:
                     n_unchecked += 1
+                    unchecked_by["dub-covers-slot"] = unchecked_by.get("dub-covers-slot", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
                          f"{cov / dur:.0%} of this slot but gave no usable transcript; "
                          f"cannot certify absence  {txt!r}")
                     continue
             if txt and dtext is not None:
                 near_lines = [dtext[j] for j in range(len(dseg))
-                              if abs(dseg[j][0] - (s + drift0)) <= 12.0]
+                              if abs(dseg[j][0] - (s + drift_at(s))) <= 12.0]
                 verdict = _judge(txt, original_lang, near_lines, dub_lang)
                 if verdict == "garble":
                     n_unchecked += 1
+                    unchecked_by["judge-garble"] = unchecked_by.get("judge-garble", 0) + 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — judge: not coherent dialogue  {txt!r}")
                     continue
                 if verdict == "present":
@@ -853,7 +879,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     if n_unchecked:
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
              f"({n_unchecked} unchecked — transcript unreliable on one side)")
-    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked)
+    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
+                   unchecked_by=unchecked_by)
 
 
 def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
@@ -891,7 +918,7 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
-            n_unchecked: int = 0) -> dict[str, Any]:
+            n_unchecked: int = 0, unchecked_by: dict[str, int] | None = None) -> dict[str, Any]:
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
             for c in ("high", "medium", "low")}
@@ -912,6 +939,9 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             # A region where either side's transcript is unreliable is declared UNCHECKED,
             # never guessed at — the studio must know what the tool did not see.
             "n_unchecked": n_unchecked,
+            # which gate declared each line unverifiable — 35-46% of lines were
+            # UNCHECKED with no record of WHY; now the report says where coverage goes
+            "unchecked_by_gate": unchecked_by or {},
             "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
             # triage order for the sound team: verify high first, low last
             "n_missing_by_confidence": conf,
