@@ -1,0 +1,86 @@
+{
+  "_what": "Human-verified ground truth for audio-only (scriptless) QC. Every entry was confirmed by a person LISTENING to the audio, not derived from any tool output. This file exists because that knowledge previously lived only in commit messages and chat, which is how two changes shipped on plausible reasoning and had to be reverted (local-drift 982485c, and the relative-only music gate that killed a verified drop).",
+  "_how_to_use": "python -m tests.score_ear_truth <report.json> <case-id>. A change is only an improvement if verified_missing recall does not fall AND false_flag count does not rise. Flag COUNTS alone are noise: identical inputs have produced 28-48 transcript lines and, before the VAD-window change, two identical EP41 runs shared 1 of 8 flags.",
+  "_provenance": "Verdicts given by the studio-side user (pmo@rian.io) in Audacity, 2026-07-30 and 2026-08-03, against drift-aligned window pairs. tolerance_s is how close a flag must land to count as a hit.",
+  "tolerance_s": 2.5,
+
+  "cases": {
+    "ep42-window-stems": {
+      "description": "EP42 first 5.5 min. Hindi ST_PREMIX slice vs the delivered Tamil per-character STEMS summed to one track (--clean-dub, no dub separation). This is the ONLY case where script-QC ground truth is also valid, because it compares against stems rather than the patched final mix.",
+      "original": "clips/ep42_src.wav",
+      "dub": "clips/ep42_tam.wav",
+      "dub_is_clean": true,
+      "original_lang": "japanese",
+      "dub_lang": "tamil",
+      "verified_missing": [
+        {"start": 95.2, "end": 97.8, "note": "robotic-voiced man speaking over the wailing; present in Hindi, absent in Tamil. FOUND BY THE TOOL, MISSED BY THE HUMAN SCRIPT PASS.", "confidence": "certain"},
+        {"start": 133.44, "end": 135.48, "note": "My poison swamp..", "confidence": "certain"},
+        {"start": 135.76, "end": 137.96, "note": "It still affects you despite your current..", "confidence": "certain"},
+        {"start": 140.32, "end": 145.12, "note": "This is all natural ability amounts to..", "confidence": "certain"},
+        {"start": 147.6, "end": 148.84, "note": "Bitter.. — killed once by the relative-only music gate (voice was +28.6 dB over music but 14 dB under that premix's +43 dB baseline). Guard against that regression.", "confidence": "certain"},
+        {"start": 178.76, "end": 180.64, "note": "Let's go home, Suga-san. Lost in runs where ASR merged it into a 5.7s span that then tripped the dub-unreadable gate.", "confidence": "certain"}
+      ],
+      "verified_present": [
+        {"start": 172.9, "end": 174.7, "note": "Line IS in the Tamil, mixed noticeably quieter than the Hindi. A flag here is a false positive, though 'present but buried' may deserve its own report category.", "confidence": "certain"}
+      ],
+      "unknown": [
+        {"start": 162.8, "end": 170.3, "note": "Flagged in one run; never ear-checked. Do not count either way."}
+      ]
+    },
+
+    "ep38-mix": {
+      "description": "EP38 full episode, Hindi ST_MIX vs Tamil ST_MIX. Script-QC ground truth does NOT apply here: the studio patches lines before mixing, so lines missing from the stems are audibly present in the delivered mix (proven on EP41 and EP42).",
+      "original_box_id": "2192586093173",
+      "dub_box_id": "auto:mixes_folder/EP 38/*_TAMIL_ST_MIX.wav",
+      "original_lang": "hindi",
+      "dub_lang": "tamil",
+      "verified_missing": [
+        {"start": 605.6, "end": 614.2, "note": "Hindi speaks ('thank you so much' by ear, ~601-606) and the Tamil has a ~3.5s hole. Consumed in later runs by a 0.39-similarity 'match' — align.py:50 lowers the acceptance floor on garbled episodes (0.62 x level).", "confidence": "high"}
+      ],
+      "verified_present": [
+        {"start": 78.8, "end": 88.0, "note": "Granute line present in both; Hindi has more music before it and the Tamil starts slightly earlier.", "confidence": "certain"},
+        {"start": 477.8, "end": 480.0, "note": "waveform: speech in both tracks", "confidence": "medium"},
+        {"start": 617.3, "end": 620.0, "note": "waveform: speech in both tracks", "confidence": "medium"},
+        {"start": 624.2, "end": 627.0, "note": "waveform: speech in both tracks", "confidence": "medium"},
+        {"start": 1215.2, "end": 1218.0, "note": "waveform: speech in both tracks", "confidence": "medium"},
+        {"start": 1426.7, "end": 1429.0, "note": "waveform: speech in both tracks; likely end-credits", "confidence": "medium"}
+      ],
+      "contested": [
+        {"start": 591.2, "end": 594.0, "note": "User ear-called this 'no dialogue in either language, just music' (2026-08-03), and the music-hallucination gate was partly justified on it. BUT Whisper and ElevenLabs Scribe INDEPENDENTLY transcribe near-identical Hindi here ('vo tayaar hone tak ka time le lo' / 'vo taiyaar hone tak ka time le le'). Two engines do not invent the same sentence, so this is probably real quiet dialogue. RE-LISTEN before using either way."}
+      ],
+      "known_music_passages": [
+        {"start": 254.4, "end": 265.2, "note": "opening song; Whisper produces fluent-looking Hindi over it. Measured voice-over-music -4.2..-3.4 dB against a +14.4 dB episode baseline. The music gate SHOULD reject these."},
+        {"start": 1009.5, "end": 1010.8, "note": "transformation sting, -1.2 dB. Music gate should reject."}
+      ]
+    },
+
+    "ep41-mix": {
+      "description": "EP41 full episode, Hindi vs Tamil ST_MIX. Ear-checked across 8 window pairs on 2026-07-30: EVERY flag was false, and all 12 lines that script QC called missing from the STEMS are audibly PRESENT in the delivered mix (the studio patched them post-QC). Use this as the false-positive / noise-floor case.",
+      "original_box_id": "2192599579139",
+      "dub_box_id": "2366044170388",
+      "original_lang": "hindi",
+      "dub_lang": "tamil",
+      "verified_missing": [],
+      "verified_present": [
+        {"start": 582.0, "end": 583.12, "note": "Lizel 'Heh..' — missing from stems, PRESENT in the mix", "confidence": "certain"},
+        {"start": 635.6, "end": 636.4, "note": "Masaru 'Welcome.' — patched in the mix", "confidence": "certain"},
+        {"start": 640.52, "end": 643.12, "note": "snacks cafe Hidamari — patched in the mix", "confidence": "certain"},
+        {"start": 681.56, "end": 684.44, "note": "My little sister, Michiru — patched in the mix", "confidence": "certain"},
+        {"start": 692.76, "end": 695.04, "note": "Please tell me..! — patched in the mix", "confidence": "certain"},
+        {"start": 1414.28, "end": 1415.56, "note": "Shoma 'Nyelv!' shout — present", "confidence": "certain"},
+        {"start": 1464.08, "end": 1465.32, "note": "Shoma 'Oh no!' — present", "confidence": "certain"}
+      ],
+      "note_expected": "Any MISSING flag on this episode is a false positive. Observed noise floor: 4-11 flags per run, all low/medium confidence, never high."
+    },
+
+    "ep43-window": {
+      "description": "EP43 fight scene (16m45s-22m15s slice). User ear-checked ALL flags on 2026-07-30: every one false. Both languages garble under SFX, and the Tamil carries extra background/effects the Hindi lacks. This is the adversarial false-positive case.",
+      "original": "clips/ep43_src.wav",
+      "dub": "clips/ep43_tamil.wav",
+      "original_lang": "hindi",
+      "dub_lang": "tamil",
+      "verified_missing": [],
+      "note_expected": "Any MISSING flag is a false positive. History: 20 flags ungated -> 1-2 after the evidence gates."
+    }
+  }
+}
