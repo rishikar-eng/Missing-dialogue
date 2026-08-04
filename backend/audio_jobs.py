@@ -24,9 +24,16 @@ def _sq(s: str) -> str:
 
 def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
                  n: int) -> dict[str, Any] | None:
-    """The delivered full mix for one dub language: mixes_folder/EP NN/*_<LANG>_ST_MIX.wav.
-    Prefers the final ST_MIX; falls back to the language PREMIX if that's all there is."""
-    root = cfg["box"].get("mixes_folder")
+    """The delivered full mix for one dub language: <language folder>/EP NN/*_ST_MIX.wav.
+    Prefers the final ST_MIX; falls back to the language PREMIX if that's all there is.
+
+    Folder resolution: per-language `mixes_folders` map first (the real Box layout is one
+    folder PER LANGUAGE — the old single `mixes_folder` id was actually Tamil's folder, which
+    is why every other language showed 'not delivered'), falling back to `mixes_folder`.
+    Inside a per-language folder every file IS that language, so no language-name filter —
+    filenames misspell languages anyway ('Malyalam_ST_MIX .wav', stray space included)."""
+    per_lang = (cfg["box"].get("mixes_folders") or {}).get(lang)
+    root = per_lang or cfg["box"].get("mixes_folder")
     if not root:
         return None
     sub = next((d for d in box.listing(root)["folders"]
@@ -34,7 +41,8 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
     if not sub:
         return None
     files = [f for f in box.listing(sub["id"])["files"]
-             if f["name"].lower().endswith(".wav") and lang.upper() in f["name"].upper()]
+             if f["name"].lower().endswith(".wav")
+             and (per_lang or lang.upper() in f["name"].upper())]
     mixes = [f for f in files if "stmix" in _sq(f["name"])]
     return (mixes or [f for f in files if "premix" in _sq(f["name"])] or [None])[0]
 

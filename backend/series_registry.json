@@ -9,6 +9,15 @@
       "premix_folder": "377097256586",
       "original_mix_folder": "375881572639",
       "mixes_folder": "379102077184",
+      "mixes_folders": {
+        "Malayalam": "384147162916",
+        "Tamil": "379102077184",
+        "Telugu": "379281224847",
+        "Kannada": "384117301893",
+        "Bengali": "384163669266",
+        "Marathi": "384164560510"
+      },
+      "_mixes_note": "One folder PER LANGUAGE under parent 375861431571 (DUBBED MIXES), each with EP NN subfolders holding *_ST_MIX.wav (+PREMIX/.mov). The old single mixes_folder id was actually TAMIL's folder — kept as fallback. Malayalam files are spelled 'Malyalam' with a stray space before .wav; per-language folders make the language-name filter unnecessary. Parent also has 'EP 06 & 07 REVISED' (389618014901) with re-delivered EP06/EP07 — NOT auto-wired; prefer manually if those EPs are QC'd.",
       "me_stems_folder": "375866013292",
       "_me_note": "The ORIGINAL's music+effects beds, one pair per episode: GAVV_MX_#NN.wav (music) and GAVV_FX_#NN.wav (effects). Covers EP 01,03,04,06,21-50. NOT a Hindi dialogue mix — this is the M&E the dub studio mixes under the dubbed dialogue, so it is the exact accompaniment reference (no Demucs estimation error) and a candidate route to exact dialogue by subtraction.",
       "voiceover": {
