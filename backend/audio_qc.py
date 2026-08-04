@@ -796,6 +796,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     if engine == "text":
         _INDIC = ("hindi", "tamil", "telugu", "kannada", "bengali", "marathi",
                   "malayalam", "punjabi")
+        osegs = dsegs = None
         if (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
                 and original_lang.lower() in _INDIC and dub_lang.lower() in _INDIC):
             # EXPERIMENT (user-requested): Sarvam alone, one deterministic reading per
@@ -816,7 +817,14 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             else:
                 osegs = transcribe_sarvam(ov, original_path + ".sarvam.json")
                 dsegs = transcribe_sarvam(dv, dub_path + ".sarvam.json")
-        else:
+            if not osegs or not dsegs:
+                # Dead key / exhausted credits / outage: Sarvam returns nothing rather than
+                # erroring per window. An empty reading must NEVER ship as "no dialogue
+                # found" — fall back to the Whisper path and say so loudly.
+                _say("SARVAM returned no transcript (credits/key/outage?) — "
+                     "FALLING BACK to Whisper double-pass")
+                osegs = dsegs = None
+        if osegs is None:
             # Both sides transcribe CONCURRENTLY — they are independent API work, and the dub
             # used to wait for the original's slowest request (including any 429 backoff).
             # The dub is double-passed for the same reason as the reference: a MISSING flag
