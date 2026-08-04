@@ -8,7 +8,19 @@ Context primer for the next agent picking up this project. Read this fully befor
 
 ---
 
-## 0. CURRENT STATE (2026-07-24) — this project is now BOTH a desktop app AND a hosted service
+## 0. CURRENT STATE (2026-08-04) — desktop app + hosted service + **audio-only (scriptless) QC in production**
+
+### 0a. Audio-only / scriptless QC — the tool's real target (shows ship NO script/stems)
+Compares the **original-language full mix vs the delivered dub full mix** and flags missing dialogue. Production path (Teams `audio check ep N [lang]`, all delivered languages by default):
+
+- **Engine (LIVE):** `AQC_SARVAM_ONLY=1` + `AQC_SARVAM_BATCH=1` — one **deterministic Sarvam Saaras-v3** reading per side via their **Batch API** (whole-file language context killed the random-script false-flag class; ~10× faster, ~108 s detection for an episode). Guarded to Indic↔Indic; **automatic fallback to the Whisper union-of-N double-pass** if Sarvam returns nothing (dead key/credits/outage). Whisper path needs **union-of-5** for full recall (N=3 provably insufficient); Sarvam is deterministic so one reading suffices. Key gotchas: Sarvam key lives in gitignored `new sarvam.txt` (teammate's; ours exhausted) + EC2 `.env`; batch results arrive under `timestamps.words`; `with_diarization: true` is mandatory. See memory `audio-only-qc-poc`.
+- **Detection core** (`backend/audio_qc.py`): Demucs vocal separation (cached locally + S3 `sepcache/`) → VAD-gated transcription → LaBSE match + gates (ref-reliability, song-like, dub-readable-near-slot, **acoustic tie-breaker** — the dominant gate under Sarvam, llama-3.3-70b judge fails-open, confidence tiers, k/N stability). **All clip alignment uses the audio-envelope drift map** (`backend/drift_map.py`, ±0.02 s validated) — text anchors fake drift and once produced a bogus ±23 s reading.
+- **Validation:** ear-verified ground truth in `tests/fixtures/ear_truth.json` + scorer `tests/score_ear_truth.py` (recall is sacred; run ≥3× — flag counts alone are noise). EP38: 1 flag = the one real drop; EP41: 0 false on 7 verified-present.
+- **Compute:** per-language **Fargate** tasks (quota 96 vCPU approved; taskdefs `dialogue-qc-sonar:2/:3`, image baked with LaBSE/htdemucs/silero), results to S3, presigned links. `backend/audio_jobs.py` launches (injects Sarvam env + fresh Box token), `_teams_fast` audio branch renders.
+- **Output parity (2026-08-04):** Teams `status` renders the **same adaptive card** as script QC (per-language rows, severity colours, collapsed missing-line examples, `[report]` + `[markers]` links). Deliverables: AudioQC workbook (verify-ordered, Stability column) + **Pro Tools marker MIDI** (`*_ProTools-Markers.mid`, File → Import → MIDI → Memory Locations; a true .ptx is Avid-proprietary). Script QC bundles per-language marker MIDIs too (`backend/naming.py::markers_mid`, labels carry the character).
+- **Cost:** `docs/scriptless-qc-cost.md` — ₹40-50/language fast mode, ₹220-280 for a 6-language episode.
+
+### Hosted service (2026-07-24 state — still current)
 
 The original desktop app (sections 1–8 below) still stands. On top of it, a **hosted pipeline** was built:
 
