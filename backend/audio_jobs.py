@@ -118,7 +118,16 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
                     "--episode", str(int(episode)), "--out", prefix],
         "environment": [{"name": "GROQ_API_KEY", "value": groq},
                         {"name": "BOX_ACCESS_TOKEN", "value": token},
-                        {"name": "DQC_S3_BUCKET", "value": c["bucket"]}],
+                        {"name": "DQC_S3_BUCKET", "value": c["bucket"]},
+                        # PRODUCTION CONFIG (2026-08-04, user go): Sarvam-only fast mode —
+                        # one deterministic Saaras reading per side via the Batch API.
+                        # Validated: perfect fixture scores on EP38+EP41, ~2 min detection,
+                        # one-flag reports. If Sarvam is down/out of credits the task falls
+                        # back to Whisper double-pass automatically (audio_qc fallback).
+                        {"name": "AQC_SARVAM_ONLY", "value": "1"},
+                        {"name": "AQC_SARVAM_BATCH", "value": "1"},
+                        {"name": "SARVAM_API_KEY",
+                         "value": os.environ.get("SARVAM_API_KEY", "")}],
     }]}
     r = fargate._ecs().run_task(
         cluster=c["cluster"],
