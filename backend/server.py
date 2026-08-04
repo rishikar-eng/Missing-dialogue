@@ -1879,36 +1879,56 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         want = next((l for l in langs if re.search(rf"\b{l.lower()}\b", low)), None)
         fast.update(episode=int(ep), series_key=key)
         sess["series_key"], sess["cfg"] = key, cfg
-        try:
-            if want:                                  # a language was named explicitly
-                info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
-                if info.get("error"):
-                    return {"type": "message", "text": f"⚠️ {info['error']}"}
-                jid, names = info["job_id"], {want: info}
-            else:                                     # default: EVERY delivered language
-                res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv)
-                jid, names = res["parent_id"], res["langs"]
-                if not res["launched"]:
-                    why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"
-                                    for k, v in names.items()) or "no delivered mixes"
-                    return {"type": "message",
-                            "text": f"⚠️ Nothing to audio-check for EP {ep} — {why[:300]}"}
-        except Exception as e:  # noqa: BLE001
-            return {"type": "message", "text": f"Couldn't start the audio check: {str(e)[:160]}"}
-        fast["job"] = jid
-        pushed = notify.watch(jid, conv)              # same completion push as a script run
-        tail = ("I'll post the results here when they're done (or ask `status` any time)."
-                if pushed else "Ask `status` for the results.")
-        ran = ", ".join(k for k, v in names.items() if v.get("job_id"))
-        skipped = [k for k, v in names.items() if v.get("skipped")]
-        lines = [f"🎧 Audio-only QC started for EP {ep} ({cfg.get('display_name')}) — **{ran}**."]
-        if skipped:
-            lines.append(f"- not delivered: {', '.join(skipped)}")
-        lines.append("")
-        lines.append("No script or stems needed — comparing the original mix against each "
-                     f"delivered dub mix. ~8 minutes. {tail}")
-        body = "\n".join(lines)
-        return {"type": "message", "text": body}
+        # Launching is 15-25s of Box discovery + token mint + RunTask per language — far past
+        # Teams' ~5s webhook window, and answering late makes Teams print "Sorry, there was a
+        # problem" while the run silently starts anyway (it did, on the first real use). Same
+        # medicine as the `scan` branch: reply NOW, launch off-thread, push the confirmation
+        # (or the failure) through the channel webhook when the launch settles.
+        import threading
+        url = notify.target_for(conv)
+
+        def _kick() -> None:
+            try:
+                if want:                              # a language was named explicitly
+                    info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
+                    if info.get("error"):
+                        if url:
+                            notify.post(url, f"⚠️ {info['error']}")
+                        return
+                    jid, names = info["job_id"], {want: info}
+                else:                                 # default: EVERY delivered language
+                    res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv)
+                    jid, names = res["parent_id"], res["langs"]
+                    if not res["launched"]:
+                        why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"
+                                        for k, v in names.items()) or "no delivered mixes"
+                        if url:
+                            notify.post(url, f"⚠️ Nothing to scriptless-check for EP {ep} — {why[:300]}")
+                        return
+                fast["job"] = jid
+                pushed = notify.watch(jid, conv)      # same completion push as a script run
+                ran = ", ".join(k for k, v in names.items() if v.get("job_id"))
+                skipped = [k for k, v in names.items() if v.get("skipped")]
+                lines = [f"🎧 Scriptless QC running for EP {ep} ({cfg.get('display_name')}) — **{ran}**."]
+                if skipped:
+                    lines.append(f"- not delivered: {', '.join(skipped)}")
+                lines.append("")
+                lines.append("No script or stems needed — comparing the original mix against "
+                             "each delivered dub mix. ~8 minutes. "
+                             + ("I'll post the results here when they're done (or ask `status` "
+                                "any time)." if pushed else "Ask `status` for the results."))
+                if url:
+                    notify.post(url, "\n".join(lines))
+            except Exception as e:  # noqa: BLE001 — a lost thread must still tell the channel
+                if url:
+                    notify.post(url, f"⚠️ Couldn't start the scriptless QC: {str(e)[:200]}")
+
+        threading.Thread(target=_kick, daemon=True, name="dqc-audio-launch").start()
+        return {"type": "message",
+                "text": f"🎧 Starting scriptless QC for EP {ep} ({cfg.get('display_name')})"
+                        + (f" — {want} only" if want else " — every delivered language")
+                        + (". Confirmation here in a moment." if url
+                           else ". Ask `status` in a minute for the run.")}
 
     # RUN
     if re.search(r"\b(run|start|go|proceed|yes|do it|launch|kick)\b", low):
