@@ -346,7 +346,8 @@ def _sarvam_call(audio16: np.ndarray, s0: float, e0: float) -> tuple | None:
             return None
         raw = txt.encode("utf-8")
         cr = len(raw) / max(1, len(zlib.compress(raw)))
-        return (round(s0, 2), round(e0, 2), txt, {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2)})
+        return (round(s0, 2), round(e0, 2), txt,
+            {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2), "engine": "sarvam"})
     return None
 
 
@@ -492,7 +493,7 @@ def _sarvam_batch(audio16: np.ndarray) -> list | None:
             raw = txt.encode("utf-8")
             cr = len(raw) / max(1, len(zlib.compress(raw)))
             out.append((round(s2, 2), round(e2, 2), txt,
-                        {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2)}))
+                        {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2), "engine": "sarvam"}))
     out.sort(key=lambda x: (x[0], x[1]))
     return out
 
@@ -636,8 +637,13 @@ def _reliable(q: dict | None, text: str | None = None) -> bool:
     if not q or q.get("nsp", 1.0) >= 0.5:
         return False
     # compression_ratio is PER SEGMENT (unlike alp) — the standard whisper garble signal.
-    # Repetitive junk compresses well (>2.4); that's what multi-word fight-scene garble is.
-    if q.get("cr", 1.0) > 2.4:
+    # Repetitive junk compresses well; that's what multi-word fight-scene garble is.
+    # ENGINE-AWARE threshold: Sarvam synthesizes nsp=0/alp=0, so cr is its ONLY active
+    # check — and measured Sarvam garble sits at 1.85-2.03, under Whisper's 2.4 bar
+    # (which never fired for Sarvam). 26 legit flagged lines across 4 runs all measure
+    # cr <= 1.27, so 1.7 splits garble from real text with >0.4 clearance on both sides.
+    # Whisper keeps 2.4 (its native signal, its standard threshold).
+    if q.get("cr", 1.0) > (1.7 if q.get("engine") == "sarvam" else 2.4):
         return False
     words = len((text or "").split())
     return q.get("alp", -9.0) > -1.2 or words >= 4
@@ -990,7 +996,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 dur = max(0.2, slot[1] - slot[0])
                 cov = sum(max(0.0, min(slot[1], w[1]) - max(slot[0], w[0])) for w in dwin)
                 slot_cov = cov / dur
-                if cov / dur >= 0.5:
+                # 0.4, down from 0.5: the one measured REAL drop (EP38 grunt) has ~0%
+                # dub speech in its slot — a true drop is an acoustic hole — while 9 of
+                # 26 ear-verified FALSE flags sat at 0.41-0.49 and survived the old bar
+                # (incl. EP41 @916.6, slot 0.49, production 2026-08-04).
+                if cov / dur >= 0.4:
                     n_unchecked += 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
                          f"{cov / dur:.0%} of this slot but gave no usable transcript; "
@@ -1060,7 +1070,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         dt = dtext[j] if dtext else None
         # Same evidence bar for EXTRA: an unreliable or song-like dub segment is noise,
         # not an improvised line.
-        if dqual is not None and not _reliable(dqual[j]):
+        if dqual is not None and not _reliable(dqual[j], dt):
             continue
         if dt is not None and (_songlike(dt) or len(dt.split()) < 2):
             continue
