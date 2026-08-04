@@ -242,6 +242,13 @@ def _main():
         s3.upload_file("/tmp/report.json", BUCKET, f"{pre}/report.json")
         s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
         print(f"WORKBOOK s3://{BUCKET}/{pre}/{fname}", flush=True)
+        try:
+            mname = fname.rsplit(".", 1)[0] + "_ProTools-Markers.mid"
+            audio_report.build_marker_midi(rep, f"/tmp/{mname}")
+            s3.upload_file(f"/tmp/{mname}", BUCKET, f"{pre}/{mname}")
+            print(f"MARKERS s3://{BUCKET}/{pre}/{mname}", flush=True)
+        except Exception as _me:  # noqa: BLE001 — markers are extra, never fatal
+            print(f"[run] marker export failed: {_me}", flush=True)
     _push_sep_cache()                      # cache push LAST: results first, always
 
     if dump_key:

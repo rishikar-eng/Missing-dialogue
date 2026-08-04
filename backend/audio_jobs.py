@@ -236,9 +236,10 @@ def status(job_id: str) -> dict[str, Any]:
             },
         }
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):
-            if obj["Key"].endswith(".xlsx"):
+            if obj["Key"].endswith(".xlsx") and "download_url" not in out:
                 out["download_url"] = fargate.download_url(obj["Key"])
-                break
+            elif obj["Key"].endswith(".mid"):
+                out["protools_url"] = fargate.download_url(obj["Key"])
         return out
     except Exception:
         pass                                        # not published yet — fall through to ECS

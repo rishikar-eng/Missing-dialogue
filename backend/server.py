@@ -1358,6 +1358,8 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                       f"original lines · {s.get('unchecked', 0)} unreadable on one side"]
                 if st.get("download_url"):
                     ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
+                if st.get("protools_url"):
+                    ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
                 blocks.append((1, -n_missing, lang, ln))
             elif st.get("status") == "error":
                 failed += 1
