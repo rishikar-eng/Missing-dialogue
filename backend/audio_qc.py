@@ -350,6 +350,153 @@ def _sarvam_call(audio16: np.ndarray, s0: float, e0: float) -> tuple | None:
     return None
 
 
+_SARVAM_BASE = "https://api.sarvam.ai/speech-to-text/job/v1"
+
+
+def _sarvam_req(method: str, url: str, **kw):
+    """One Sarvam/Azure HTTP call with transient-error retries (429/5xx/connection). A batch
+    job is minutes of server-side work reached through five small HTTP calls — one blip in
+    any of them must not throw the job away. Raises on persistent failure; the caller treats
+    ANY exception as 'batch unusable' and falls back to the per-window sync path."""
+    import time as _t
+
+    import httpx
+    last = ""
+    for attempt in range(4):
+        try:
+            r = httpx.request(method, url, timeout=kw.pop("timeout", 120), **kw)
+        except httpx.RequestError as e:
+            last = type(e).__name__
+            _t.sleep(3 * (attempt + 1))
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            last = f"HTTP {r.status_code}"
+            _t.sleep((15 if r.status_code == 429 else 5) * (attempt + 1))
+            continue
+        if r.status_code >= 300:
+            raise RuntimeError(f"Sarvam batch: {method} {url.split('?')[0]} -> "
+                               f"HTTP {r.status_code}: {r.text[:200]}")
+        return r
+    raise RuntimeError(f"Sarvam batch: {method} {url.split('?')[0]} kept failing ({last})")
+
+
+def _sarvam_batch(audio16: np.ndarray) -> list | None:
+    """ONE Sarvam Batch-API job for a whole side, instead of ~400 sync requests.
+
+    The sync path sends every VAD window as its own 30s-capped request, which crawls into
+    rate limits on a full episode. The Batch API takes files up to 2 h, so the same
+    `_prep_chunks` concatenation built for Groq (all speech windows joined with 0.5 s gaps)
+    is uploaded as a single FLAC, and the returned chunk-level timestamps are mapped back to
+    the real timeline through the same piecewise map. Quality signals are synthesized
+    exactly like the sync path: nsp/alp neutral, compression_ratio from the text itself.
+
+    Trade against sync: segmentation comes from Saaras' own sentence chunking rather than
+    mapping 1:1 onto our VAD windows — the batch and sync paths therefore produce different
+    (both valid) line boundaries.
+
+    with_diarization is MANDATORY, found by measurement, not in the docs: without it the
+    batch output is 2 mega-chunks for 50 s of speech (21 s spans — the >12 s span gate
+    would kill every candidate); with it the same audio returns 11 tight sentence-level
+    entries, same text. Also measured: the timestamp text array arrives under
+    `timestamps.words` (the docs say `chunks`) — both keys are read.
+
+    Job flow (verified against the sarvamai SDK): init -> upload-files (presigned Azure
+    URLs) -> PUT bytes -> start -> poll status -> download-files -> GET result JSON.
+    Returns [(start, end, text, q)], or None when the batch result is unusable (caller
+    falls back to sync). Raises on API failure — same contract for the caller.
+    """
+    import io as _io
+    import time as _t
+    import zlib
+
+    import soundfile as sf
+    key = os.environ.get("SARVAM_API_KEY", "")
+    if not key:
+        return None
+    prep = _prep_chunks(audio16)
+    if not prep:
+        return []
+    chunks, back = prep
+    full = np.concatenate([c for c, _ in chunks])
+    if len(full) / 16000.0 >= 7200.0:              # Batch API cap is 2 h per file
+        return None
+    buf = _io.BytesIO()
+    sf.write(buf, full, 16000, format="FLAC")
+    hdr = {"api-subscription-key": key}
+    t0 = _t.time()
+
+    r = _sarvam_req("POST", _SARVAM_BASE, headers=hdr, json={
+        "job_parameters": {"model": "saaras:v3", "with_timestamps": True,
+                           "with_diarization": True}})
+    job_id = r.json()["job_id"]
+    print(f"[audio_qc] sarvam batch: job {job_id} created "
+          f"({len(full) / 16000.0:.0f}s of speech, {buf.getbuffer().nbytes >> 20} MB FLAC)",
+          flush=True)
+
+    name = "0.flac"
+    r = _sarvam_req("POST", f"{_SARVAM_BASE}/upload-files", headers=hdr,
+                    json={"job_id": job_id, "files": [name]})
+    up_url = r.json()["upload_urls"][name]["file_url"]
+    # Azure Block Blob presigned PUT — the x-ms-blob-type header is mandatory (this is
+    # exactly what the official SDK sends).
+    _sarvam_req("PUT", up_url, content=buf.getvalue(),
+                headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "audio/flac"},
+                timeout=600)
+    _sarvam_req("POST", f"{_SARVAM_BASE}/{job_id}/start", headers=hdr)
+
+    state, status = "", {}
+    deadline = _t.time() + 2700                    # a stuck job must not hang the task
+    while _t.time() < deadline:
+        _t.sleep(10)
+        try:
+            status = _sarvam_req("GET", f"{_SARVAM_BASE}/{job_id}/status", headers=hdr).json()
+        except RuntimeError:
+            continue                               # one bad poll is not a dead job
+        if status.get("job_state") != state:
+            state = status.get("job_state")
+            print(f"[audio_qc] sarvam batch: {state} ({_t.time() - t0:.0f}s)", flush=True)
+        if state in ("Completed", "Failed"):
+            break
+    if state != "Completed":
+        raise RuntimeError(f"Sarvam batch: job {job_id} ended {state or 'unfinished'}: "
+                           f"{status.get('error_message')}")
+
+    out_name = None
+    for det in status.get("job_details") or []:
+        if det.get("state") == "Success" and det.get("outputs"):
+            out_name = det["outputs"][0]["file_name"]
+            break
+    if not out_name:
+        raise RuntimeError(f"Sarvam batch: job {job_id} completed with no successful file")
+    r = _sarvam_req("POST", f"{_SARVAM_BASE}/download-files", headers=hdr,
+                    json={"job_id": job_id, "files": [out_name]})
+    data = _sarvam_req("GET", r.json()["download_urls"][out_name]["file_url"],
+                       timeout=300).json()
+    print(f"[audio_qc] sarvam batch: done in {_t.time() - t0:.0f}s", flush=True)
+
+    ts = data.get("timestamps") or {}
+    texts = ts.get("words") or ts.get("chunks") or []
+    ss = ts.get("start_time_seconds") or []
+    es = ts.get("end_time_seconds") or []
+    if not texts:
+        # No timestamped chunks: an empty read of a silent side is a valid [], but a
+        # transcript WITHOUT timestamps cannot be mapped to the timeline — unusable.
+        return [] if not (data.get("transcript") or "").strip() else None
+    if not (len(texts) == len(ss) == len(es)):
+        return None
+    out = []
+    for txt, cs, ce in zip(texts, ss, es):
+        txt = (txt or "").strip()
+        s2, e2 = back(float(cs)), back(float(ce))  # concat timeline -> real timeline
+        if txt and e2 - s2 >= 0.2:
+            raw = txt.encode("utf-8")
+            cr = len(raw) / max(1, len(zlib.compress(raw)))
+            out.append((round(s2, 2), round(e2, 2), txt,
+                        {"nsp": 0.0, "alp": 0.0, "cr": round(cr, 2)}))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
+
+
 def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> list:
     """Sarvam pass: one concurrent request per VAD window (windows >28 s are split).
 
@@ -357,13 +504,30 @@ def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> lis
     5-draw lottery. So the reading is computed ONCE (by draw 1, which runs alone) and cached
     beside the input; concurrent draws 2..N read the file instead of re-issuing hundreds of
     identical requests, which was 5x the API traffic for zero information and the reason the
-    both-sides run crawled into Sarvam's rate limits."""
+    both-sides run crawled into Sarvam's rate limits.
+
+    AQC_SARVAM_BATCH=1 routes the whole side through ONE Batch-API job instead (~400 sync
+    requests -> 1); any batch failure logs and falls back to the sync path unchanged."""
     import json as _json
     if cache_path and os.path.exists(cache_path):
         try:
             return [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
         except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
             pass
+    if os.environ.get("AQC_SARVAM_BATCH", "").strip() == "1":
+        try:
+            out = _sarvam_batch(audio16)
+        except Exception as e:  # noqa: BLE001 — batch is an optimisation, never a new failure
+            print(f"[audio_qc] sarvam batch unusable ({e}); falling back to sync windows",
+                  flush=True)
+            out = None
+        if out is not None:
+            if cache_path:
+                try:
+                    _json.dump(out, open(cache_path, "w"))
+                except OSError:
+                    pass
+            return out
     import concurrent.futures as _cf
     wins = []
     for (s0, e0) in segment(audio16):
@@ -638,8 +802,20 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             # side. No union (identical redraws), no Whisper self-diagnostics for the
             # gates, no cross-engine check — the ear-check verdict decides its fate.
             _say("SARVAM-ONLY: one deterministic Saaras reading per side")
-            osegs = transcribe_sarvam(ov, original_path + ".sarvam.json")
-            dsegs = transcribe_sarvam(dv, dub_path + ".sarvam.json")
+            if os.environ.get("AQC_SARVAM_BATCH", "").strip() == "1":
+                # Batch jobs are minutes of SERVER-side work reached through polling, so
+                # the two sides' jobs run concurrently on Sarvam's machines — sequential
+                # submission would serialize two waits for no reason. The sync path keeps
+                # its sequential order: both sides at 8-way each is what previously
+                # crawled into Sarvam's account-level rate limit.
+                import concurrent.futures as _cfs
+                with _cfs.ThreadPoolExecutor(max_workers=2) as _tp:
+                    _fo = _tp.submit(transcribe_sarvam, ov, original_path + ".sarvam.json")
+                    _fd = _tp.submit(transcribe_sarvam, dv, dub_path + ".sarvam.json")
+                    osegs, dsegs = _fo.result(), _fd.result()
+            else:
+                osegs = transcribe_sarvam(ov, original_path + ".sarvam.json")
+                dsegs = transcribe_sarvam(dv, dub_path + ".sarvam.json")
         else:
             # Both sides transcribe CONCURRENTLY — they are independent API work, and the dub
             # used to wait for the original's slowest request (including any 429 backoff).
