@@ -350,8 +350,20 @@ def _sarvam_call(audio16: np.ndarray, s0: float, e0: float) -> tuple | None:
     return None
 
 
-def transcribe_sarvam(audio16: np.ndarray) -> list:
-    """Sarvam pass: one concurrent request per VAD window (windows >28 s are split)."""
+def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> list:
+    """Sarvam pass: one concurrent request per VAD window (windows >28 s are split).
+
+    Sarvam is DETERMINISTIC (same window in, same transcript out) — only Whisper needs the
+    5-draw lottery. So the reading is computed ONCE (by draw 1, which runs alone) and cached
+    beside the input; concurrent draws 2..N read the file instead of re-issuing hundreds of
+    identical requests, which was 5x the API traffic for zero information and the reason the
+    both-sides run crawled into Sarvam's rate limits."""
+    import json as _json
+    if cache_path and os.path.exists(cache_path):
+        try:
+            return [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
+        except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
+            pass
     import concurrent.futures as _cf
     wins = []
     for (s0, e0) in segment(audio16):
@@ -365,6 +377,11 @@ def transcribe_sarvam(audio16: np.ndarray) -> list:
             if r:
                 out.append(r)
     out.sort(key=lambda x: x[0])
+    if cache_path:
+        try:
+            _json.dump(out, open(cache_path, "w"))
+        except OSError:
+            pass
     return out
 
 
@@ -632,7 +649,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             if _sarvam_ref:
                 _fo = _tp.submit(transcribe_groq, ov,
                                  LANG1.get(original_lang.lower(), original_lang))
-                _fos = _tp.submit(transcribe_sarvam, ov)
+                _fos = _tp.submit(transcribe_sarvam, ov, original_path + ".sarvam.json")
             else:
                 _fo = _tp.submit(transcribe_two_passes, ov,
                                  LANG1.get(original_lang.lower(), original_lang))
@@ -640,7 +657,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # Sarvam carries the dub's second reading: an Indic-specialist engine on the
                 # side where OUR false flags are born (dub lines Whisper fails to render).
                 _fd = _tp.submit(transcribe_groq, dv, LANG1.get(dub_lang.lower(), dub_lang))
-                _fs = _tp.submit(transcribe_sarvam, dv)
+                _fs = _tp.submit(transcribe_sarvam, dv, dub_path + ".sarvam.json")
                 _p1, _p2 = (_fo.result(), _fos.result()) if _sarvam_ref else _fo.result()
                 _q1, _q2 = _fd.result(), _fs.result()
             else:
