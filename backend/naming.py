@@ -47,3 +47,7 @@ def missing_flac(series: str | None, episode: int | str, lang: str, timeline: bo
 
 def audio_qc_xlsx(series: str | None, episode: int | str, dub_lang: str) -> str:
     return _join(slug(series), _ep(episode), dub_lang.title(), "AudioQC-Report", _stamp()) + ".xlsx"
+
+
+def markers_mid(series: str | None, episode: int | str, lang: str) -> str:
+    return _join(slug(series), _ep(episode), lang.title(), "ProTools-Markers") + ".mid"

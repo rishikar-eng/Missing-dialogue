@@ -1333,6 +1333,9 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
         done = running = failed = skipped = 0
         blocks: list[tuple[int, int, str, list[str]]] = []
         total_missing = 0
+        ok_summaries: dict[str, dict[str, Any]] = {}
+        downloads: dict[str, str] = {}
+        markers: dict[str, str] = {}
         for lang in sorted(per):
             v = per[lang] or {}
             if v.get("skipped"):
@@ -1358,8 +1361,23 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                       f"original lines · {s.get('unchecked', 0)} unreadable on one side"]
                 if st.get("download_url"):
                     ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
+                    downloads[lang] = st["download_url"]
                 if st.get("protools_url"):
                     ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
+                    markers[lang] = st["protools_url"]
+                # Same card the script QC renders, with audio-mode wording: `detail`/`icon`
+                # override the script-flavoured composition (no speakers → no wrong-speaker),
+                # `examples` feed the collapsed drill-down (tier stands in for character).
+                ok_summaries[lang] = {
+                    "missing": n_missing, "mismatch": 0,
+                    "misaligned": int(s.get("misaligned") or 0),
+                    "extra": int(s.get("extra") or 0), "no_audio": 0, "icon": icon,
+                    "detail": (f"{n_missing} possible missing (high {conf.get('high', 0)} / "
+                               f"med {conf.get('medium', 0)} / low {conf.get('low', 0)}) · "
+                               f"checked {(s.get('coverage') or 0):.0%} of "
+                               f"{s.get('original_lines', 0)} original lines"),
+                    "examples": s.get("examples") or [],
+                }
                 blocks.append((1, -n_missing, lang, ln))
             elif st.get("status") == "error":
                 failed += 1
@@ -1370,6 +1388,9 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 blocks.append((2, 0, lang, [f"🔄 **{lang}** — {st.get('stage') or 'running'}"]))
         out["lines"] = [ln for b in sorted(blocks, key=lambda b: (b[0], b[1], b[2])) for ln in b[3]]
         out["settled"] = running == 0
+        out["summaries"] = ok_summaries
+        out["downloads"] = downloads
+        out["markers"] = markers
         head = f"EP {rec.get('episode')} — audio-only QC (no script, mix vs mix)"
         if running:
             head += f" — {done + failed + skipped}/{len(per)} finished"
@@ -1579,26 +1600,34 @@ def _status_card(st: dict[str, Any]) -> dict[str, Any] | None:
         _tb(st["header"], isSubtle=True, spacing="None"),
     ]
     if st.get("verdict"):
-        colour = ("Attention" if st["verdict"].startswith("🔴")
+        colour = ("Attention" if st["verdict"].startswith(("🔴", "⚠"))
                   else "Warning" if st["verdict"].startswith("🟠") else "Good")
         body.append(_tb(st["verdict"].replace("**", ""), color=colour, weight="Bolder"))
 
     rows: list[dict[str, Any]] = []
     for lang, s in sorted(summaries.items(), key=lambda kv: (_lang_sort_key(kv[1]), kv[0])):
         g = lambda k: int(s.get(k) or 0)             # noqa: E731
-        icon = "🔴" if g("no_audio") else ("🟠" if (g("missing") or g("mismatch")) else "🟢")
-        detail = (f"{g('missing')} missing · {g('mismatch')} wrong-speaker · "
-                  f"{g('misaligned')} misaligned · {g('extra')} extra")
-        if g("no_audio"):
-            detail = (f"**{_plural(g('no_audio'), 'character')} not delivered** — " + detail)
+        # A mode may supply its own icon/detail (audio-only runs have no speakers, so the
+        # script-QC wording — wrong-speaker, undelivered characters — would be nonsense there).
+        icon = s.get("icon") or (
+            "🔴" if g("no_audio") else ("🟠" if (g("missing") or g("mismatch")) else "🟢"))
+        detail = s.get("detail")
+        if not detail:
+            detail = (f"{g('missing')} missing · {g('mismatch')} wrong-speaker · "
+                      f"{g('misaligned')} misaligned · {g('extra')} extra")
+            if g("no_audio"):
+                detail = (f"**{_plural(g('no_audio'), 'character')} not delivered** — " + detail)
         dl = (st.get("downloads") or {}).get(lang)
+        mk = (st.get("markers") or {}).get(lang)
+        links = [_tb(f"[report]({dl})")] if dl else []
+        if mk:
+            links.append(_tb(f"[markers]({mk})", spacing="None", size="Small"))
         rows.append({"type": "ColumnSet", "spacing": "Small", "columns": [
             {"type": "Column", "width": "auto", "items": [_tb(icon)]},
             {"type": "Column", "width": "stretch",
              "items": [_tb(f"**{lang}**", spacing="None"), _tb(detail, isSubtle=True,
                                                                spacing="None", size="Small")]},
-            {"type": "Column", "width": "auto",
-             "items": [_tb(f"[report]({dl})")] if dl else []},
+            {"type": "Column", "width": "auto", "items": links},
         ]})
     body += rows
 

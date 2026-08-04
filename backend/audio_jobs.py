@@ -225,6 +225,19 @@ def status(job_id: str) -> dict[str, Any]:
         rep = json.loads(s3.get_object(Bucket=c["bucket"],
                                        Key=f"{prefix}/report.json")["Body"].read())
         s = rep.get("summary", {})
+        # Concrete flags for the Teams card's collapsed drill-down — same shape the script-QC
+        # examples use ({at, character, text}), with the confidence tier standing in for the
+        # character (scriptless mode has no speaker identity). Verify order: high → low → time.
+        _rank = {"high": 0, "medium": 1, "low": 2}
+        ex = [{"at": f"{int(e['script_start_s'] // 3600):02d}:"
+                     f"{int((e['script_start_s'] % 3600) // 60):02d}:{e['script_start_s'] % 60:04.1f}",
+               "character": (e.get("confidence") or "?")
+               + (f" · {e['stability']}" if e.get("stability") else ""),
+               "text": (e.get("text") or "").strip()[:70]}
+              for e in sorted((x for x in rep.get("errors", [])
+                               if x.get("type") == "MISSING" and x.get("script_start_s") is not None),
+                              key=lambda x: (_rank.get(x.get("confidence"), 3),
+                                             x["script_start_s"]))][:6]
         out: dict[str, Any] = {
             "status": "done",
             "summary": {
@@ -233,6 +246,7 @@ def status(job_id: str) -> dict[str, Any]:
                 "extra": s.get("n_extra"), "misaligned": s.get("n_misaligned"),
                 "original_lines": s.get("n_original_regions"),
                 "coverage": s.get("coverage"), "unchecked": s.get("n_unchecked"),
+                "examples": ex,
             },
         }
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):

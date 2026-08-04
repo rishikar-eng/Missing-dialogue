@@ -268,6 +268,18 @@ def run(key: str, cfg: dict[str, Any], n: int, *,
             shutil.rmtree(out_dir, ignore_errors=True)
             return {"status": "skip", "why": "no language had usable stems", "languages": notes}
 
+        # Pro Tools markers per language: every MISSING becomes a named Memory Location
+        # (marker MIDI — true .ptx is Avid-proprietary). Lazy import + broad guard so an
+        # older deployed image without audio_report keeps working untouched.
+        for _lang, _res in per_lang.items():
+            try:
+                from . import audio_report as _ar
+                _ar.build_marker_midi({"errors": _res["alignment"]["errors"]},
+                                      str(out_dir / naming.markers_mid(
+                                          cfg.get("display_name", key), n, _lang)))
+            except Exception:  # noqa: BLE001 — markers are extra, never fatal
+                pass
+
         _stage("building workbook", len(want), len(want))
         xlsx = out_dir / naming.report_xlsx(cfg.get("display_name", key), n)
         build_workbook(
