@@ -171,6 +171,12 @@
    "verified_missing": [],
    "verified_present": [
     {
+     "start": 397.9,
+     "end": 404.9,
+     "confidence": "certain",
+     "note": "'Energy ghar par nahi hai shayad' — ear-confirmed PRESENT in Tamil 2026-08-04; flagged medium (cov 0.46) by the PRODUCTION Sarvam-only batch run bfcc8b3507d4"
+    },
+    {
      "start": 582.0,
      "end": 583.12,
      "note": "Lizel 'Heh..' — missing from stems, PRESENT in the mix",
@@ -201,6 +207,12 @@
      "confidence": "certain"
     },
     {
+     "start": 916.6,
+     "end": 917.6,
+     "confidence": "certain",
+     "note": "'Apna khayal rakhna' — short quiet farewell, ear-confirmed PRESENT in Tamil 2026-08-04; flagged medium (cov 0.39) by production run bfcc8b3507d4"
+    },
+    {
      "start": 1414.28,
      "end": 1415.56,
      "note": "Shoma 'Nyelv!' shout — present",
@@ -213,7 +225,7 @@
      "confidence": "certain"
     }
    ],
-   "note_expected": "Any MISSING flag on this episode is a false positive. Observed noise floor: 4-11 flags per run, all low/medium confidence, never high."
+   "note_expected": "Any MISSING flag on this episode is a false positive. Whisper-union noise floor: 4-11 flags/run, all low/medium. PRODUCTION Sarvam-only+batch noise floor: 2 medium flags (both ear-confirmed present 2026-08-04), never high."
   },
   "ep43-window": {
    "description": "EP43 fight scene (16m45s-22m15s slice). User ear-checked ALL flags on 2026-07-30: every one false. Both languages garble under SFX, and the Tamil carries extra background/effects the Hindi lacks. This is the adversarial false-positive case.",
