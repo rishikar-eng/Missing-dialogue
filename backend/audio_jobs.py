@@ -156,18 +156,36 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
     start (vCPU quota is the usual reason) is recorded with its error rather than dropped, so
     status can report it instead of silently showing fewer languages than were asked for.
     """
+    import time as _t
     parent_id = uuid.uuid4().hex[:12]
     langs: dict[str, dict[str, Any]] = {}
-    for lang in cfg.get("languages", []):
-        r = launch(series_key, cfg, int(episode), lang)      # no conv: parent owns the record
-        if r.get("error"):
-            if "no " + lang.lower() in r["error"].lower():
-                langs[lang] = {"skipped": r["error"]}        # not delivered — expected
+    pending = list(cfg.get("languages", []))
+    # Quota-retry loop: at the 30-vCPU quota a 6-language fan-out CANNOT all start at once,
+    # and the old code recorded the quota failures permanently — 1 language ran, 5 "failed".
+    # Languages that bounce on the vCPU limit are retried as earlier tasks finish, up to
+    # ~25 min, which covers two full task generations even cold.
+    deadline = _t.time() + 1500
+    while pending:
+        still: list[str] = []
+        for lang in pending:
+            r = launch(series_key, cfg, int(episode), lang)  # no conv: parent owns the record
+            err = r.get("error") or ""
+            if not err:
+                langs[lang] = {"job_id": r["job_id"], "original": r.get("original"),
+                               "dub": r.get("dub"), "original_stage": r.get("original_stage")}
+            elif "no " + lang.lower() in err.lower():
+                langs[lang] = {"skipped": err}               # not delivered — expected
+            elif "vCPU" in err or "vcpu" in err:
+                still.append(lang)                           # quota — retry when tasks free up
             else:
-                langs[lang] = {"error": r["error"]}
-        else:
-            langs[lang] = {"job_id": r["job_id"], "original": r.get("original"),
-                           "dub": r.get("dub"), "original_stage": r.get("original_stage")}
+                langs[lang] = {"error": err}
+        if not still or _t.time() > deadline:
+            for lang in still:
+                langs[lang] = {"error": "vCPU quota stayed exhausted for 25 min — "
+                                        "re-run this language once current tasks finish"}
+            break
+        pending = still
+        _t.sleep(90)
     launched = sum(1 for v in langs.values() if v.get("job_id"))
     if conv:
         try:
