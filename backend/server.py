@@ -1746,11 +1746,11 @@ _HELP = (
     "- `check ep 42` — what's in Box for that episode (script, original audio, each dub "
     "language) + a ▶ Run button\n"
     "- `run ep 42` — start QC across every delivered language\n"
-    "- `audio files ep 42` — check the original + dub mixes are in Box (with a ▶ Run "
-    "button), before spending an audio QC run\n"
-    "- `audio check ep 42 tamil` — audio-only QC when there's no script: compares the "
-    "original mix against that language's delivered mix and flags missing dialogue "
-    "(omit the language to check every delivered one)\n"
+    "- `check scriptless qc ep 42` — the mixes in Box for that episode (original + each "
+    "dub) with a 🎧 Run button, before spending a run\n"
+    "- `run scriptless qc ep 42` — audio-only QC when there's no script: compares the "
+    "original mix against every delivered dub mix and flags missing dialogue (add a "
+    "language to limit it, e.g. `run scriptless qc ep 42 tamil`)\n"
     "- `status` — progress, then per-language results, root cause and download links\n"
     "- `runs` — the recent runs in this channel\n"
     "- `help` — this message\n\n"
@@ -1833,16 +1833,20 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     series_key = (next(iter(hits)) if len(hits) == 1
                   else fast.get("series_key") or (all_s[0]["key"] if len(all_s) == 1 else None))
 
-    # AUDIO AVAILABILITY — "are the mixes in Box?" preview, the audio counterpart of `check`.
-    # Its trigger words are disjoint from the launch branch's (check|qc|compare|run|start|go)
-    # so the documented `audio check ep 41` still starts a run, while "audio files ep 41" /
-    # "is the audio delivered for ep 41" answer from a Box listing without spending a task.
-    # Tested first so the ambiguous "audio files check" previews rather than launches.
-    if re.search(r"\b(audio|mix(es)?|scriptless|no.?script)\b", low) and \
-            re.search(r"\b(files?|available|availability|delivered|present)\b", low):
+    # SCRIPTLESS QC — same verb grammar as script QC, per the studio's ask:
+    #   `check scriptless qc ep 41`  -> preview (are the mixes in Box?) + a Run button
+    #   `run scriptless qc ep 41 [tamil]` -> launch (every delivered language, or just one)
+    # The older `audio files` / `audio check` phrasings still route, but the VERB decides:
+    # a run-verb launches, anything else previews — so `audio check` now previews instead of
+    # silently starting an 8-minute fan-out (check meaning "launch" surprised everyone).
+    # `run+` also swallows the common "runn" typo.
+    _scriptless = re.search(r"\b(audio|mix(es)?|scriptless|no.?script)\b", low)
+    _sl_launch = bool(re.search(r"\b(run+|start|go|launch|kick|compare)\b", low))
+    if _scriptless and not _sl_launch and \
+            re.search(r"\b(check|qc|files?|available|availability|delivered|present)\b", low):
         from . import audio_jobs
         if ep is None:
-            return {"type": "message", "text": "Which episode? e.g. 'audio files ep 41'."}
+            return {"type": "message", "text": "Which episode? e.g. 'check scriptless qc ep 41'."}
         if not series_key:
             return {"type": "message",
                     "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
@@ -1861,14 +1865,12 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                 "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
                                  "content": _audio_availability_card(av, conv)}]}
 
-    # AUDIO-ONLY QC — must be tested BEFORE run/check, because "audio check ep 41" contains
-    # neither a run verb nor anything the status branch wants, so it used to fall through to
-    # the script availability card and silently do the wrong thing.
-    if re.search(r"\b(audio|mix|scriptless|no.?script)\b", low) and \
-            re.search(r"\b(check|qc|compare|run|start|go)\b", low):
+    # SCRIPTLESS LAUNCH — tested BEFORE the generic run/check branches so "run scriptless
+    # qc ep 42" starts the mix-vs-mix fan-out rather than the script pipeline.
+    if _scriptless and _sl_launch:
         from . import audio_jobs, notify
         if ep is None:
-            return {"type": "message", "text": "Which episode? e.g. 'audio check ep 41 tamil'."}
+            return {"type": "message", "text": "Which episode? e.g. 'run scriptless qc ep 41'."}
         if not series_key:
             return {"type": "message",
                     "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
