@@ -66,12 +66,19 @@
    ]
   },
   "ep38-mix": {
-   "description": "EP38 full episode, Hindi ST_MIX vs Tamil ST_MIX. NO verified drops (605.6 retracted on stems re-listen). Script-QC ground truth does NOT apply here: the studio patches lines before mixing, so lines missing from the stems are audibly present in the delivered mix (proven on EP41 and EP42). Re-listen also confirmed the Tamil runs slightly BEHIND the Hindi (matches the measured +5.8s local drift).",
+   "description": "EP38 full episode, Hindi ST_MIX vs Tamil ST_MIX. One grunt-class drop at 699.8 (2026-08-04). AUDIO drift-map says this pair is aligned to ±0.2s everywhere — all earlier ±20s 'drift' was text-alignment artifact. Script-QC ground truth does NOT apply here: the studio patches lines before mixing, so lines missing from the stems are audibly present in the delivered mix (proven on EP41 and EP42). Re-listen also confirmed the Tamil runs slightly BEHIND the Hindi (matches the measured +5.8s local drift).",
    "original_box_id": "2192586093173",
    "dub_box_id": "auto:mixes_folder/EP 38/*_TAMIL_ST_MIX.wav",
    "original_lang": "hindi",
    "dub_lang": "tamil",
-   "verified_missing": [],
+   "verified_missing": [
+    {
+     "start": 699.8,
+     "end": 701.5,
+     "confidence": "certain",
+     "note": "grunt/vocalization present in Hindi, ABSENT in Tamil — ear-confirmed 2026-08-04 on TRULY-aligned dialogue stems (drift-map verified ~0s). FOUND BY SARVAM-ONLY (flagged low, correctly ranked). Grunt-class: studios sometimes skip these by design, but it is a true original-vs-dub absence."
+    }
+   ],
    "verified_present": [
     {
      "start": 605.6,
@@ -114,6 +121,24 @@
      "end": 1429.0,
      "note": "waveform: speech in both tracks; likely end-credits",
      "confidence": "medium"
+    },
+    {
+     "start": 392.1,
+     "end": 394.0,
+     "confidence": "certain",
+     "note": "grunts both languages (aligned re-listen; earlier 'Tamil silent' verdict was a mis-shifted clip artifact)"
+    },
+    {
+     "start": 985.0,
+     "end": 987.0,
+     "confidence": "certain",
+     "note": "grunts both languages (aligned re-listen)"
+    },
+    {
+     "start": 1311.3,
+     "end": 1313.0,
+     "confidence": "certain",
+     "note": "grunts both languages (aligned re-listen)"
     }
    ],
    "contested": [
@@ -135,7 +160,7 @@
      "note": "transformation sting, -1.2 dB. Music gate should reject."
     }
    ],
-   "note_expected": "ZERO verified drops on this episode — every MISSING flag ever raised on EP38 was false. Pure noise-floor case, like EP41."
+   "note_expected": "ONE verified grunt-class drop at 699.8 (found by sarvam-only). All sentence-level flags ever raised on EP38 were false."
   },
   "ep41-mix": {
    "description": "EP41 full episode, Hindi vs Tamil ST_MIX. Ear-checked across 8 window pairs on 2026-07-30: EVERY flag was false, and all 12 lines that script QC called missing from the STEMS are audibly PRESENT in the delivered mix (the studio patched them post-QC). Use this as the false-positive / noise-floor case.",
