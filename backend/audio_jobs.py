@@ -83,19 +83,24 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
 
 
 def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
-           original_stage: str = "mix", conv: str | None = None) -> dict[str, Any]:
+           original_stage: str = "mix", conv: str | None = None,
+           token: str | None = None, parent: str | None = None) -> dict[str, Any]:
     """Discover the pair in Box and start the Fargate audio-QC task. Returns
-    {job_id, original, dub, eta_min} or {error}."""
+    {job_id, original, dub, eta_min} or {error}.
+
+    `token`: a Box access token minted by the caller — launch_all passes ONE token to every
+    language. Never force-mint per launch: each mint REVOKES the previous access token, so a
+    6-language fan-out revoked the tokens of the first 5 tasks and they all 401'd on their
+    first Box call (EP32, 2026-08-04). min_ttl_s guarantees freshness without rotation."""
     groq = os.environ.get("GROQ_API_KEY", "")
     if not groq:
         return {"error": "GROQ_API_KEY is not configured on the server"}
     c = fargate._cfg()
     if not (c["subnets"] and c["sg"] and c["bucket"]):
         return {"error": "Fargate compute is not configured (subnets/sg/bucket)"}
-    # force_refresh: get_token() can hand out a nearly-expired cached token, which dies
-    # mid-download inside the task (the task cannot refresh — it never sees the refresh
-    # token). A task launch always deserves a fresh one.
-    token = box_oauth.get_token(force_refresh=True)
+    # ≥45 min of life covers the task's Box phase (inputs are downloaded in its first few
+    # minutes) without rotating a token some already-running task is still holding.
+    token = token or box_oauth.get_token(min_ttl_s=2700)
     box = box_discovery._Box(token)
     orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
     stage_used = "ST_MIX"
@@ -141,16 +146,17 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     arn = r["tasks"][0]["taskArn"]
     _JOBS[job_id] = {"task_arn": arn, "series": series_key, "episode": int(episode),
                      "lang": lang, "prefix": prefix}
-    # Register under the Teams conversation exactly like a script run, so `status` and `runs`
-    # find it. Without this an audio check was invisible to every other command.
-    if conv:
-        try:
-            from . import run_store
-            run_store.record(job_id, conv=conv, episode=int(episode),
-                             series=cfg.get("display_name", series_key), status="running",
-                             compute="audio", lang=lang, prefix=prefix, task_arn=arn)
-        except Exception:  # noqa: BLE001 — bookkeeping must never break a launch
-            pass
+    # ALWAYS persist the job (conv only when the launch came from a chat): status() falls
+    # back to run_store after a server restart, and a fan-out child recorded only in the
+    # in-memory map used to render as "running" forever once the process bounced.
+    try:
+        from . import run_store
+        run_store.record(job_id, conv=conv, episode=int(episode),
+                         series=cfg.get("display_name", series_key), status="running",
+                         compute="audio", lang=lang, prefix=prefix, task_arn=arn,
+                         parent=parent)
+    except Exception:  # noqa: BLE001 — bookkeeping must never break a launch
+        pass
     return {"job_id": job_id, "original": orig["name"], "original_stage": stage_used,
             "dub": dub["name"], "eta_min": 8,
             "note": "audio QC started; poll get_audio_result with this job_id"}
@@ -176,8 +182,14 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
     deadline = _t.time() + 1500
     while pending:
         still: list[str] = []
+        # ONE token per wave, shared by every language's task. Minting per-language revoked
+        # the earlier tasks' tokens (each refresh kills the outstanding access token) — the
+        # EP32 failure. A retry wave 90s+ later re-checks TTL; a refresh then is safe because
+        # the earlier wave's tasks have finished their Box downloads by that point.
+        wave_token = box_oauth.get_token(min_ttl_s=2700)
         for lang in pending:
-            r = launch(series_key, cfg, int(episode), lang)  # no conv: parent owns the record
+            r = launch(series_key, cfg, int(episode), lang,   # no conv: parent owns the record
+                       token=wave_token, parent=parent_id)
             err = r.get("error") or ""
             if not err:
                 langs[lang] = {"job_id": r["job_id"], "original": r.get("original"),

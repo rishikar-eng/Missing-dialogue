@@ -162,10 +162,18 @@ def _persist_refresh(new_refresh: str) -> None:
     os.replace(tmp, tf)
 
 
-def get_token(force_refresh: bool = False) -> str:
+def get_token(force_refresh: bool = False, min_ttl_s: float = 0.0) -> str:
     """Return a valid access token, refreshing (and rotating the refresh token) as needed.
     Reuses a host-shared cached access token when possible so concurrent PROCESSES (web
     service + batch runner) don't each burn the single-use refresh token and 401 each other.
+
+    `min_ttl_s`: only accept a cached token with at least this much life left — the right
+    tool for handing a token to a Fargate task (which cannot refresh). Unlike
+    force_refresh it does NOT rotate when the cache is still fresh, and rotation is the
+    dangerous part: every refresh kills the outstanding access token, so N back-to-back
+    force mints revoke the first N-1 — which silently killed every task of a multi-language
+    fan-out except the last (EP32, 2026-08-04). Prefer min_ttl_s over force_refresh.
+
     Raises BoxAuthError with a fix-it message on any dead end."""
     # 0) a pre-minted access token handed in by a dispatcher (Fargate task): use it
     # directly and NEVER touch the rotating refresh token. The EC2 dispatcher mints this
@@ -176,15 +184,16 @@ def get_token(force_refresh: bool = False) -> str:
         return pre
 
     global _access, _access_expiry
+    keep = max(1.0, float(min_ttl_s))
     with _LOCK:
         now = time.time()
         # 1) this process's in-memory cache
-        if not force_refresh and _access and now < _access_expiry - 1:
+        if not force_refresh and _access and now < _access_expiry - keep:
             return _access
         # 2) a token another process on this host refreshed into the shared cache
         if not force_refresh:
             shared = _read_access_cache()
-            if shared and now < shared[1] - 1:
+            if shared and now < shared[1] - keep:
                 _access, _access_expiry = shared
                 return _access
 
@@ -199,7 +208,7 @@ def get_token(force_refresh: bool = False) -> str:
             # re-check: another process may have refreshed while we waited for the lock
             if not force_refresh:
                 shared = _read_access_cache()
-                if shared and now < shared[1] - 1:
+                if shared and now < shared[1] - keep:
                     _access, _access_expiry = shared
                     return _access
 

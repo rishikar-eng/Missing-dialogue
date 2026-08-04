@@ -1439,7 +1439,9 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                     "examples": s.get("examples") or [],
                 }
                 blocks.append((1, -n_missing, lang, ln))
-            elif st.get("status") == "error":
+            elif st.get("status") == "error" or (st.get("error") and not st.get("status")):
+                # bare {"error": ...} (job record lost, e.g. restart + never persisted) used
+                # to fall into the running bucket and render "running" forever
                 failed += 1
                 blocks.append((0, 0, lang,
                                [f"⚠️ **{lang}** — {_friendly_error(st.get('error'))}"]))
