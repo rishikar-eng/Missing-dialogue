@@ -1063,6 +1063,39 @@ def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
     }
 
 
+def _audio_availability_card(av: dict[str, Any], conv: str) -> dict[str, Any]:
+    """The audio-only counterpart of _availability_card: what audio QC needs is just the
+    original's final mix + each language's delivered mix — no script, stems or roster rows."""
+    import time as _t
+    n = av.get("episode")
+    ready = av.get("languages_ready") or {}
+    orig = av.get("original")
+    facts = [
+        {"title": "Original mix", "value": (f"{orig} ({av.get('original_stage')})"
+                                            if orig else "missing")},
+        {"title": "Dub mixes ready", "value": ", ".join(sorted(ready)) or "none"},
+    ]
+    if av.get("not_delivered"):
+        facts.append({"title": "Not delivered", "value": ", ".join(av["not_delivered"])})
+    actions = []
+    if av.get("runnable"):
+        base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
+        tok = _sign_link({"conv": conv, "series": av.get("series_key") or av.get("series"),
+                          "episode": n, "mode": "audio", "exp": _t.time() + 3600})
+        actions = [{"type": "Action.OpenUrl", "title": "🎧 Run audio QC",
+                    "url": f"{base}/api/agent/go?d={tok}"}]
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard", "version": "1.4",
+        "body": [
+            {"type": "TextBlock", "text": f"Episode {n} — {av.get('series')} (audio-only QC)",
+             "weight": "Bolder", "size": "Medium"},
+            {"type": "FactSet", "facts": facts},
+        ],
+        "actions": actions,
+    }
+
+
 @app.get("/api/agent/go")
 def agent_go(d: str):
     """Signed one-click Run from the Teams card: verify HMAC, start the QC run, seed the
@@ -1079,6 +1112,33 @@ def agent_go(d: str):
     key, cfg = r
     n = int(payload.get("episode"))
     conv = str(payload.get("conv") or "")
+    # Audio-availability cards mint the same signed link with mode=audio: same one-click
+    # flow, but it starts the mix-vs-mix fan-out instead of the script pipeline.
+    if payload.get("mode") == "audio":
+        from . import audio_jobs, notify
+        try:
+            res = audio_jobs.launch_all(key, cfg, n, conv=conv)
+        except Exception as e:  # noqa: BLE001
+            return HTMLResponse(f"<h3>Couldn't start the audio check: {str(e)[:200]}</h3>",
+                                status_code=500)
+        if not res["launched"]:
+            why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"
+                            for k, v in res["langs"].items()) or "no delivered mixes"
+            return HTMLResponse(f"<h3>Nothing to audio-check for EP {n} — {why[:300]}</h3>",
+                                status_code=409)
+        sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": key, "cfg": cfg,
+                                                 "convo": [], "fast": {}})
+        sess.setdefault("fast", {})["job"] = res["parent_id"]     # typed `status` finds it
+        pushed = notify.watch(res["parent_id"], conv)
+        back = ("Head back to Teams — I'll post the results in the channel when it finishes."
+                if pushed else "Head back to Teams and ask <b>@QC status</b> for the results.")
+        return HTMLResponse(
+            "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:34rem;margin:3rem auto'>"
+            f"<h2 style='color:#2b6cb0'>🎧 Audio-only QC started — Episode {n}, "
+            f"{cfg.get('display_name')}</h2>"
+            f"<p>Job <code>{res['parent_id']}</code> — {res['launched']} languages comparing "
+            "mix-vs-mix on the cloud (~8 min).</p>"
+            f"<p>{back}</p></div>")
     # SAME launcher as the typed 'run' command — records the run under `conv` so 'status'
     # finds it (the old code only nudged the LLM convo, so the fast path saw nothing).
     try:
@@ -1686,8 +1746,11 @@ _HELP = (
     "- `check ep 42` — what's in Box for that episode (script, original audio, each dub "
     "language) + a ▶ Run button\n"
     "- `run ep 42` — start QC across every delivered language\n"
+    "- `audio files ep 42` — check the original + dub mixes are in Box (with a ▶ Run "
+    "button), before spending an audio QC run\n"
     "- `audio check ep 42 tamil` — audio-only QC when there's no script: compares the "
-    "original mix against that language's delivered mix and flags missing dialogue\n"
+    "original mix against that language's delivered mix and flags missing dialogue "
+    "(omit the language to check every delivered one)\n"
     "- `status` — progress, then per-language results, root cause and download links\n"
     "- `runs` — the recent runs in this channel\n"
     "- `help` — this message\n\n"
@@ -1769,6 +1832,34 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
     all_s = series_registry.all_series()
     series_key = (next(iter(hits)) if len(hits) == 1
                   else fast.get("series_key") or (all_s[0]["key"] if len(all_s) == 1 else None))
+
+    # AUDIO AVAILABILITY — "are the mixes in Box?" preview, the audio counterpart of `check`.
+    # Its trigger words are disjoint from the launch branch's (check|qc|compare|run|start|go)
+    # so the documented `audio check ep 41` still starts a run, while "audio files ep 41" /
+    # "is the audio delivered for ep 41" answer from a Box listing without spending a task.
+    # Tested first so the ambiguous "audio files check" previews rather than launches.
+    if re.search(r"\b(audio|mix(es)?|scriptless|no.?script)\b", low) and \
+            re.search(r"\b(files?|available|availability|delivered|present)\b", low):
+        from . import audio_jobs
+        if ep is None:
+            return {"type": "message", "text": "Which episode? e.g. 'audio files ep 41'."}
+        if not series_key:
+            return {"type": "message",
+                    "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
+        key, cfg = series_registry.resolve(series_key)
+        fast.update(episode=int(ep), series_key=key)
+        sess["series_key"], sess["cfg"] = key, cfg
+        try:
+            av = audio_jobs.availability(key, cfg, int(ep))
+        except Exception as e:  # noqa: BLE001
+            return {"type": "message", "text": f"Couldn't check Box: {str(e)[:160]}"}
+        ready = av.get("languages_ready") or {}
+        summary = (f"EP {ep} — {av.get('series')}: original mix "
+                   f"{'present' if av.get('original') else 'MISSING'}, "
+                   f"{len(ready)}/{len(cfg.get('languages', []))} dub mixes delivered.")
+        return {"type": "message", "text": summary,
+                "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
+                                 "content": _audio_availability_card(av, conv)}]}
 
     # AUDIO-ONLY QC — must be tested BEFORE run/check, because "audio check ep 41" contains
     # neither a run verb nor anything the status branch wants, so it used to fall through to
