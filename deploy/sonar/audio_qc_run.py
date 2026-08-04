@@ -219,7 +219,6 @@ def _main():
         if e["type"] == "MISALIGNED":
             print(f"   MISALIGNED @{e['script_start_s']:7.1f}s drift={e['drift_s']:+.1f}s match={e['coverage']:.2f}")
     json.dump(rep, open("/tmp/report.json", "w"), default=str)
-    _push_sep_cache()
 
     if out_prefix:
         from backend import audio_report, naming
@@ -233,9 +232,10 @@ def _main():
         import boto3
         s3 = boto3.client("s3")
         pre = out_prefix.strip("/")
-        s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
         s3.upload_file("/tmp/report.json", BUCKET, f"{pre}/report.json")
+        s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
         print(f"WORKBOOK s3://{BUCKET}/{pre}/{fname}", flush=True)
+    _push_sep_cache()                      # cache push LAST: results first, always
 
     if dump_key:
         print("[run] embedding probe windows (silence + random) for calibration", flush=True)
