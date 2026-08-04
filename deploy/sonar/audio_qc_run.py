@@ -54,8 +54,15 @@ def _local(p: str) -> str:
         from backend import box_fetch
         fid = p[6:]
         tok = os.environ["BOX_ACCESS_TOKEN"]
-        info = httpx.get(f"https://api.box.com/2.0/files/{fid}?fields=name,sha1",
-                         headers={"Authorization": f"Bearer {tok}"}, timeout=60).json()
+        _r = httpx.get(f"https://api.box.com/2.0/files/{fid}?fields=name,sha1",
+                       headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+        if _r.status_code != 200:
+            # Box rotates access tokens: launching two tasks back-to-back can invalidate the
+            # first one's token, and the old code crashed on the non-JSON 401 body with a
+            # baffling JSONDecodeError instead of saying what actually happened.
+            raise RuntimeError(f"Box file-info for {fid} failed: HTTP {_r.status_code} "
+                               f"(token expired/rotated?)")
+        info = _r.json()
         name = info.get("name") or f"box_{fid}.wav"
         dst = "/tmp/" + name
         try:
