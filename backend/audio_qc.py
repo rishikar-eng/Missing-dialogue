@@ -630,45 +630,56 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     dwin: list[tuple[float, float]] | None = None
     mu = None
     if engine == "text":
-        # Both sides transcribe CONCURRENTLY — they are independent API work, and the dub
-        # used to wait for the original's slowest request (including any 429 backoff).
-        # The dub is double-passed for the same reason as the reference: a MISSING flag
-        # asserts the dub never says the line, and every ear-disproved EP41/EP43 flag traced
-        # to a present dub line that one nondeterministic pass failed to render.
-        import concurrent.futures as _cfs
-        _say("transcribing original + dub via Groq (concurrent)")
-        # Sarvam can also carry the REFERENCE's second reading (AQC_SARVAM_REF=1) — Hindi is
-        # its best language and the ref side is where hallucination-over-music noise is born.
-        # Guarded to Indic originals: the EP42 validation clip has a JAPANESE reference,
-        # which Sarvam does not speak.
-        _sarvam_ref = (os.environ.get("AQC_SARVAM_REF", "").strip() == "1"
-                       and original_lang.lower() in ("hindi", "tamil", "telugu", "kannada",
-                                                     "bengali", "marathi", "malayalam",
-                                                     "punjabi"))
-        with _cfs.ThreadPoolExecutor(max_workers=3 if _sarvam_ref else 2) as _tp:
-            if _sarvam_ref:
-                _fo = _tp.submit(transcribe_groq, ov,
-                                 LANG1.get(original_lang.lower(), original_lang))
-                _fos = _tp.submit(transcribe_sarvam, ov, original_path + ".sarvam.json")
-            else:
-                _fo = _tp.submit(transcribe_two_passes, ov,
-                                 LANG1.get(original_lang.lower(), original_lang))
-            if os.environ.get("AQC_SARVAM_DUB", "").strip() == "1":
-                # Sarvam carries the dub's second reading: an Indic-specialist engine on the
-                # side where OUR false flags are born (dub lines Whisper fails to render).
-                _fd = _tp.submit(transcribe_groq, dv, LANG1.get(dub_lang.lower(), dub_lang))
-                _fs = _tp.submit(transcribe_sarvam, dv, dub_path + ".sarvam.json")
-                _p1, _p2 = (_fo.result(), _fos.result()) if _sarvam_ref else _fo.result()
-                _q1, _q2 = _fd.result(), _fs.result()
-            else:
-                _fd = _tp.submit(transcribe_two_passes, dv,
-                                 LANG1.get(dub_lang.lower(), dub_lang))
-                _p1, _p2 = (_fo.result(), _fos.result()) if _sarvam_ref else _fo.result()
-                _q1, _q2 = _fd.result()
-        osegs = _merge_passes(_p1, _p2)
-        dsegs = _merge_passes(_q1, _q2)
-        _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
-        _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
+        _INDIC = ("hindi", "tamil", "telugu", "kannada", "bengali", "marathi",
+                  "malayalam", "punjabi")
+        if (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
+                and original_lang.lower() in _INDIC and dub_lang.lower() in _INDIC):
+            # EXPERIMENT (user-requested): Sarvam alone, one deterministic reading per
+            # side. No union (identical redraws), no Whisper self-diagnostics for the
+            # gates, no cross-engine check — the ear-check verdict decides its fate.
+            _say("SARVAM-ONLY: one deterministic Saaras reading per side")
+            osegs = transcribe_sarvam(ov, original_path + ".sarvam.json")
+            dsegs = transcribe_sarvam(dv, dub_path + ".sarvam.json")
+        else:
+            # Both sides transcribe CONCURRENTLY — they are independent API work, and the dub
+            # used to wait for the original's slowest request (including any 429 backoff).
+            # The dub is double-passed for the same reason as the reference: a MISSING flag
+            # asserts the dub never says the line, and every ear-disproved EP41/EP43 flag traced
+            # to a present dub line that one nondeterministic pass failed to render.
+            import concurrent.futures as _cfs
+            _say("transcribing original + dub via Groq (concurrent)")
+            # Sarvam can also carry the REFERENCE's second reading (AQC_SARVAM_REF=1) — Hindi is
+            # its best language and the ref side is where hallucination-over-music noise is born.
+            # Guarded to Indic originals: the EP42 validation clip has a JAPANESE reference,
+            # which Sarvam does not speak.
+            _sarvam_ref = (os.environ.get("AQC_SARVAM_REF", "").strip() == "1"
+                           and original_lang.lower() in ("hindi", "tamil", "telugu", "kannada",
+                                                         "bengali", "marathi", "malayalam",
+                                                         "punjabi"))
+            with _cfs.ThreadPoolExecutor(max_workers=3 if _sarvam_ref else 2) as _tp:
+                if _sarvam_ref:
+                    _fo = _tp.submit(transcribe_groq, ov,
+                                     LANG1.get(original_lang.lower(), original_lang))
+                    _fos = _tp.submit(transcribe_sarvam, ov, original_path + ".sarvam.json")
+                else:
+                    _fo = _tp.submit(transcribe_two_passes, ov,
+                                     LANG1.get(original_lang.lower(), original_lang))
+                if os.environ.get("AQC_SARVAM_DUB", "").strip() == "1":
+                    # Sarvam carries the dub's second reading: an Indic-specialist engine on the
+                    # side where OUR false flags are born (dub lines Whisper fails to render).
+                    _fd = _tp.submit(transcribe_groq, dv, LANG1.get(dub_lang.lower(), dub_lang))
+                    _fs = _tp.submit(transcribe_sarvam, dv, dub_path + ".sarvam.json")
+                    _p1, _p2 = (_fo.result(), _fos.result()) if _sarvam_ref else _fo.result()
+                    _q1, _q2 = _fd.result(), _fs.result()
+                else:
+                    _fd = _tp.submit(transcribe_two_passes, dv,
+                                     LANG1.get(dub_lang.lower(), dub_lang))
+                    _p1, _p2 = (_fo.result(), _fos.result()) if _sarvam_ref else _fo.result()
+                    _q1, _q2 = _fd.result()
+            osegs = _merge_passes(_p1, _p2)
+            dsegs = _merge_passes(_q1, _q2)
+            _say(f"ref double-pass: {len(_p1)}+{len(_p2)} → {len(osegs)} lines")
+            _say(f"dub double-pass: {len(_q1)}+{len(_q2)} → {len(dsegs)} lines")
         oseg = [(s, e) for s, e, _, _ in osegs]
         dseg = [(s, e) for s, e, _, _ in dsegs]
         otext = [t for _, _, t, _ in osegs]
