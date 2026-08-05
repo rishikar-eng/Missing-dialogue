@@ -274,9 +274,21 @@ def status(job_id: str) -> dict[str, Any]:
                 out["download_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".mid"):
                 out["protools_url"] = fargate.download_url(obj["Key"])
+            elif obj["Key"].endswith(".flac"):
+                # Missing-lines reference audio (same deliverable as script QC)
+                which = "ref_timeline_url" if "Timeline" in obj["Key"] else "ref_audio_url"
+                out[which] = fargate.download_url(obj["Key"])
         return out
     except Exception:
         pass                                        # not published yet — fall through to ECS
+    # Live pipeline progress, written by the runner at stage boundaries. Read BEFORE the ECS
+    # fallback so the Teams bar shows "separating 42%" instead of a bare ECS lifecycle state.
+    prog: dict[str, Any] = {}
+    try:
+        prog = json.loads(s3.get_object(Bucket=c["bucket"],
+                                        Key=f"{prefix}/progress.json")["Body"].read())
+    except Exception:  # noqa: BLE001 — older images never write it
+        pass
     if not rec.get("task_arn"):
         return {"error": "unknown or expired job_id"}
     try:
@@ -286,7 +298,11 @@ def status(job_id: str) -> dict[str, Any]:
         if st == "STOPPED":
             return {"status": "error",
                     "error": t.get("stoppedReason", "task stopped without publishing a report")}
-        return {"status": "running", "stage": st.lower(),
-                "note": "separation + transcription take ~8 min for a full episode"}
+        out = {"status": "running", "stage": st.lower(),
+               "note": "separation + transcription take ~8 min for a full episode"}
     except Exception as e:  # noqa: BLE001
-        return {"status": "running", "note": f"task status unavailable ({e})"}
+        out = {"status": "running", "note": f"task status unavailable ({e})"}
+    if prog.get("pct"):
+        out["pct"] = int(prog["pct"])
+        out["stage"] = str(prog.get("stage") or out.get("stage") or "running")
+    return out

@@ -66,6 +66,20 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+def _resume_notify_watches() -> None:
+    """Resurrect the completion-announcement watcher after a restart. The notify thread only
+    ever started from watch() at launch time, so a deploy mid-run orphaned every pending
+    announcement until the NEXT run happened to start one — which is how a finished run's
+    results card once arrived 45 minutes late, delivered by an unrelated launch."""
+    try:
+        from . import notify, run_store
+        if run_store.unnotified():
+            notify._ensure_thread()
+    except Exception:  # noqa: BLE001 — startup must never fail on bookkeeping
+        pass
+
+
 def _key_ok(request: Request) -> bool:
     supplied = (request.headers.get("x-api-key")
                 or request.cookies.get("dqc_key")
@@ -1045,12 +1059,25 @@ def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
     if avail.get("not_delivered"):
         facts.append({"title": "Not delivered", "value": ", ".join(avail["not_delivered"])})
     actions = []
+    base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
     if avail.get("runnable"):
-        base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
         tok = _sign_link({"conv": conv, "series": avail.get("series_key") or avail.get("series"),
                           "episode": n, "exp": _t.time() + 3600})
         actions = [{"type": "Action.OpenUrl", "title": "▶ Run QC",
                     "url": f"{base}/api/agent/go?d={tok}"}]
+    # Scriptless is an alternative whenever the series delivers full mixes (config check
+    # only — no extra Box round-trip; the launch itself reports gracefully if this episode's
+    # mixes turn out not to be there). One card, both paths — per the studio's ask.
+    try:
+        from . import series_registry as _sr
+        _r = _sr.resolve(str(avail.get("series_key") or avail.get("series") or ""))
+        if _r and (_r[1]["box"].get("mixes_folders") or _r[1]["box"].get("mixes_folder")):
+            tok2 = _sign_link({"conv": conv, "series": _r[0], "episode": n,
+                               "mode": "audio", "exp": _t.time() + 3600})
+            actions.append({"type": "Action.OpenUrl", "title": "🎧 Run scriptless instead",
+                            "url": f"{base}/api/agent/go?d={tok2}"})
+    except Exception:  # noqa: BLE001 — an extra button must never break the card
+        pass
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard", "version": "1.4",
@@ -1425,6 +1452,11 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 if st.get("protools_url"):
                     ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
                     markers[lang] = st["protools_url"]
+                if st.get("ref_audio_url"):
+                    ref = f"   [Missing-lines audio]({st['ref_audio_url']})"
+                    if st.get("ref_timeline_url"):
+                        ref += f" · [on timeline]({st['ref_timeline_url']})"
+                    ln.append(ref + " — the original's audio for every flag")
                 # Same card the script QC renders, with audio-mode wording: `detail`/`icon`
                 # override the script-flavoured composition (no speakers → no wrong-speaker),
                 # `examples` feed the collapsed drill-down (tier stands in for character).
@@ -1447,7 +1479,14 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                                [f"⚠️ **{lang}** — {_friendly_error(st.get('error'))}"]))
             else:
                 running += 1
-                blocks.append((2, 0, lang, [f"🔄 **{lang}** — {st.get('stage') or 'running'}"]))
+                pct = st.get("pct")
+                if pct:
+                    filled = max(1, min(10, round(pct / 10)))
+                    bar = "▓" * filled + "░" * (10 - filled)
+                    blocks.append((2, 0, lang,
+                                   [f"🔄 **{lang}** — {bar} {pct}% · {st.get('stage') or 'running'}"]))
+                else:
+                    blocks.append((2, 0, lang, [f"🔄 **{lang}** — {st.get('stage') or 'running'}"]))
         out["lines"] = [ln for b in sorted(blocks, key=lambda b: (b[0], b[1], b[2])) for ln in b[3]]
         out["settled"] = running == 0
         out["summaries"] = ok_summaries

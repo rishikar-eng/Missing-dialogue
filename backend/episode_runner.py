@@ -35,46 +35,11 @@ Stage = Callable[[str, int, int], None]
 def _write_ref_audio(errors: list[dict], original_path: str, out_path: Path,
                      timeline_path: Path | None = None,
                      pad_s: float = 2.5, gap_s: float = 0.6) -> Path | None:
-    """MISSING-only reference audio: the original-language audio of every genuinely MISSING
-    line. `out_path` = stitched (clips back-to-back); `timeline_path` = same clips at their
-    real episode timecodes (silent elsewhere), for lining up against the dub stems. MISMATCH
-    is excluded (delivered, just by the wrong speaker). Returns the stitched path or None."""
-    wins = sorted(
-        (max(0.0, e["script_start_s"] - pad_s), (e.get("script_end_s") or e["script_start_s"]) + pad_s)
-        for e in errors
-        if e.get("type") == "MISSING" and e.get("script_start_s") is not None
-    )
-    merged: list[list[float]] = []
-    for s, en in wins:
-        if merged and s <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], en)
-        else:
-            merged.append([s, en])
-    if not merged:
-        return None
-    with sf.SoundFile(str(original_path)) as f:
-        sr, total = f.samplerate, len(f)
-        gap = np.zeros(int(gap_s * sr), dtype=np.float32)
-        chunks: list[np.ndarray] = []
-        tl = np.zeros(total, dtype=np.float32) if timeline_path else None
-        for s, en in merged:
-            i0, i1 = max(0, int(s * sr)), min(total, int(en * sr))
-            if i1 <= i0:
-                continue
-            f.seek(i0)
-            d = f.read(i1 - i0, dtype="float32", always_2d=False)
-            if getattr(d, "ndim", 1) > 1:
-                d = d.mean(axis=1)
-            chunks += [d, gap]
-            if tl is not None:
-                tl[i0:i0 + len(d)] = d
-        out = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
-    if not len(out):
-        return None
-    sf.write(str(out_path), out, sr, format="FLAC")
-    if tl is not None:
-        sf.write(str(timeline_path), tl, sr, format="FLAC")
-    return out_path
+    """MISSING-only reference audio — see audio_report.build_ref_audio (shared with the
+    scriptless runner). MISMATCH is excluded (delivered, just by the wrong speaker)."""
+    from .audio_report import build_ref_audio
+    return build_ref_audio(errors, original_path, out_path, timeline_path,
+                           pad_s=pad_s, gap_s=gap_s)
 
 
 # How many names to carry in the compact summary before it's just "+N more". These land in

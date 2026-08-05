@@ -323,3 +323,52 @@ def build_marker_midi(report, out_path):
     with open(out_path, "wb") as f:
         f.write(data)
     return out_path
+
+
+def build_ref_audio(errors, original_path, out_path, timeline_path=None,
+                    pad_s=2.5, gap_s=0.6):
+    """MISSING-only reference audio, shared by BOTH QC modes: the original-language audio of
+    every genuinely MISSING line. `out_path` = stitched (clips back-to-back);
+    `timeline_path` = same clips at their real episode timecodes (silent everywhere else),
+    for lining up 1:1 against the dub session. Returns the stitched path or None when there
+    is nothing missing. (Moved here from episode_runner so the scriptless runner — which
+    must not import the Box-fetch stack — can build the same deliverable.)"""
+    import numpy as np
+    import soundfile as sf
+    wins = sorted(
+        (max(0.0, e["script_start_s"] - pad_s),
+         (e.get("script_end_s") or e["script_start_s"]) + pad_s)
+        for e in errors
+        if e.get("type") == "MISSING" and e.get("script_start_s") is not None
+    )
+    merged = []
+    for s0, e0 in wins:
+        if merged and s0 <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e0)
+        else:
+            merged.append([s0, e0])
+    if not merged:
+        return None
+    with sf.SoundFile(str(original_path)) as f:
+        sr, total = f.samplerate, len(f)
+        gap = np.zeros(int(gap_s * sr), dtype=np.float32)
+        chunks = []
+        tl = np.zeros(total, dtype=np.float32) if timeline_path else None
+        for s0, e0 in merged:
+            i0, i1 = max(0, int(s0 * sr)), min(total, int(e0 * sr))
+            if i1 <= i0:
+                continue
+            f.seek(i0)
+            d = f.read(i1 - i0, dtype="float32", always_2d=False)
+            if getattr(d, "ndim", 1) > 1:
+                d = d.mean(axis=1)
+            chunks += [d, gap]
+            if tl is not None:
+                tl[i0:i0 + len(d)] = d
+        out = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+    if not len(out):
+        return None
+    sf.write(str(out_path), out, sr, format="FLAC")
+    if tl is not None:
+        sf.write(str(timeline_path), tl, sr, format="FLAC")
+    return out_path

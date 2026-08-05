@@ -144,6 +144,43 @@ def _main():
         sf.write("/tmp/dubmix.wav", mix.astype("float32"), 16000)
         d, clean = "/tmp/dubmix.wav", False
 
+    # Live progress for the Teams bar: known stage messages map to percentages and land in
+    # S3 as <prefix>/progress.json. Monotonic (a bar must never move backwards) and
+    # best-effort — progress must never break a run. Old images simply never write it.
+    _prog = {"pct": 0}
+    _STAGE_PCT = [
+        ("separating original and dub concurrently", 15, "separating audio (both sides)"),
+        ("separating dialogue from the original mix", 20, "separating the original"),
+        ("separating dialogue from the dub mix", 42, "separating the dub"),
+        ("SARVAM-ONLY", 55, "transcribing (Sarvam batch)"),
+        ("transcribing original + dub via Groq", 55, "transcribing"),
+        ("lines: original=", 75, "matching lines across languages"),
+        ("second pass", 85, "verifying candidate flags"),
+        ("coverage:", 92, "finalizing the report"),
+    ]
+
+    def _progress(pct, label):
+        if not out_prefix or pct <= _prog["pct"]:
+            return
+        _prog["pct"] = pct
+        try:
+            import boto3
+            boto3.client("s3").put_object(
+                Bucket=BUCKET, Key=f"{out_prefix.strip('/')}/progress.json",
+                Body=json.dumps({"pct": pct, "stage": label,
+                                 "updated_at": time.time()}).encode())
+            print(f"[run] progress {pct}% — {label}", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _stage_cb(m, _a, _b):
+        for prefix, pct, label in _STAGE_PCT:
+            if m.startswith(prefix):
+                _progress(pct, label)
+                return
+
+    _progress(8, "inputs downloaded")
+
     t = time.time()
     # AQC_DRAWS>1: run detection N times and UNION the MISSING flags. Groq's transcription is
     # nondeterministic and every gate downstream inherits that lottery — measured on the ear-truth
@@ -156,7 +193,7 @@ def _main():
     # Draw 1 runs alone: it warms the Demucs caches so later draws can never race the separator.
     print(f"[run] draw 1/{N}", flush=True)
     reps.append(audio_qc.compare(o, d, original_lang=ol, dub_lang=dl, dub_label="dub",
-                                 dub_is_clean=clean))
+                                 dub_is_clean=clean, stage=_stage_cb))
     if N > 1:
         # Draws 2..N run CONCURRENTLY in spawned processes: they are pure network wait
         # (separation cache-hits from disk; transcription is API calls), so the union costs
@@ -249,6 +286,18 @@ def _main():
             print(f"MARKERS s3://{BUCKET}/{pre}/{mname}", flush=True)
         except Exception as _me:  # noqa: BLE001 — markers are extra, never fatal
             print(f"[run] marker export failed: {_me}", flush=True)
+        try:
+            # Missing-lines reference audio, same deliverable script QC ships: the original's
+            # audio for every flag — stitched, and on-timeline (silent between flags).
+            rname = naming.missing_flac(series or None, episode or 0, dl, False)
+            tname = naming.missing_flac(series or None, episode or 0, dl, True)
+            if audio_report.build_ref_audio(rep.get("errors", []), o,
+                                            f"/tmp/{rname}", f"/tmp/{tname}"):
+                s3.upload_file(f"/tmp/{rname}", BUCKET, f"{pre}/{rname}")
+                s3.upload_file(f"/tmp/{tname}", BUCKET, f"{pre}/{tname}")
+                print(f"REFAUDIO s3://{BUCKET}/{pre}/{rname}", flush=True)
+        except Exception as _re:  # noqa: BLE001 — ref audio is extra, never fatal
+            print(f"[run] ref-audio export failed: {_re}", flush=True)
     _push_sep_cache()                      # cache push LAST: results first, always
 
     if dump_key:
