@@ -30,9 +30,13 @@ def _sq(s: str) -> str:
 
 
 def ep_of(name: str) -> int | None:
-    """Episode number from Box's naming styles: 'Gavv_#01_SCLA', 'S1_E40'. '#NN' wins,
-    else an uppercase-E-number (so 'Rider' won't match)."""
+    """Episode number from Box's naming styles: 'Gavv_#01_SCLA', 'S1_E40', 'EP_320'.
+    '#NN' wins, then an explicit EP/EPI/EPISODE marker (Chikoo's 'EP_320'; the lookbehind
+    keeps 'Step 2' out), else an uppercase-E-number (so 'Rider' won't match)."""
     m = re.search(r"#(\d+)", name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(?<![A-Za-z])EP(?:ISODE|I)?\s*[-_]?\s*0*(\d+)", name, re.I)
     if m:
         return int(m.group(1))
     m = re.search(r"(?<![A-Za-z0-9])E(\d+)", name)
