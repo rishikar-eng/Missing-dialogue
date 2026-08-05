@@ -1,4 +1,34 @@
 {
+  "jungle-tales-mowgli": {
+    "display_name": "Jungle Tales With Mowgli",
+    "aliases": ["mowgli", "jtwm", "jungle tales", "jungle tales with mowgli", "jungle book"],
+    "languages": ["Tamil", "Telugu"],
+    "original_language": "hindi",
+    "box": {
+      "premix_folders": ["395067770339", "405724902258"],
+      "dub_stage": "premix",
+      "mixes_folders": {
+        "Tamil": ["396129676440", "406458459883"],
+        "Telugu": ["396130127095", "406460754969"]
+      },
+      "_note": "SCRIPTLESS-ONLY series (no per-character stems). Monthly Box trees merged as lists: July 2026_06_29_021 + August 2026_08_03_024. Original = Hindi PREMIX only (DIS_Source_Jungle_Tales_With_Mowgli_SH21936_S1_E{n}_HINDI_PREMIX.wav) - no Hindi ST_MIX exists, so dub_stage=premix compares premix-vs-premix (mixing stages manufactures drift, see EP38/EP40). Dubs: Delivery/V1.0/{TAMIL,TELUGU}/EP NN/ with *_TAM_ST_MIX.wav + *_TAM_PREMIX.wav. July also has Delivery/V2.0 redeliveries (EP 11/12) - NOT wired; point runs at them manually if needed."
+    }
+  },
+  "chikoo-aur-bunty": {
+    "display_name": "Chikoo Aur Bunty",
+    "aliases": ["chikoo", "chiku", "chikoo bunty", "chikoo aur bunty", "chikoo and bunty", "cab", "chikoo&bunty"],
+    "languages": ["Tamil", "Telugu"],
+    "original_language": "hindi",
+    "box": {
+      "premix_folders": ["394100416326", "397841740466", "405722379604"],
+      "dub_stage": "premix",
+      "mixes_folders": {
+        "Tamil": ["390731432538"],
+        "Telugu": ["390730208742"]
+      },
+      "_note": "SCRIPTLESS-ONLY. Episodes are channel numbers (E319-E336, seasons S3/S4 mixed - use the E number). Original premixes across three folders: July Batch 1 'Hindi Premix', July Batch 2 'Premix', August 'Premix'. Dubs: July Delivery/V1.0/{TAMIL,TELUGU}/EP NNN/ with *_Tam_MIX.wav + *_Tam_PREMIX.wav ('MIX' without ST - premix preferred via dub_stage, which also stage-matches the premix original). August 2026_08_03_023 Delivery/V1.0 was EMPTY on 2026-08-04 - add its language folder ids here when they deliver."
+    }
+  },
   "kamen-rider-gavv": {
     "display_name": "Kamen Rider Gavv",
     "aliases": ["gavv", "krg", "kamen rider gavv", "kamen rider", "kr gavv"],

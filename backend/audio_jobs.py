@@ -33,18 +33,28 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
     Inside a per-language folder every file IS that language, so no language-name filter —
     filenames misspell languages anyway ('Malyalam_ST_MIX .wav', stray space included)."""
     per_lang = (cfg["box"].get("mixes_folders") or {}).get(lang)
-    root = per_lang or cfg["box"].get("mixes_folder")
-    if not root:
+    roots = per_lang or cfg["box"].get("mixes_folder")
+    if not roots:
         return None
-    sub = next((d for d in box.listing(root)["folders"]
-                if box_discovery._ep_num(d["name"]) == n), None)
-    if not sub:
-        return None
-    files = [f for f in box.listing(sub["id"])["files"]
-             if f["name"].lower().endswith(".wav")
-             and (per_lang or lang.upper() in f["name"].upper())]
-    mixes = [f for f in files if "stmix" in _sq(f["name"])]
-    return (mixes or [f for f in files if "premix" in _sq(f["name"])] or [None])[0]
+    # A value may be ONE folder id or a LIST of them — series delivered in monthly Box
+    # folders (Mowgli/Chikoo get a fresh tree each month) list every month's language folder.
+    for root in ([roots] if isinstance(roots, str) else roots):
+        sub = next((d for d in box.listing(root)["folders"]
+                    if box_discovery._ep_num(d["name"]) == n), None)
+        if not sub:
+            continue
+        files = [f for f in box.listing(sub["id"])["files"]
+                 if f["name"].lower().endswith(".wav")
+                 and (per_lang or lang.upper() in f["name"].upper())]
+        # Stage preference is per-series: dub_stage='premix' compares premix-vs-premix when
+        # the original only exists as a premix (mixing stages manufactures drift — EP38/40).
+        stages = (["premix", "stmix"] if cfg["box"].get("dub_stage") == "premix"
+                  else ["stmix", "premix"])
+        for stage_key in stages:
+            hit = [f for f in files if stage_key in _sq(f["name"])]
+            if hit:
+                return hit[0]
+    return None
 
 
 def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
@@ -64,6 +74,21 @@ def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
     return cands[0] if cands else None
 
 
+def find_original_premix(box: box_discovery._Box, cfg: dict[str, Any],
+                         n: int) -> dict[str, Any] | None:
+    """The original's PREMIX from a list of `premix_folders` — for series whose original is
+    only ever delivered as a premix (Mowgli, Chikoo), spread across monthly Box folders."""
+    for folder in (cfg["box"].get("premix_folders") or []):
+        cands = [f for f in box.listing(folder)["files"]
+                 if f["name"].lower().endswith(".wav")
+                 and box_discovery.ep_of(f["name"]) == n
+                 and "premix" in _sq(f["name"])]
+        if cands:
+            cands.sort(key=lambda f: len(f["name"]))
+            return cands[0]
+    return None
+
+
 def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, Any]:
     """What audio-only QC needs for this episode: the original's mix and, per language, the
     delivered full mix. The script path has `check` before `run`; this is its counterpart, so
@@ -74,7 +99,13 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
     orig = find_original_mix(box, cfg, n)
     stage = "ST_MIX"
     if not orig:
-        orig = box_discovery.find_original(box, cfg, n)
+        orig = find_original_premix(box, cfg, n)
+        stage = "ST_PREMIX"
+    if not orig:
+        try:
+            orig = box_discovery.find_original(box, cfg, n)
+        except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
+            orig = None
         stage = "ST_PREMIX"
     ready, missing = {}, []
     for lang in cfg.get("languages", []):
@@ -113,7 +144,13 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
     stage_used = "ST_MIX"
     if not orig:                                   # fall back to the premix stage
-        orig = box_discovery.find_original(box, cfg, int(episode))
+        orig = find_original_premix(box, cfg, int(episode))
+        stage_used = "ST_PREMIX"
+    if not orig:
+        try:
+            orig = box_discovery.find_original(box, cfg, int(episode))
+        except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
+            orig = None
         stage_used = "ST_PREMIX"
     if not orig:
         return {"error": f"no original mix or premix found in Box for EP{int(episode):02d}"}
