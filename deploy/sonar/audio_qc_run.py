@@ -99,24 +99,46 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
         pass
     print(f"[run] summing {len(files)} speaker tracks ({total / 1e9:.1f} GB) from Box",
           flush=True)
+    # Measured on EP21: one-at-a-time ran 54 s/track — 35 minutes of pure download for a
+    # single episode, and Box is the only thing working. Fetch a batch CONCURRENTLY, sum it,
+    # delete it. Peak disk stays ~BATCH x 450 MB.
+    import concurrent.futures as _cf
+    BATCH = 4
     acc = None
-    for i, f in enumerate(files, 1):
-        tmp = box_fetch.download_file(tok, f["id"], "/tmp", name="spk_one.wav")
-        try:
-            x = audio_qc._load16(str(tmp))
-            if acc is None:
-                acc = x.astype("float32").copy()
-            else:
-                if len(x) > len(acc):
-                    acc = np.pad(acc, (0, len(x) - len(acc)))
-                acc[:len(x)] += x
-            print(f"[run]   +{i}/{len(files)} {f['name'][:38]} ({len(x) / 16000:.0f}s)",
-                  flush=True)
-        finally:
+    done_n = 0
+    for b0 in range(0, len(files), BATCH):
+        batch = files[b0:b0 + BATCH]
+        paths = {}
+        with _cf.ThreadPoolExecutor(max_workers=BATCH) as _dl:
+            futs = {_dl.submit(box_fetch.download_file, tok, f["id"], "/tmp",
+                               name=f"spk_{b0 + k}.wav"): f
+                    for k, f in enumerate(batch)}
+            for fut in _cf.as_completed(futs):
+                f = futs[fut]
+                try:
+                    paths[f["id"]] = str(fut.result())
+                except Exception as e:  # noqa: BLE001 — one bad track must not lose the run
+                    print(f"[run]   !! {f['name'][:38]} download failed: {e}", flush=True)
+        for f in batch:                       # sum in a deterministic order
+            tmp = paths.get(f["id"])
+            if not tmp:
+                continue
             try:
-                os.remove(str(tmp))
-            except OSError:
-                pass
+                x = audio_qc._load16(tmp)
+                if acc is None:
+                    acc = x.astype("float32").copy()
+                else:
+                    if len(x) > len(acc):
+                        acc = np.pad(acc, (0, len(x) - len(acc)))
+                    acc[:len(x)] += x
+                done_n += 1
+                print(f"[run]   +{done_n}/{len(files)} {f['name'][:38]} "
+                      f"({len(x) / 16000:.0f}s)", flush=True)
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
     if acc is None:
         raise RuntimeError("no speaker track could be read")
     peak = float(np.abs(acc).max())
