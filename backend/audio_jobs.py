@@ -89,6 +89,98 @@ def find_original_premix(box: box_discovery._Box, cfg: dict[str, Any],
     return None
 
 
+def _file_name(token: str, fid: str) -> str:
+    """Best-effort display name for a hand-picked Box file id — a wrong id should fail at
+    launch with Box's own error, not here."""
+    import httpx
+    try:
+        r = httpx.get(f"https://api.box.com/2.0/files/{fid}", params={"fields": "name"},
+                      headers={"Authorization": f"Bearer {token}"}, timeout=20)
+        if r.status_code == 200:
+            return str(r.json().get("name") or f"box:{fid}")
+    except Exception:  # noqa: BLE001
+        pass
+    return f"box:{fid}"
+
+
+def candidates(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, Any]:
+    """Every .wav the discovery COULD have picked for this episode, both sides — the menu
+    behind the Teams card's 'Choose files' page. Each entry: {id, name, where}; the entry the
+    automatic pick would use is marked default=True so the page pre-selects reality."""
+    token = box_oauth.get_token()
+    box = box_discovery._Box(token)
+    n = int(episode)
+    b = cfg["box"]
+    out: dict[str, Any] = {"original": [], "dubs": {}}
+
+    def _scan(folder: str, where: str) -> None:
+        try:
+            for f in box.listing(folder)["files"]:
+                if f["name"].lower().endswith(".wav") and box_discovery.ep_of(f["name"]) == n:
+                    out["original"].append({"id": f["id"], "name": f["name"], "where": where})
+        except Exception:  # noqa: BLE001 — a dead folder id just contributes nothing
+            pass
+
+    if b.get("original_mix_folder"):
+        _scan(b["original_mix_folder"], "original mixes")
+    for folder in (b.get("premix_folders") or []):
+        _scan(folder, "premixes")
+    if b.get("premix_folder"):
+        _scan(b["premix_folder"], "premixes (script QC)")
+
+    default = (find_original_mix(box, cfg, n) or find_original_premix(box, cfg, n))
+    for c in out["original"]:
+        c["default"] = bool(default and c["id"] == default["id"])
+
+    for lang in cfg.get("languages", []):
+        cands: list[dict[str, Any]] = []
+        roots = (b.get("mixes_folders") or {}).get(lang) or b.get("mixes_folder")
+        for root in ([roots] if isinstance(roots, str) else (roots or [])):
+            try:
+                sub = next((d for d in box.listing(root)["folders"]
+                            if box_discovery._ep_num(d["name"]) == n), None)
+                if not sub:
+                    continue
+                for f in box.listing(sub["id"])["files"]:
+                    if f["name"].lower().endswith(".wav"):
+                        cands.append({"id": f["id"], "name": f["name"], "where": sub["name"]})
+            except Exception:  # noqa: BLE001
+                continue
+        d = find_dub_mix(box, cfg, lang, n)
+        for c in cands:
+            c["default"] = bool(d and c["id"] == d["id"])
+        out["dubs"][lang] = cands
+    return out
+
+
+def launch_custom(series_key: str, cfg: dict[str, Any], episode: int,
+                  picks: dict[str, str], original_file: str | None,
+                  conv: str | None = None) -> dict[str, Any]:
+    """Fan out with HAND-PICKED Box file ids: picks = {lang: dub_file_id}; original_file
+    overrides the original for every language (None = automatic discovery). Same parent
+    record shape as launch_all so status/runs/notify treat it identically."""
+    parent_id = uuid.uuid4().hex[:12]
+    token = box_oauth.get_token(min_ttl_s=2700)
+    langs: dict[str, dict[str, Any]] = {}
+    for lang, fid in picks.items():
+        r = launch(series_key, cfg, int(episode), lang, token=token, parent=parent_id,
+                   original_file=original_file, dub_file=fid)
+        langs[lang] = ({"job_id": r["job_id"], "original": r.get("original"),
+                        "dub": r.get("dub"), "original_stage": r.get("original_stage")}
+                       if not r.get("error") else {"error": r["error"]})
+    launched = sum(1 for v in langs.values() if v.get("job_id"))
+    if conv:
+        try:
+            from . import run_store
+            run_store.record(parent_id, conv=conv, episode=int(episode),
+                             series=cfg.get("display_name", series_key), status="running",
+                             compute="audio-parallel", langs=langs, custom_files=True)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"parent_id": parent_id, "langs": langs, "launched": launched,
+            "errors": {k: v["error"] for k, v in langs.items() if v.get("error")}}
+
+
 def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, Any]:
     """What audio-only QC needs for this episode: the original's mix and, per language, the
     delivered full mix. The script path has `check` before `run`; this is its counterpart, so
@@ -123,7 +215,8 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
 
 def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
            original_stage: str = "mix", conv: str | None = None,
-           token: str | None = None, parent: str | None = None) -> dict[str, Any]:
+           token: str | None = None, parent: str | None = None,
+           original_file: str | None = None, dub_file: str | None = None) -> dict[str, Any]:
     """Discover the pair in Box and start the Fargate audio-QC task. Returns
     {job_id, original, dub, eta_min} or {error}.
 
@@ -141,20 +234,31 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     # minutes) without rotating a token some already-running task is still holding.
     token = token or box_oauth.get_token(min_ttl_s=2700)
     box = box_discovery._Box(token)
-    orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
-    stage_used = "ST_MIX"
-    if not orig:                                   # fall back to the premix stage
-        orig = find_original_premix(box, cfg, int(episode))
-        stage_used = "ST_PREMIX"
-    if not orig:
-        try:
-            orig = box_discovery.find_original(box, cfg, int(episode))
-        except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
-            orig = None
-        stage_used = "ST_PREMIX"
+    # Hand-picked overrides (the card's 'Choose files' page / chat original=/dub= links)
+    # bypass discovery for that side — the id is used verbatim, the name is display-only.
+    if original_file:
+        orig: dict[str, Any] | None = {"id": str(original_file),
+                                       "name": _file_name(token, str(original_file))}
+        stage_used = "CUSTOM"
+    else:
+        orig = (find_original_mix(box, cfg, int(episode)) if original_stage == "mix" else None)
+        stage_used = "ST_MIX"
+        if not orig:                               # fall back to the premix stage
+            orig = find_original_premix(box, cfg, int(episode))
+            stage_used = "ST_PREMIX"
+        if not orig:
+            try:
+                orig = box_discovery.find_original(box, cfg, int(episode))
+            except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
+                orig = None
+            stage_used = "ST_PREMIX"
     if not orig:
         return {"error": f"no original mix or premix found in Box for EP{int(episode):02d}"}
-    dub = find_dub_mix(box, cfg, lang, int(episode))
+    if dub_file:
+        dub: dict[str, Any] | None = {"id": str(dub_file),
+                                      "name": _file_name(token, str(dub_file))}
+    else:
+        dub = find_dub_mix(box, cfg, lang, int(episode))
     if not dub:
         return {"error": f"no {lang} full mix (ST_MIX) delivered for EP{int(episode):02d}"}
 
@@ -208,7 +312,7 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
 
 
 def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
-               conv: str | None = None) -> dict[str, Any]:
+               conv: str | None = None, original_file: str | None = None) -> dict[str, Any]:
     """Audio-QC every delivered language for an episode, one Fargate task each — the audio
     counterpart of fargate.launch_parallel, so `audio check ep 42` behaves like `run ep 42`.
 
@@ -234,7 +338,7 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
         wave_token = box_oauth.get_token(min_ttl_s=2700)
         for lang in pending:
             r = launch(series_key, cfg, int(episode), lang,   # no conv: parent owns the record
-                       token=wave_token, parent=parent_id)
+                       token=wave_token, parent=parent_id, original_file=original_file)
             err = r.get("error") or ""
             if not err:
                 langs[lang] = {"job_id": r["job_id"], "original": r.get("original"),

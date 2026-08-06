@@ -54,7 +54,8 @@ from .voices import attach_voices
 # (the initial share link + curl). Unset (the desktop app) = no auth, behaviour unchanged.
 API_KEY = os.environ.get("DQC_API_KEY", "")
 # /api/healthz stays open so the UI (and a tunnel healthcheck) can probe the server.
-_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams", "/api/agent/go", "/api/agent/dl"}   # HMAC-self-authed
+_KEY_EXEMPT = {"/api/healthz", "/api/agent/teams", "/api/agent/go", "/api/agent/dl",
+               "/api/agent/pick", "/api/agent/pick-go"}   # HMAC-self-authed
 # FastAPI's auto-docs sit OUTSIDE /api/* and would otherwise be public through the
 # tunnel, leaking the whole schema (routes + models, incl. the Box token fields) — so
 # gate them too, and disable them outright when a key is set (belt and braces).
@@ -1090,6 +1091,129 @@ def _availability_card(avail: dict[str, Any], conv: str) -> dict[str, Any]:
     }
 
 
+_PICK_CSS = ("body{font-family:Segoe UI,Arial,sans-serif;max-width:46rem;margin:2rem auto;"
+             "padding:0 1rem;color:#1f2937}h2{color:#1f4e79}h3{color:#1f4e79;margin:1.4rem 0 .4rem}"
+             "label{display:block;padding:.3rem .4rem;border-radius:6px}label:hover{background:#f1f5f9}"
+             ".w{color:#64748b;font-size:.85em}input[type=text]{width:100%;padding:.35rem;"
+             "margin:.2rem 0 .6rem}button{background:#1f4e79;color:#fff;border:0;padding:.6rem 1.6rem;"
+             "border-radius:8px;font-size:1rem;margin-top:1rem;cursor:pointer}")
+
+
+def _box_fid(s: str) -> str | None:
+    """A Box file id from a pasted share URL ('.../file/123456789') or a bare id."""
+    m = re.search(r"/file/(\d{6,})", s or "") or re.fullmatch(r"\s*(\d{6,})\s*", s or "")
+    return m.group(1) if m else None
+
+
+@app.get("/api/agent/pick")
+def agent_pick(d: str):
+    """The Teams card's '✏️ Choose files' page: every .wav discovery could have picked for
+    this episode, both sides, defaults pre-selected — plus paste-a-Box-link inputs for files
+    outside the known folders. Key-exempt; the HMAC link is the auth (1h expiry)."""
+    from fastapi.responses import HTMLResponse
+    from . import audio_jobs, series_registry
+    p = _verify_link(d)
+    if not p:
+        return HTMLResponse("<h3>This link is invalid or expired — ask for a fresh card.</h3>",
+                            status_code=400)
+    r = series_registry.resolve(str(p.get("series") or ""))
+    if not r:
+        return HTMLResponse("<h3>Unknown series.</h3>", status_code=404)
+    key, cfg = r
+    n = int(p.get("episode"))
+    try:
+        c = audio_jobs.candidates(key, cfg, n)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(f"<h3>Couldn't list Box: {str(e)[:200]}</h3>", status_code=502)
+
+    def _radios(name, items, none_label):
+        h, any_default = "", any(i.get("default") for i in items)
+        for i, it in enumerate(items):
+            checked = " checked" if it.get("default") or (not any_default and i == 0) else ""
+            h += (f'<label><input type="radio" name="{name}" value="{it["id"]}"{checked}> '
+                  f'{it["name"]} <span class="w">({it["where"]})</span></label>')
+        h += (f'<label><input type="radio" name="{name}" value="skip"'
+              + ("" if items else " checked") + f'> {none_label}</label>')
+        return h or f"<p class='w'>nothing found</p>"
+
+    body = (f"<h2>EP {n} — {cfg.get('display_name')} · choose the files to compare</h2>"
+            f"<p class='w'>Defaults are what the automatic run would use. Pick per side, or "
+            f"paste a Box file link to use something outside these folders.</p>"
+            f"<form action='/api/agent/pick-go' method='get'>"
+            f"<input type='hidden' name='d' value='{d}'>"
+            f"<h3>Original ({cfg.get('original_language', 'original').title()})</h3>"
+            + _radios("orig", c["original"], "use automatic discovery")
+            + "<input type='text' name='orig_url' placeholder='…or paste a Box file link for the original'>")
+    for lang in cfg.get("languages", []):
+        body += (f"<h3>{lang} dub</h3>"
+                 + _radios(f"dub_{lang}", c["dubs"].get(lang) or [],
+                           f"skip {lang} this run")
+                 + f"<input type='text' name='dub_url_{lang}' "
+                   f"placeholder='…or paste a Box file link for the {lang} dub'>")
+    body += "<button>🎧 Start scriptless QC with these files</button></form>"
+    return HTMLResponse(f"<!doctype html><style>{_PICK_CSS}</style>{body}")
+
+
+@app.get("/api/agent/pick-go")
+def agent_pick_go(request: Request, d: str):
+    """Launch with the picker's choices. The signed token authorizes 'scriptless QC of this
+    episode announced to this conversation'; the file ids are the user's picks."""
+    from fastapi.responses import HTMLResponse
+    from . import audio_jobs, notify, series_registry
+    p = _verify_link(d)
+    if not p:
+        return HTMLResponse("<h3>This link is invalid or expired.</h3>", status_code=400)
+    r = series_registry.resolve(str(p.get("series") or ""))
+    if not r:
+        return HTMLResponse("<h3>Unknown series.</h3>", status_code=404)
+    key, cfg = r
+    n, conv = int(p.get("episode")), str(p.get("conv") or "")
+    q = request.query_params
+    orig = _box_fid(q.get("orig_url") or "") or (
+        q.get("orig") if q.get("orig") not in (None, "skip") else None)
+    picks: dict[str, str] = {}
+    for lang in cfg.get("languages", []):
+        fid = _box_fid(q.get(f"dub_url_{lang}") or "")
+        v = q.get(f"dub_{lang}")
+        if not fid and v and v != "skip":
+            fid = v
+        if fid:
+            picks[lang] = str(fid)
+    if not picks:
+        return HTMLResponse("<h3>No dub selected — pick at least one language.</h3>",
+                            status_code=400)
+
+    import threading
+    url = notify.target_for(conv)
+
+    def _kick() -> None:
+        try:
+            res = audio_jobs.launch_custom(key, cfg, n, picks, orig, conv=conv)
+            if not res["launched"]:
+                if url:
+                    notify.post(url, f"⚠️ Custom-file QC for EP {n} failed to start — "
+                                     + "; ".join(f"{k}: {v}" for k, v in res["errors"].items())[:280])
+                return
+            sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": key, "cfg": cfg,
+                                                     "convo": [], "fast": {}})
+            sess.setdefault("fast", {})["job"] = res["parent_id"]
+            pushed = notify.watch(res["parent_id"], conv)
+            if url:
+                names = ", ".join(k for k, v in res["langs"].items() if v.get("job_id"))
+                notify.post(url, f"🎧 Scriptless QC running for EP {n} with hand-picked files — "
+                                 f"**{names}**." + ("" if pushed else " Ask `status` for results."))
+        except Exception as e:  # noqa: BLE001
+            if url:
+                notify.post(url, f"⚠️ Couldn't start the custom-file QC: {str(e)[:200]}")
+
+    threading.Thread(target=_kick, daemon=True, name="dqc-pick-launch").start()
+    return HTMLResponse(
+        "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:34rem;margin:3rem auto'>"
+        f"<h2 style='color:#2b6cb0'>🎧 Starting — Episode {n}, {cfg.get('display_name')}</h2>"
+        f"<p>Launching with your selected files ({len(picks)} language(s)). Head back to "
+        "Teams — the confirmation and results will post in the channel.</p></div>")
+
+
 def _audio_availability_card(av: dict[str, Any], conv: str) -> dict[str, Any]:
     """The audio-only counterpart of _availability_card: what audio QC needs is just the
     original's final mix + each language's delivered mix — no script, stems or roster rows."""
@@ -1105,12 +1229,17 @@ def _audio_availability_card(av: dict[str, Any], conv: str) -> dict[str, Any]:
     if av.get("not_delivered"):
         facts.append({"title": "Not delivered", "value": ", ".join(av["not_delivered"])})
     actions = []
+    base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
     if av.get("runnable"):
-        base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
         tok = _sign_link({"conv": conv, "series": av.get("series_key") or av.get("series"),
                           "episode": n, "mode": "audio", "exp": _t.time() + 3600})
         actions = [{"type": "Action.OpenUrl", "title": "🎧 Run audio QC",
                     "url": f"{base}/api/agent/go?d={tok}"}]
+    # Always offered — its whole point is fixing a wrong or missing automatic pick.
+    tok_pick = _sign_link({"conv": conv, "series": av.get("series_key") or av.get("series"),
+                           "episode": n, "exp": _t.time() + 3600})
+    actions.append({"type": "Action.OpenUrl", "title": "✏️ Choose files",
+                    "url": f"{base}/api/agent/pick?d={tok_pick}"})
     return {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard", "version": "1.4",
@@ -1920,6 +2049,17 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         want = next((l for l in langs if re.search(rf"\b{l.lower()}\b", low)), None)
         fast.update(episode=int(ep), series_key=key)
         sess["series_key"], sess["cfg"] = key, cfg
+        # Hand-picked files may ride the command: 'run scriptless qc chikoo ep 331 tamil
+        # original=https://app.box.com/file/123… dub=…'. A dub override needs a named
+        # language (it can only apply to one).
+        m_o = re.search(r"original[=\s:]+(https?://\S+|\d{6,})", text, re.I)
+        m_d = re.search(r"\bdub[=\s:]+(https?://\S+|\d{6,})", text, re.I)
+        o_fid = _box_fid(m_o.group(1)) if m_o else None
+        d_fid = _box_fid(m_d.group(1)) if m_d else None
+        if d_fid and not want:
+            return {"type": "message",
+                    "text": "A dub file override applies to ONE language — name it, e.g. "
+                            "'run scriptless qc ep 331 tamil dub=<box file link>'."}
         # Launching is 15-25s of Box discovery + token mint + RunTask per language — far past
         # Teams' ~5s webhook window, and answering late makes Teams print "Sorry, there was a
         # problem" while the run silently starts anyway (it did, on the first real use). Same
@@ -1931,14 +2071,16 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         def _kick() -> None:
             try:
                 if want:                              # a language was named explicitly
-                    info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv)
+                    info = audio_jobs.launch(key, cfg, int(ep), want, conv=conv,
+                                             original_file=o_fid, dub_file=d_fid)
                     if info.get("error"):
                         if url:
                             notify.post(url, f"⚠️ {info['error']}")
                         return
                     jid, names = info["job_id"], {want: info}
                 else:                                 # default: EVERY delivered language
-                    res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv)
+                    res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv,
+                                                original_file=o_fid)
                     jid, names = res["parent_id"], res["langs"]
                     if not res["launched"]:
                         why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"
