@@ -29,6 +29,20 @@
       "_note": "SCRIPTLESS-ONLY. Episodes are channel numbers (E319-E336, seasons S3/S4 mixed - use the E number). Original premixes across three folders: July Batch 1 'Hindi Premix', July Batch 2 'Premix', August 'Premix'. Dubs: July Delivery/V1.0/{TAMIL,TELUGU}/EP NNN/ with *_Tam_MIX.wav + *_Tam_PREMIX.wav ('MIX' without ST - premix preferred via dub_stage, which also stage-matches the premix original). August 2026_08_03_023 Delivery/V1.0 was EMPTY on 2026-08-04 - add its language folder ids here when they deliver."
     }
   },
+  "poa-show": {
+    "display_name": "POA (Paulo, O Apostolo)",
+    "aliases": ["poa", "paulo", "poa show", "apostolo", "paulo o apostolo"],
+    "languages": ["English"],
+    "original_language": "portuguese",
+    "box": {
+      "original_videos_folder": "391123775822",
+      "mixes_folders": {
+        "English": ["377680674527"]
+      },
+      "dub_prefer": ["dialogue", "premix", "mix"],
+      "_note": "SCRIPTLESS-ONLY (scripts unreliable per the studio). Portuguese original dubbed to ENGLISH - NOT Indic, so runs use the Whisper double-pass path automatically (no Sarvam). Original = Low-res episode VIDEOS (POA_EPnn Low Res.mp4, ~50 min) - the runner extracts the audio track (ffmpeg) then separates dialogue as usual. Dub = Delivery/POA Episode NN/: prefer the clean DIALOGUE_EN track (newest revision R2>R1>base, --clean-dub skips separation), else Print Premix, else Print Mix. EP13/14 have V2.0 redelivery subfolders - not wired, use the Choose-files picker for those. ~50-min episodes cost roughly 2x a 25-min one in compute."
+    }
+  },
   "kamen-rider-gavv": {
     "display_name": "Kamen Rider Gavv",
     "aliases": ["gavv", "krg", "kamen rider gavv", "kamen rider", "kr gavv"],

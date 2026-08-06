@@ -46,6 +46,20 @@ def _cache_attach(dst: str, base: str) -> None:
     _SEP_CACHE[dst] = (BUCKET, base, hits)
 
 
+_VIDEO_EXT = (".mp4", ".mov", ".mkv", ".m4v")
+
+
+def _extract_audio(src: str, out: str) -> str:
+    """Video original (POA ships only episode videos) -> mono wav via ffmpeg. The wav, not
+    the video, is what the pipeline (and the separation cache) sees."""
+    import subprocess
+    if not os.path.exists(out):
+        print(f"[run] extracting audio track from {os.path.basename(src)}", flush=True)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+                        "-vn", "-ac", "1", "-ar", "44100", out], check=True)
+    return out
+
+
 def _local(p: str) -> str:
     if p.startswith("box://"):
         # Teams-triggered runs pass Box file ids + a short-lived access token in the env.
@@ -65,17 +79,22 @@ def _local(p: str) -> str:
         info = _r.json()
         name = info.get("name") or f"box_{fid}.wav"
         dst = "/tmp/" + name
+        # A video original is represented by its EXTRACTED wav everywhere downstream —
+        # including the separation cache key, so a cache hit skips the video download too.
+        video = name.lower().endswith(_VIDEO_EXT)
+        target = dst + ".wav" if video else dst
         try:
-            # Cache FIRST: when both separation stems are cached, the source wav is never
-            # read (Demucs loads the .npy pair), so skipping its ~450MB download is free.
-            _cache_attach(dst, f"sepcache/{name}.{info.get('sha1') or fid}")
-            if len(_SEP_CACHE.get(dst, (None, None, []))[2]) == 2:
+            # Cache FIRST: when both separation stems are cached, the source is never
+            # read (Demucs loads the .npy pair), so skipping its download is free.
+            _cache_attach(target, f"sepcache/{name}.{info.get('sha1') or fid}")
+            if len(_SEP_CACHE.get(target, (None, None, []))[2]) == 2:
                 print(f"[run] both stems cached — skipping download of {name}", flush=True)
-                return dst
+                return target
         except Exception as e:  # cache is an optimization, never a blocker
             print(f"[run] separation cache unavailable: {e}", flush=True)
         print(f"[run] downloading box:{fid} ({name})", flush=True)
-        return str(box_fetch.download_file(tok, fid, "/tmp", name=name))
+        got = str(box_fetch.download_file(tok, fid, "/tmp", name=name))
+        return _extract_audio(got, target) if video else got
     if not p.startswith("s3://"):
         return p
     import boto3

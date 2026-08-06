@@ -46,15 +46,41 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
         files = [f for f in box.listing(sub["id"])["files"]
                  if f["name"].lower().endswith(".wav")
                  and (per_lang or lang.upper() in f["name"].upper())]
-        # Stage preference is per-series: dub_stage='premix' compares premix-vs-premix when
-        # the original only exists as a premix (mixing stages manufactures drift — EP38/40).
-        stages = (["premix", "stmix"] if cfg["box"].get("dub_stage") == "premix"
-                  else ["stmix", "premix"])
+        # Stage preference is per-series. `dub_prefer` lists substring keys in order (POA:
+        # ["dialogue","premix","mix"] — a clean DIALOGUE track beats any mix for QC and
+        # skips dub-side separation entirely); else dub_stage='premix' compares
+        # premix-vs-premix when the original only exists as a premix (mixing stages
+        # manufactures drift — EP38/40); default prefers the final ST_MIX.
+        stages = (cfg["box"].get("dub_prefer")
+                  or (["premix", "stmix"] if cfg["box"].get("dub_stage") == "premix"
+                      else ["stmix", "premix"]))
         for stage_key in stages:
-            hit = [f for f in files if stage_key in _sq(f["name"])]
+            if stage_key == "mix":     # plain 'mix' must not swallow 'premix'/'stmix' names
+                hit = [f for f in files
+                       if "mix" in _sq(f["name"]) and "premix" not in _sq(f["name"])]
+            else:
+                hit = [f for f in files if stage_key in _sq(f["name"])]
             if hit:
-                return hit[0]
+                # Revisions sort last lexically (…_R2 > …_R1 > base), so desc picks newest.
+                hit.sort(key=lambda f: f["name"], reverse=True)
+                pick = dict(hit[0])
+                pick["_stage"] = stage_key
+                return pick
     return None
+
+
+def find_original_video(box: box_discovery._Box, cfg: dict[str, Any],
+                        n: int) -> dict[str, Any] | None:
+    """A VIDEO as the original (POA: no original audio deliverable exists, only low-res
+    episode videos) — the runner extracts its audio track and separates dialogue as usual."""
+    folder = cfg["box"].get("original_videos_folder")
+    if not folder:
+        return None
+    vids = [f for f in box.listing(folder)["files"]
+            if f["name"].lower().endswith((".mp4", ".mov", ".mkv", ".m4v"))
+            and box_discovery.ep_of(f["name"]) == n]
+    vids.sort(key=lambda f: f["name"], reverse=True)
+    return vids[0] if vids else None
 
 
 def find_original_mix(box: box_discovery._Box, cfg: dict[str, Any],
@@ -127,6 +153,15 @@ def candidates(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, 
         _scan(folder, "premixes")
     if b.get("premix_folder"):
         _scan(b["premix_folder"], "premixes (script QC)")
+    if b.get("original_videos_folder"):
+        try:
+            for f in box.listing(b["original_videos_folder"])["files"]:
+                if (f["name"].lower().endswith((".mp4", ".mov", ".mkv", ".m4v"))
+                        and box_discovery.ep_of(f["name"]) == n):
+                    out["original"].append({"id": f["id"], "name": f["name"],
+                                            "where": "videos (audio extracted)"})
+        except Exception:  # noqa: BLE001
+            pass
 
     default = (find_original_mix(box, cfg, n) or find_original_premix(box, cfg, n))
     for c in out["original"]:
@@ -194,6 +229,9 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
         orig = find_original_premix(box, cfg, n)
         stage = "ST_PREMIX"
     if not orig:
+        orig = find_original_video(box, cfg, n)
+        stage = "VIDEO"
+    if not orig:
         try:
             orig = box_discovery.find_original(box, cfg, n)
         except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
@@ -246,6 +284,9 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
         if not orig:                               # fall back to the premix stage
             orig = find_original_premix(box, cfg, int(episode))
             stage_used = "ST_PREMIX"
+        if not orig:                               # then a video whose audio we extract
+            orig = find_original_video(box, cfg, int(episode))
+            stage_used = "VIDEO"
         if not orig:
             try:
                 orig = box_discovery.find_original(box, cfg, int(episode))
@@ -264,12 +305,15 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
 
     job_id = uuid.uuid4().hex[:12]
     prefix = f"{c['prefix']}/audioqc/{job_id}"
+    cmd = ["audio_qc_run.py", f"box://{orig['id']}", f"box://{dub['id']}",
+           cfg.get("original_language", "hindi"), lang.lower(),
+           "--series", cfg.get("display_name", series_key),
+           "--episode", str(int(episode)), "--out", prefix]
+    if dub.get("_stage") == "dialogue":
+        cmd.append("--clean-dub")                  # already clean dialogue — skip Demucs
     ov = {"containerOverrides": [{
         "name": "sonar",
-        "command": ["audio_qc_run.py", f"box://{orig['id']}", f"box://{dub['id']}",
-                    cfg.get("original_language", "hindi"), lang.lower(),
-                    "--series", cfg.get("display_name", series_key),
-                    "--episode", str(int(episode)), "--out", prefix],
+        "command": cmd,
         "environment": [{"name": "GROQ_API_KEY", "value": groq},
                         {"name": "BOX_ACCESS_TOKEN", "value": token},
                         {"name": "DQC_S3_BUCKET", "value": c["bucket"]},

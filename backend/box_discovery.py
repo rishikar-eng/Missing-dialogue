@@ -45,7 +45,7 @@ def ep_of(name: str) -> int | None:
 
 def _ep_num(name: str) -> int | None:
     """Episode number embedded in a folder name: 'EP 40', 'MAL_GAVV_EPI 40_FOR AI'."""
-    m = re.search(r"EP(?:ISODE|I)?\s*[-_]?\s*0*(\d+)", name, re.I)
+    m = re.search(r"EP(?:ISODE?|I)?\s*[-_]?\s*0*(\d+)", name, re.I)
     return int(m.group(1)) if m else None
 
 

@@ -38,11 +38,11 @@ from . import align as _align
 # SONAR speech encoders are per-language: ISO-639-3 codes.
 LANG3 = {"hindi": "hin", "tamil": "tam", "telugu": "tel", "kannada": "kan",
          "bengali": "ben", "marathi": "mar", "malayalam": "mal", "english": "eng",
-         "punjabi": "pan", "japanese": "jpn"}
+         "punjabi": "pan", "japanese": "jpn", "portuguese": "por"}
 # Whisper wants ISO-639-1.
 LANG1 = {"hindi": "hi", "tamil": "ta", "telugu": "te", "kannada": "kn", "bengali": "bn",
          "marathi": "mr", "malayalam": "ml", "english": "en", "japanese": "ja",
-         "punjabi": "pa"}
+         "punjabi": "pa", "portuguese": "pt"}
 
 # A window shorter than this is a breath or a click, not a line — embedding it produces a
 # meaningless vector that matches everything, which is how false "missing" flags are born.
