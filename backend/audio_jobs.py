@@ -325,7 +325,13 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
                         {"name": "AQC_SARVAM_ONLY", "value": "1"},
                         {"name": "AQC_SARVAM_BATCH", "value": "1"},
                         {"name": "SARVAM_API_KEY",
-                         "value": os.environ.get("SARVAM_API_KEY", "")}],
+                         "value": os.environ.get("SARVAM_API_KEY", "")},
+                        # Scribe: one reading per side, all languages, real confidences.
+                        # AQC_SCRIBE_ONLY=1 on the server makes it the engine everywhere.
+                        {"name": "AQC_SCRIBE_ONLY",
+                         "value": os.environ.get("AQC_SCRIBE_ONLY", "")},
+                        {"name": "ELEVENLABS_API_KEY",
+                         "value": os.environ.get("ELEVENLABS_API_KEY", "")}],
     }]}
     r = fargate._ecs().run_task(
         cluster=c["cluster"],
@@ -401,7 +407,11 @@ def _prewarm(series_key: str, cfg: dict[str, Any], episode: int, token: str,
                             {"name": "AQC_SARVAM_BATCH", "value": "1"},
                             {"name": "GROQ_API_KEY", "value": os.environ.get("GROQ_API_KEY", "")},
                             {"name": "SARVAM_API_KEY",
-                             "value": os.environ.get("SARVAM_API_KEY", "")}],
+                             "value": os.environ.get("SARVAM_API_KEY", "")},
+                            {"name": "AQC_SCRIBE_ONLY",
+                             "value": os.environ.get("AQC_SCRIBE_ONLY", "")},
+                            {"name": "ELEVENLABS_API_KEY",
+                             "value": os.environ.get("ELEVENLABS_API_KEY", "")}],
         }]})
     if r.get("failures") or not r.get("tasks"):
         return                                        # quota/etc — fan out unwarmed
@@ -439,7 +449,8 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
     # the engine — the Whisper path has nothing per-episode to share). DQC_AQC_PREWARM=0
     # disables it if the extra up-front wall-clock ever matters more than the API spend.
     if (len(pending) > 1 and os.environ.get("DQC_AQC_PREWARM", "1").strip() != "0"
-            and os.environ.get("AQC_SARVAM_ONLY", "1").strip() == "1"):
+            and (os.environ.get("AQC_SARVAM_ONLY", "1").strip() == "1"
+                 or os.environ.get("AQC_SCRIBE_ONLY", "").strip() == "1")):
         try:
             _prewarm(series_key, cfg, int(episode),
                      box_oauth.get_token(min_ttl_s=2700), original_file, say=say)

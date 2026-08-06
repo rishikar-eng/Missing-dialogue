@@ -381,6 +381,130 @@ def _sarvam_req(method: str, url: str, **kw):
     raise RuntimeError(f"Sarvam batch: {method} {url.split('?')[0]} kept failing ({last})")
 
 
+_SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+
+
+def transcribe_scribe(audio16: np.ndarray, cache_path: str | None = None,
+                      lang1: str | None = None) -> list:
+    """ONE ElevenLabs Scribe reading of a whole side — the fast alternative to Whisper's
+    5-draw union, and the only engine that also covers non-Indic pairs (POA).
+
+    Like the Sarvam batch path it uploads the `_prep_chunks` concatenation (every VAD window
+    joined) as a single FLAC and maps word timestamps back through the same piecewise map,
+    so one request replaces hundreds. Unlike Sarvam it returns REAL quality signals, so the
+    gates work on measurement instead of synthesized zeros:
+
+      alp = mean per-word logprob of the segment (Scribe's own confidence)
+      nsp = share of the segment that is non-speech `audio_event` entries ([music], [tone]…)
+      cr  = compression ratio of the text, as everywhere else
+
+    `lang1` pins the language (ISO-639-1) — free insurance against a noisy stretch being
+    decoded as some other language. Deterministic enough to run once and cache, like Sarvam.
+    Returns [(start, end, text, q)]; [] when the side has no speech; raises on API failure.
+    """
+    import io as _io
+    import json as _json
+    import time as _t
+    import zlib
+
+    import httpx
+    import soundfile as sf
+    if cache_path and os.path.exists(cache_path):
+        try:
+            return [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
+        except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
+            pass
+    key = os.environ.get("ELEVENLABS_API_KEY", "")
+    if not key:
+        return []
+    prep = _prep_chunks(audio16)
+    if not prep:
+        return []
+    chunks, back = prep
+    full = np.concatenate([c for c, _ in chunks])
+    buf = _io.BytesIO()
+    sf.write(buf, full, 16000, format="FLAC")
+    data = {"model_id": "scribe_v1", "timestamps_granularity": "word", "diarize": "false"}
+    if lang1:
+        data["language_code"] = lang1
+    t0 = _t.time()
+    print(f"[audio_qc] scribe: {len(full) / 16000.0:.0f}s of speech, "
+          f"{buf.getbuffer().nbytes >> 20} MB FLAC"
+          + (f", language pinned to {lang1}" if lang1 else ""), flush=True)
+    last = None
+    js = None
+    for attempt in range(5):
+        try:
+            r = httpx.post(_SCRIBE_URL, headers={"xi-api-key": key},
+                           files={"file": ("audio.flac", buf.getvalue(), "audio/flac")},
+                           data=data, timeout=1800)
+            if r.status_code == 200:
+                js = r.json()
+                break
+            last = f"HTTP {r.status_code}: {r.text[:160]}"
+            if r.status_code not in (429, 500, 502, 503, 504):
+                raise RuntimeError(f"Scribe rejected the request — {last}")
+        except (httpx.HTTPError, OSError) as e:  # transport hiccup: retry
+            last = f"{type(e).__name__}: {e}"
+        _t.sleep(5 * (attempt + 1))
+    if js is None:
+        raise RuntimeError(f"Scribe failed after 5 attempts (last: {last})")
+    words = js.get("words") or []
+    if not words:
+        return [] if not (js.get("text") or "").strip() else []
+    print(f"[audio_qc] scribe: {len(words)} words in {_t.time() - t0:.0f}s "
+          f"(detected {js.get('language_code')})", flush=True)
+
+    # Group words into lines. A break is a real pause, a sentence end, or — critically — a
+    # concat-gap crossing: the concatenation joins windows that are far apart on the real
+    # timeline, so a segment spanning one would claim a span of silence it never covers.
+    segs: list[list] = []
+    cur: list[dict] = []
+    prev_end_c = None
+    for w in words:
+        if w.get("type") == "spacing":
+            continue
+        try:
+            cs, ce = float(w["start"]), float(w["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if cur and prev_end_c is not None:
+            gap_c = cs - prev_end_c                      # gap on the concatenated timeline
+            gap_r = back(cs) - back(prev_end_c)          # …and on the real one
+            crossed = gap_r - gap_c > 0.25               # a window boundary was jumped
+            if crossed or gap_c > 0.7 or (cur[-1].get("text") or "").endswith((".", "?", "!", "।")):
+                segs.append(cur)
+                cur = []
+        cur.append(w)
+        prev_end_c = ce
+    if cur:
+        segs.append(cur)
+
+    out = []
+    for ws in segs:
+        spoken = [w for w in ws if w.get("type") != "audio_event"]
+        text = " ".join((w.get("text") or "").strip() for w in ws
+                        if w.get("type") != "audio_event").strip()
+        s2, e2 = back(float(ws[0]["start"])), back(float(ws[-1]["end"]))
+        if not text or e2 - s2 < 0.2:
+            continue
+        lps = [float(w["logprob"]) for w in ws if isinstance(w.get("logprob"), (int, float))]
+        raw = text.encode("utf-8")
+        out.append((round(s2, 2), round(e2, 2), text, {
+            "nsp": round(1.0 - len(spoken) / max(1, len(ws)), 2),   # non-speech share
+            "alp": round(sum(lps) / len(lps), 3) if lps else 0.0,   # REAL mean logprob
+            "cr": round(len(raw) / max(1, len(zlib.compress(raw))), 2),
+            "engine": "scribe"}))
+    out.sort(key=lambda x: (x[0], x[1]))
+    print(f"[audio_qc] scribe: {len(out)} lines", flush=True)
+    if cache_path:
+        try:
+            _json.dump(out, open(cache_path, "w"))
+        except OSError:
+            pass
+    return out
+
+
 def _sarvam_batch(audio16: np.ndarray) -> list | None:
     """ONE Sarvam Batch-API job for a whole side, instead of ~400 sync requests.
 
@@ -803,7 +927,23 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _INDIC = ("hindi", "tamil", "telugu", "kannada", "bengali", "marathi",
                   "malayalam", "punjabi")
         osegs = dsegs = None
-        if (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
+        if os.environ.get("AQC_SCRIBE_ONLY", "").strip() == "1":
+            # ElevenLabs Scribe: one reading per side, both sides concurrently. No Indic
+            # guard — it covers every pair we handle (including POA's pt→en, where Sarvam
+            # cannot help and the Whisper union is the slow default). Language-pinned.
+            _say("SCRIBE-ONLY: one ElevenLabs Scribe reading per side")
+            import concurrent.futures as _cfs
+            with _cfs.ThreadPoolExecutor(max_workers=2) as _tp:
+                _fo = _tp.submit(transcribe_scribe, ov, original_path + ".scribe.json",
+                                 LANG1.get(original_lang.lower()))
+                _fd = _tp.submit(transcribe_scribe, dv, dub_path + ".scribe.json",
+                                 LANG1.get(dub_lang.lower()))
+                osegs, dsegs = _fo.result(), _fd.result()
+            if not osegs or not dsegs:
+                _say("SCRIBE returned no transcript (key/credits/outage?) — "
+                     "FALLING BACK to the default path")
+                osegs = dsegs = None
+        if (osegs is None and os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
                 and original_lang.lower() in _INDIC and dub_lang.lower() in _INDIC):
             # EXPERIMENT (user-requested): Sarvam alone, one deterministic reading per
             # side. No union (identical redraws), no Whisper self-diagnostics for the

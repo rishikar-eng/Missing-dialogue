@@ -35,7 +35,7 @@ _SEP_CACHE: dict[str, tuple[str, str, list[str]]] = {}   # local -> (bucket, bas
 # Sarvam reading. The reading is per-FILE and language-independent, so caching it stops a
 # 6-language fan-out from paying Sarvam six times for the same original — the single
 # biggest source of avoidable spend (see docs/scriptless-qc-cost.md).
-_CACHE_SUF = (".voc16.npy", ".acc16.npy", ".sarvam.json")
+_CACHE_SUF = (".voc16.npy", ".acc16.npy", ".sarvam.json", ".scribe.json")
 
 
 def _cache_attach(dst: str, base: str) -> None:
@@ -185,6 +185,7 @@ def _main():
         ("separating dialogue from the original mix", 20, "separating the original"),
         ("separating dialogue from the dub mix", 42, "separating the dub"),
         ("SARVAM-ONLY", 55, "transcribing (Sarvam batch)"),
+        ("SCRIBE-ONLY", 55, "transcribing (Scribe)"),
         ("transcribing original + dub via Groq", 55, "transcribing"),
         ("lines: original=", 75, "matching lines across languages"),
         ("second pass", 85, "verifying candidate flags"),
@@ -220,7 +221,12 @@ def _main():
         print("[run] WARM-ONLY: preparing the original for every language", flush=True)
         _progress(20, "separating the original")
         ov = audio_qc.separate_dialogue(o)
-        if (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
+        if os.environ.get("AQC_SCRIBE_ONLY", "").strip() == "1":
+            _progress(55, "transcribing the original (shared)")
+            segs = audio_qc.transcribe_scribe(ov, o + ".scribe.json",
+                                              audio_qc.LANG1.get(ol.lower()))
+            print(f"[run] warm: original transcript = {len(segs or [])} lines", flush=True)
+        elif (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
                 and ol.lower() in ("hindi", "tamil", "telugu", "kannada", "bengali",
                                    "marathi", "malayalam", "punjabi")):
             _progress(55, "transcribing the original (shared)")
