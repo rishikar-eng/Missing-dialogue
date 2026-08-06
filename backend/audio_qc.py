@@ -852,6 +852,49 @@ _BLOCK_MIN = 4           # EP12's real drops sat in groups of 1 and 2 — well c
 _BLOCK_MAX_SLOT_COV = 0.35   # a block means the dub is SILENT throughout, not just unmatched
 
 
+def _norm_words(t: str | None) -> set:
+    """Content words of a line, lowercased and stripped of punctuation."""
+    import re as _re
+    return {w for w in _re.split(r"[^0-9a-zA-ZÀ-ɏऀ-ൿ]+",
+                                 (t or "").lower()) if len(w) >= 2}
+
+
+def _tag_song_reprise(errors: list[dict]) -> int:
+    """A missing line whose words also appear INSIDE a detected block is the same song.
+
+    POA EP10 flagged three lines at 14:31-14:56 that a listener confirmed absent from the
+    dub — but the identical lyrics recur in the closing-song block at 38:16-38:36, so it is
+    the song playing again mid-episode, not dropped dialogue. Grouping alone could not catch
+    them: they sit ~16 s apart (over the block window) and number only three (under its
+    minimum). Text is the giveaway, because spoken dialogue does not repeat verbatim.
+
+    Tags only — the line stays in the report, the workbook and the markers, exactly like a
+    block member. It is excluded from the headline finding count and labelled so a reviewer
+    sees at a glance that the same words sing elsewhere in the episode.
+    """
+    blocked = [e for e in errors if e.get("type") == "MISSING" and e.get("block")]
+    loose = [e for e in errors if e.get("type") == "MISSING" and not e.get("block")]
+    if not blocked or not loose:
+        return 0
+    lyr = [(e["block"]["id"], e.get("script_start_s"), _norm_words(e.get("text")))
+           for e in blocked]
+    n = 0
+    for e in loose:
+        w = _norm_words(e.get("text"))
+        # too short/generic to judge on words alone
+        if len(w) < 3 or len((e.get("text") or "").strip()) < 10:
+            continue
+        for bid, bt, bw in lyr:
+            if len(bw) < 3:
+                continue
+            shared = w & bw
+            if len(shared) >= 3 and len(shared) / min(len(w), len(bw)) >= 0.75:
+                e["song_reprise"] = {"block": bid, "matches_at": bt}
+                n += 1
+                break
+    return n
+
+
 def _group_missing(errors: list[dict]) -> int:
     """Tag contiguous runs of MISSING lines (dub quiet throughout) with a shared block id.
     Returns the number of blocks found. Mutates the error dicts; removes nothing."""
@@ -1417,6 +1460,10 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
         n_blocks = _group_missing(errors)      # presentation only; never fatal
     except Exception:  # noqa: BLE001
         n_blocks = 0
+    try:
+        n_reprise = _tag_song_reprise(errors)  # same song, sung again elsewhere
+    except Exception:  # noqa: BLE001
+        n_reprise = 0
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
             for c in ("high", "medium", "low")}
@@ -1424,7 +1471,8 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
     # ONE thing to act on. A grouped block counts once here; the individual lines are all
     # still in `errors`, so nothing is hidden and recall is untouched.
     grouped_lines = sum(1 for e in errors if e.get("block"))
-    n_findings = n["MISSING"] - grouped_lines + n_blocks
+    reprise_lines = sum(1 for e in errors if e.get("song_reprise") and not e.get("block"))
+    n_findings = max(n_blocks, n["MISSING"] - grouped_lines - reprise_lines + n_blocks)
     fills = {}
     for e in errors:
         if e.get("type") == "MISSING" and e.get("fill"):
@@ -1452,6 +1500,8 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             # one contiguous un-dubbed stretch = one finding, however many lines it spans
             "n_missing_findings": n_findings,
             "n_missing_blocks": n_blocks,
+            # lines that are the same song sung elsewhere in the episode, not dialogue
+            "n_song_reprise": n_reprise,
             # what the dub does under a missing line: silence | ambience | speech-like
             "missing_by_dub_fill": fills,
         },

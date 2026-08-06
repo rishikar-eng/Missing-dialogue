@@ -229,6 +229,10 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         if fill and e.get("fill_dyn_db") is not None:
             fill += f" ({e['fill_rel_db']:+.0f} dB vs speech, {e['fill_dyn_db']:.0f} dB range)"
         blk = ""
+        if e.get("song_reprise") and not e.get("block"):
+            r = e["song_reprise"]
+            blk = (f"same lyric as block {r['block']} (sung again at "
+                   f"{_ms(r.get('matches_at'))}) — untranslated song, not dialogue")
         if e.get("block"):
             b = e["block"]
             blk = (f"block {b['id']}: {_ms(b['start'])}-{_ms(b['end'])} "
