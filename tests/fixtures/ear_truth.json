@@ -355,7 +355,71 @@
     }
    ],
    "note_expected": "Recall must include BOTH verified_missing entries; the tool caught both on 2026-08-06 (Scribe). Known false-positive classes on this episode: the 00:16-01:22 opening song (18 flags - songs stay untranslated by design) and short interjections that are present but quiet. Of the 9 flags ear-checked, 2 were real, 6 present, 1 ambiguous.",
-   "walla_substitution_note": "BOTH true positives on this episode share one pattern: the dub replaces an un-dubbed crowd/reaction line with generic ambience rather than leaving silence. Two consequences. (1) DETECTION RISK: walla sits at speech-like levels (-24 to -25 dB), so if Silero ever classifies it as speech the acoustic tie-breaker suppresses the flag as 'dub speaks here'. It did not here (slot coverage 0.07 and 0.0), but that is the near-miss to watch - it is the most likely source of a future false NEGATIVE on crowd scenes. (2) OPPORTUNITY: 'original has a line, dub has continuous low-dynamic-range energy and no transcript' is a distinctive, checkable signature - a candidate finding type of its own ('covered by ambience' vs 'silent hole') that would raise precision rather than lower it."
+   "walla_substitution_note": "BOTH true positives on this episode share one pattern: the dub replaces an un-dubbed crowd/reaction line with generic ambience rather than leaving silence. Two consequences. (1) DETECTION RISK: walla sits at speech-like levels (-24 to -25 dB), so if Silero ever classifies it as speech the acoustic tie-breaker suppresses the flag as 'dub speaks here'. It did not here (slot coverage 0.07 and 0.0), but that is the near-miss to watch - it is the most likely source of a future false NEGATIVE on crowd scenes. (2) OPPORTUNITY: 'original has a line, dub has continuous low-dynamic-range energy and no transcript' is a distinctive, checkable signature - a candidate finding type of its own ('covered by ambience' vs 'silent hole') that would raise precision rather than lower it.",
+   "confidence_tier_note": "CORRECTION (2026-08-06): an earlier note claimed medium-confidence flags were '3/3 true positives'. That was selective counting — EP12's own song block contained medium flags (all false), and EP9 @2558.6 is a medium+ambience FALSE positive. Across everything ear-checked so far the honest tally is: MEDIUM ~ mixed; the strongest single predictor is the dub-fill label SILENCE (4/4 real: EP10 x3, EP11 x1), while AMBIENCE is 2/3 (EP12 x2 real, EP9 x1 false). Small samples — do not over-fit."
+  },
+  "poa-ep10": {
+   "description": "POA EP10, Portuguese original video vs the delivered English DIALOGUE_EN track. Episode was DELIVERED TO THE CLIENT WITH NO QC (studio tracker: QC by / QC status blank). Engine: Scribe. Run produced 45 missing lines = 18 findings (3 blocks: the opening song and two closing-credits stretches). User ear-verified 2026-08-06.",
+   "original_box_id": "auto:original_videos_folder/POA_EP010 Low Res.mp4",
+   "dub_box_id": "auto:Delivery/POA EPISODE 10/POA EP 10 DIALOGUE_EN.wav",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 871.4,
+     "end": 872.6,
+     "confidence": "certain",
+     "note": "'Voce diz quando se vira pra ir.' — MEDIUM confidence, dub fill = SILENCE. Ear-verified missing."
+    },
+    {
+     "start": 887.56,
+     "end": 888.6,
+     "confidence": "certain",
+     "note": "'Pra me sentir assim, nao.' — low confidence, dub fill = SILENCE. Ear-verified missing."
+    },
+    {
+     "start": 896.2,
+     "end": 897.2,
+     "confidence": "certain",
+     "note": "'Eu sei que...' — low confidence, dub fill = SILENCE. Ear-verified missing."
+    }
+   ],
+   "verified_present": [],
+   "note_expected": "THREE consecutive real drops across 14:31-14:56 — a dropped exchange, not an isolated line. All three carried the SILENCE fill label. Gaps between them (~15 s) exceed the 10 s block window, so they correctly stayed individual findings."
+  },
+  "poa-ep11": {
+   "description": "POA EP11, same pairing and same no-QC status as EP10 (tracker: QC fields blank, Delivered). 45 missing lines = 19 findings (3 blocks). Ear-verified 2026-08-06.",
+   "original_box_id": "auto:original_videos_folder/POA_EP11 Low Res.mp4",
+   "dub_box_id": "auto:Delivery/POA Episode 11/POA EP 11 DIALOGUE_EN.wav",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 1215.18,
+     "end": 1216.2,
+     "confidence": "certain",
+     "note": "'Alguem paga ele.' — low confidence, dub fill = SILENCE. Ear-verified missing."
+    }
+   ],
+   "verified_present": [],
+   "note_expected": "One ear-verified drop; carried the SILENCE fill label."
+  },
+  "poa-ep9": {
+   "description": "POA EP9 — HAS been QC-ed (tracker: QC by Shreya / Cross-QC Abhijeet, both Cleared) and its feedback column records '1 open: missing dialogue line'. Our run gave 27 missing lines = 9 findings (1 block = the opening song). Ear-checked 2026-08-06.",
+   "original_box_id": "auto:original_videos_folder/POA_EP09 Low Res.mp4",
+   "dub_box_id": "auto:Delivery/POA EPISODE 9/POA EP 09 DIALOGUE_EN.wav",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [],
+   "verified_present": [
+    {
+     "start": 2558.6,
+     "end": 2559.8,
+     "confidence": "certain",
+     "note": "'Pra soltar esse romano.' — flagged MEDIUM with fill=ambience, i.e. the exact profile of EP12's two true positives, but ear-verified PRESENT. A medium+ambience flag is NOT self-validating."
+    }
+   ],
+   "note_expected": "The studio's own tracker says EP9 still has 1 open missing line; our run did not identify it via this flag. Whether any OTHER flag on this episode is that line is untested."
   }
  }
 }
