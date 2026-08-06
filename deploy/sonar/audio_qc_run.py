@@ -67,7 +67,74 @@ def _extract_audio(src: str, out: str) -> str:
     return out
 
 
+def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
+    """Per-character dub tracks -> ONE dialogue-only track.
+
+    POA delivers its dub as one full-length WAV per character (39 tracks x 444 MB = 17 GB for
+    EP21). Summing them gives exactly what scriptless QC wants — clean dialogue, no music or
+    effects, so no separation is needed — and for EP21-25 it is the ONLY dub that exists.
+
+    Streamed one file at a time: download, downmix to 16 kHz mono, add, DELETE. Peak disk is
+    one track (~450 MB) instead of 17 GB, so the task's default ephemeral storage is enough.
+    The summed result is cached in S3 keyed by the folder's contents, because rebuilding it
+    means re-downloading 17 GB.
+    """
+    import boto3
+
+    from backend import box_fetch
+    files = sorted((f for f in box_fetch.list_folder(tok, folder_id)["files"]
+                    if f["name"].lower().endswith((".wav", ".flac", ".aif", ".aiff"))),
+                   key=lambda f: f["name"])
+    if not files:
+        raise RuntimeError(f"speaker-track folder {folder_id} has no audio")
+    total = sum(int(f.get("size") or 0) for f in files)
+    key = f"spksum/{folder_id}.{len(files)}f.{total}.wav"
+    dst = f"/tmp/spksum_{folder_id}.wav"
+    s3 = boto3.client("s3")
+    try:
+        s3.download_file(BUCKET, key, dst)
+        print(f"[run] speaker-sum cache HIT {key}", flush=True)
+        return dst
+    except Exception:
+        pass
+    print(f"[run] summing {len(files)} speaker tracks ({total / 1e9:.1f} GB) from Box",
+          flush=True)
+    acc = None
+    for i, f in enumerate(files, 1):
+        tmp = box_fetch.download_file(tok, f["id"], "/tmp", name="spk_one.wav")
+        try:
+            x = audio_qc._load16(str(tmp))
+            if acc is None:
+                acc = x.astype("float32").copy()
+            else:
+                if len(x) > len(acc):
+                    acc = np.pad(acc, (0, len(x) - len(acc)))
+                acc[:len(x)] += x
+            print(f"[run]   +{i}/{len(files)} {f['name'][:38]} ({len(x) / 16000:.0f}s)",
+                  flush=True)
+        finally:
+            try:
+                os.remove(str(tmp))
+            except OSError:
+                pass
+    if acc is None:
+        raise RuntimeError("no speaker track could be read")
+    peak = float(np.abs(acc).max())
+    if peak > 0.99:                       # summing N tracks can clip; keep headroom
+        acc *= 0.9 / peak
+        print(f"[run] speaker sum peaked at {peak:.2f}, scaled to 0.9", flush=True)
+    sf.write(dst, acc, 16000)
+    try:
+        s3.upload_file(dst, BUCKET, key)
+        print(f"[run] speaker sum cached -> {key}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[run] speaker-sum cache upload failed: {e}", flush=True)
+    return dst
+
+
 def _local(p: str) -> str:
+    if p.startswith("spk://"):            # a FOLDER of per-character dub tracks
+        return _sum_speaker_tracks(p[6:], os.environ["BOX_ACCESS_TOKEN"])
     if p.startswith("box://"):
         # Teams-triggered runs pass Box file ids + a short-lived access token in the env.
         import httpx

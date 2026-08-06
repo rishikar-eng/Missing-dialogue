@@ -69,6 +69,27 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
     return None
 
 
+def find_dub_speakers(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
+                      n: int) -> dict[str, Any] | None:
+    """The per-character dub folder for one episode (POA's Voiceover tree: one full-length
+    WAV per character). Used when no mixed dub exists — EP21-25 have ONLY these — and the
+    runner sums them into a clean dialogue track. Returns a folder, not a file."""
+    root = (cfg["box"].get("dub_speaker_folders") or {}).get(lang) or cfg["box"].get("dub_speaker_root")
+    if not root:
+        return None
+    for d in box.listing(root)["folders"]:
+        if box_discovery._ep_num(d["name"]) == n:
+            try:
+                files = [f for f in box.listing(d["id"])["files"]
+                         if f["name"].lower().endswith((".wav", ".flac", ".aif", ".aiff"))]
+            except Exception:  # noqa: BLE001
+                continue
+            if len(files) >= 3:            # a real speaker set, not a stray file
+                return {"id": d["id"], "name": d["name"], "n_tracks": len(files),
+                        "_stage": "speakers"}
+    return None
+
+
 def find_original_video(box: box_discovery._Box, cfg: dict[str, Any],
                         n: int) -> dict[str, Any] | None:
     """A VIDEO as the original (POA: no original audio deliverable exists, only low-res
@@ -240,6 +261,11 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
     ready, missing = {}, []
     for lang in cfg.get("languages", []):
         d = find_dub_mix(box, cfg, lang, n)
+        if not d:
+            sp = find_dub_speakers(box, cfg, lang, n)
+            if sp:
+                ready[lang] = f"{sp['name']} ({sp['n_tracks']} character tracks, summed)"
+                continue
         if d:
             ready[lang] = d["name"]
         else:
@@ -300,16 +326,21 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
                                       "name": _file_name(token, str(dub_file))}
     else:
         dub = find_dub_mix(box, cfg, lang, int(episode))
+        if not dub:
+            # no mixed dub — but per-character tracks may exist (POA EP21-25 have only these)
+            dub = find_dub_speakers(box, cfg, lang, int(episode))
     if not dub:
         return {"error": f"no {lang} full mix (ST_MIX) delivered for EP{int(episode):02d}"}
 
     job_id = uuid.uuid4().hex[:12]
     prefix = f"{c['prefix']}/audioqc/{job_id}"
-    cmd = ["audio_qc_run.py", f"box://{orig['id']}", f"box://{dub['id']}",
+    _dub_uri = (f"spk://{dub['id']}" if dub.get("_stage") == "speakers"
+                else f"box://{dub['id']}")
+    cmd = ["audio_qc_run.py", f"box://{orig['id']}", _dub_uri,
            cfg.get("original_language", "hindi"), lang.lower(),
            "--series", cfg.get("display_name", series_key),
            "--episode", str(int(episode)), "--out", prefix]
-    if dub.get("_stage") == "dialogue":
+    if dub.get("_stage") in ("dialogue", "speakers"):
         cmd.append("--clean-dub")                  # already clean dialogue — skip Demucs
     ov = {"containerOverrides": [{
         "name": "sonar",

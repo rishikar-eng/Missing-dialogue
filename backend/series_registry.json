@@ -93,7 +93,9 @@
       ],
       "_note": "SCRIPTLESS-ONLY (scripts unreliable per the studio). Portuguese original dubbed to ENGLISH - NOT Indic, so runs use the Whisper double-pass path automatically (no Sarvam). Original = Low-res episode VIDEOS (POA_EPnn Low Res.mp4, ~50 min) - the runner extracts the audio track (ffmpeg) then separates dialogue as usual. Dub = Delivery/POA Episode NN/: prefer the clean DIALOGUE_EN track (newest revision R2>R1>base, --clean-dub skips separation), else Print Premix, else Print Mix. EP13/14 have V2.0 redelivery subfolders - not wired, use the Choose-files picker for those. ~50-min episodes cost roughly 2x a 25-min one in compute.",
       "engine": "scribe",
-      "_engine_note": "ElevenLabs Scribe instead of the Whisper 5-draw union: ~2 min vs ~20+ per run, and it handles pt->en (Sarvam is Indic-only). Validated 2026-08-04 on Gavv EP41 synthetic — 3/3 muted spoken lines caught (both medium-confidence flags were real). Known limit, accepted by the studio: Scribe transcribes words, not non-verbal vocalizations, so a dropped grunt/sigh is invisible to it (EP38's verified grunt was missed)."
+      "_engine_note": "ElevenLabs Scribe instead of the Whisper 5-draw union: ~2 min vs ~20+ per run, and it handles pt->en (Sarvam is Indic-only). Validated 2026-08-04 on Gavv EP41 synthetic — 3/3 muted spoken lines caught (both medium-confidence flags were real). Known limit, accepted by the studio: Scribe transcribes words, not non-verbal vocalizations, so a dropped grunt/sigh is invisible to it (EP38's verified grunt was missed).",
+      "dub_speaker_root": "377680681809",
+      "_speakers_note": "Voiceover tree: one folder per episode (POA_EPISODEnn), one full-length WAV per CHARACTER (39 tracks x 444 MB for EP21). Used only when no mixed dub exists - EP21-25 have nothing else - and the runner sums them (streamed one at a time, S3-cached) into a clean dialogue-only dub, so no separation is needed. Covers EP4-25."
     }
   },
   "kamen-rider-gavv": {
