@@ -418,6 +418,70 @@
     }
    ],
    "note_expected": "The studio's own tracker says EP9 still has 1 open missing line; our run did not identify it via this flag. Whether any OTHER flag on this episode is that line is untested."
+  },
+  "poa-ep21": {
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "description": "POA EP21 — NO MIXED DUB EXISTS (tracker: 'NOT RECEIVED / Blocked — no dub track'). QC'd from the 39 per-character Voiceover tracks, summed by the runner. Engine: Scribe. 40 missing lines = 22 findings (1 song block). Ear-checked by the user 2026-08-06 and confirmed by transcript diff. Drift vs the original video measured at +0.02 s median — the speaker sum is natively on the episode timeline.",
+   "original_box_id": "auto:original_videos_folder/POA_EP21 Low Res.mp4",
+   "dub_box_id": "auto:Voiceover/POA_EPISODE21 (39 character tracks, summed)",
+   "verified_missing": [
+    {
+     "start": 1684.89,
+     "end": 1690.0,
+     "confidence": "certain",
+     "note": "'E foi assim que Dionisio, o Areopagita, Damares e alguns homens creram em Atenas.' — a WHOLE NARRATIVE SENTENCE, absent from the dub. Transcript diff is unambiguous: the English runs '...achieve the purpose for which he sent it.' straight into 'After this, Paul left there', skipping the sentence entirely. Flagged MEDIUM with fill=silence. The user's observation that 'where English finishes saying send it, Portuguese starts saying Damaris' is exactly this."
+    }
+   ],
+   "verified_present": [],
+   "uncertain": [
+    {
+     "start": 1051.24,
+     "end": 1052.0,
+     "note": "'Se impostor.' — flagged MEDIUM/silence, but the user reports the Portuguese there is LAUGHTER plus possibly indistinct dialogue, and hears something like 'jibos'. Likely a Scribe HALLUCINATION on non-speech (laughter transcribed as words), which would make it a reference-side failure the reliability gate should have caught. Not ground truth either way; a candidate gate case."
+    }
+   ],
+   "note_expected": "Drift measured +0.02 s median (p5 -0.09, p95 +0.24) — no misalignment between the video original and the summed speaker tracks."
+  },
+  "poa-ep22": {
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "description": "POA EP22 — NO MIXED DUB EXISTS; QC'd from 45 summed character tracks. 49 missing lines = 32 findings (1 song block). Ear-checked 2026-08-06 + transcript diff.",
+   "original_box_id": "auto:original_videos_folder/POA_EP22 Low Res.mp4",
+   "dub_box_id": "auto:Voiceover/POA_EPISODE22 (45 character tracks, summed)",
+   "verified_missing": [
+    {
+     "start": 1052.92,
+     "end": 1055.5,
+     "confidence": "certain",
+     "note": "'Eu quero saber como que jamais faria isso.' — MEDIUM, fill=silence. Transcript diff: the English goes from 'They're plotting against you there.' directly to 'It's because you don't know what's happening in the cities of the Gentiles.'"
+    },
+    {
+     "start": 1055.96,
+     "end": 1058.0,
+     "confidence": "certain",
+     "note": "'Jamais eu faria isso com voces.' — low, fill=silence. Same hole; the two lines form ONE dropped exchange of ~5 s."
+    }
+   ],
+   "verified_present": [],
+   "note_expected": "Two consecutive real drops — a dropped exchange, both dub-silent."
+  },
+  "poa-ep23": {
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "description": "POA EP23 — NO MIXED DUB EXISTS; QC'd from 48 summed character tracks. 60 missing lines = 29 findings (4 blocks). First run to use the FIXED _dub_fill (neighbour speech excluded).",
+   "original_box_id": "auto:original_videos_folder/POA_EP23 Low Res.mp4",
+   "dub_box_id": "auto:Voiceover/POA_EPISODE23 (48 character tracks, summed)",
+   "verified_missing": [],
+   "verified_present": [
+    {
+     "start": 1167.53,
+     "end": 1168.5,
+     "confidence": "certain",
+     "note": "'Nao se preocupem.' — flagged low with fill='speech-like', and it IS present: the dub says 'Don't worry.' right there ('...All right, I'll talk to them. Don't worry.'). VALIDATES THE FILL LABEL: 'dub speaks here' correctly marked a false positive, on the first run using the fixed neighbour-excluding measurement."
+    }
+   ],
+   "note_expected": "Use this case to defend the fill label: speech-like => present. Tally so far — SILENCE 7/8 real (EP10 x3 were song reprises, EP11 x1, EP21 x1, EP22 x2 real), SPEECH-LIKE 1/1 correctly present, AMBIENCE 2/3 real."
   }
  }
 }
