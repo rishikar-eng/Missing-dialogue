@@ -29,6 +29,7 @@ meant to run inside the `dialogue-qc-sonar` Fargate task, not on the always-on b
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 import numpy as np
@@ -139,12 +140,28 @@ def _warm_pair(paths: list[str]) -> bool:
         return False
 
 
+_VAD_TLS = threading.local()
+
+
 def segment(audio16: np.ndarray) -> list[tuple[float, float]]:
-    """Silero VAD over the ISOLATED dialogue → (start, end) speech windows."""
+    """Silero VAD over the ISOLATED dialogue → (start, end) speech windows.
+
+    ONE MODEL PER THREAD. The instance used to be cached on this function and shared, but
+    Silero's RNN carries hidden state across calls, so the two sides transcribing
+    concurrently could interleave inside it and blow up with
+    `select(): index 1 out of range for tensor of size [1, 64]` — a whole task lost, at
+    random, only when both sides reached the VAD together (it killed an overlap-test run on
+    2026-08-04 and is the likeliest cause of the earlier unexplained exit-139). The model is
+    ~2 MB, so a per-thread copy is far cheaper than serialising the two sides.
+    """
     import torch
     from silero_vad import get_speech_timestamps, load_silero_vad
-    vad = getattr(segment, "_vad", None) or load_silero_vad()
-    segment._vad = vad
+    vad = getattr(_VAD_TLS, "vad", None)
+    if vad is None:
+        vad = _VAD_TLS.vad = load_silero_vad()
+    reset = getattr(vad, "reset_states", None)
+    if reset:
+        reset()                       # never inherit the previous clip's hidden state
     ts = get_speech_timestamps(torch.from_numpy(audio16), vad,
                                sampling_rate=16000, return_seconds=True)
     return [(round(t["start"], 2), round(t["end"], 2)) for t in ts
