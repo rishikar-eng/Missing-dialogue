@@ -523,15 +523,29 @@ def status(job_id: str) -> dict[str, Any]:
         # examples use ({at, character, text}), with the confidence tier standing in for the
         # character (scriptless mode has no speaker identity). Verify order: high → low → time.
         _rank = {"high": 0, "medium": 1, "low": 2}
-        ex = [{"at": f"{int(e['script_start_s'] // 3600):02d}:"
-                     f"{int((e['script_start_s'] % 3600) // 60):02d}:{e['script_start_s'] % 60:04.1f}",
-               "character": (e.get("confidence") or "?")
-               + (f" · {e['stability']}" if e.get("stability") else ""),
-               "text": (e.get("text") or "").strip()[:70]}
-              for e in sorted((x for x in rep.get("errors", [])
-                               if x.get("type") == "MISSING" and x.get("script_start_s") is not None),
-                              key=lambda x: (_rank.get(x.get("confidence"), 3),
-                                             x["script_start_s"]))][:6]
+        def _hms(t):
+            return f"{int(t // 3600):02d}:{int((t % 3600) // 60):02d}:{t % 60:04.1f}"
+        _cand = sorted((x for x in rep.get("errors", [])
+                        if x.get("type") == "MISSING" and x.get("script_start_s") is not None
+                        # one entry per block, not one per line inside it
+                        and (not x.get("block") or x["block"].get("first"))),
+                       key=lambda x: (_rank.get(x.get("confidence"), 3), x["script_start_s"]))
+        ex = []
+        for e in _cand[:6]:
+            b = e.get("block")
+            if b:
+                ex.append({"at": _hms(b["start"]),
+                           "character": f"{b['n']} lines in a row",
+                           "text": f"no dub audio through {_hms(b['end'])} — "
+                                   f"untranslated song/sequence? (e.g. “{(e.get('text') or '').strip()[:40]}”)"})
+                continue
+            tag = (e.get("confidence") or "?") + (f" · {e['stability']}" if e.get("stability") else "")
+            if e.get("fill") == "ambience":
+                tag += " · covered by ambience"
+            elif e.get("fill") == "silence":
+                tag += " · dub silent"
+            ex.append({"at": _hms(e["script_start_s"]), "character": tag,
+                       "text": (e.get("text") or "").strip()[:70]})
         out: dict[str, Any] = {
             "status": "done",
             "summary": {
@@ -541,6 +555,10 @@ def status(job_id: str) -> dict[str, Any]:
                 "original_lines": s.get("n_original_regions"),
                 "coverage": s.get("coverage"), "unchecked": s.get("n_unchecked"),
                 "examples": ex,
+                # a contiguous un-dubbed stretch counts ONCE (the lines are still listed)
+                "findings": s.get("n_missing_findings"),
+                "blocks": s.get("n_missing_blocks") or 0,
+                "fills": s.get("missing_by_dub_fill") or {},
             },
         }
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):

@@ -148,7 +148,7 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
     cols = ["Verify order", "Type", "Confidence", "Stability", "Start", "End", "Start (s)", "End (s)",
 
 
-            "Original line (transcribed)", "Best dub match", "What to check"]
+            "Original line (transcribed)", "Best dub match", "Dub under the line", "Part of", "What to check"]
 
 
     ws.append(cols)
@@ -223,13 +223,23 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         best = e.get("coverage")
 
 
+        fill = {"silence": "silent (no dub audio)",
+                "ambience": "covered by ambience/walla",
+                "speech-like": "dub speaks here"}.get(e.get("fill"), "")
+        if fill and e.get("fill_dyn_db") is not None:
+            fill += f" ({e['fill_rel_db']:+.0f} dB vs speech, {e['fill_dyn_db']:.0f} dB range)"
+        blk = ""
+        if e.get("block"):
+            b = e["block"]
+            blk = (f"block {b['id']}: {_ms(b['start'])}-{_ms(b['end'])} "
+                   f"({b['n']} lines, no dub audio throughout)")
         ws.append([i, e["type"], e.get("confidence", ""), e.get("stability", ""),
 
 
                    _ms(st), _ms(en), st, en, e.get("text") or "",
 
 
-                   f"{best:.0%}" if best is not None else "", note])
+                   f"{best:.0%}" if best is not None else "", fill, blk, note])
 
 
         color = tint.get(e.get("confidence")) if e["type"] == "MISSING" else None
@@ -250,7 +260,7 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
 
 
 
-    widths = [11, 12, 11, 10, 8, 8, 9, 9, 60, 13, 52]
+    widths = [11, 12, 11, 10, 8, 8, 9, 9, 60, 13, 34, 34, 52]
 
 
     for c, w in enumerate(widths, start=1):
@@ -265,7 +275,7 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
             ws.cell(row=r, column=c).alignment = Alignment(vertical="top",
 
 
-                                                           wrap_text=(c in (9, 11)))
+                                                           wrap_text=(c in (9, 11, 12, 13)))
 
 
     ws.freeze_panes = ws.cell(row=hdr_row + 1, column=1)

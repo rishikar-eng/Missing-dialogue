@@ -1571,7 +1571,13 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 n_missing = int(s.get("missing") or 0)
                 total_missing += n_missing
                 icon = "🟢" if not n_missing else ("🟠" if conf.get("high") else "🟡")
-                ln = [f"{icon} **{lang}** — {n_missing} possible missing "
+                # findings, not raw lines: one un-dubbed stretch is one thing to act on
+                n_find = int(s.get("findings") or n_missing)
+                blocks = int(s.get("blocks") or 0)
+                head = (f"{n_find} possible missing"
+                        + (f" ({n_missing} lines, {blocks} in un-dubbed stretches)"
+                           if blocks else ""))
+                ln = [f"{icon} **{lang}** — {head} "
                       f"(high {conf.get('high', 0)} / med {conf.get('medium', 0)} / low {conf.get('low', 0)})",
                       f"   checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} "
                       f"original lines · {s.get('unchecked', 0)} unreadable on one side"]
@@ -1593,10 +1599,12 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                     "missing": n_missing, "mismatch": 0,
                     "misaligned": int(s.get("misaligned") or 0),
                     "extra": int(s.get("extra") or 0), "no_audio": 0, "icon": icon,
-                    "detail": (f"{n_missing} possible missing (high {conf.get('high', 0)} / "
+                    "detail": (f"{head} (high {conf.get('high', 0)} / "
                                f"med {conf.get('medium', 0)} / low {conf.get('low', 0)}) · "
                                f"checked {(s.get('coverage') or 0):.0%} of "
-                               f"{s.get('original_lines', 0)} original lines"),
+                               f"{s.get('original_lines', 0)} original lines"
+                               + (f" · {s['fills'].get('ambience')} covered by ambience"
+                                  if (s.get("fills") or {}).get("ambience") else "")),
                     "examples": s.get("examples") or [],
                 }
                 blocks.append((1, -n_missing, lang, ln))

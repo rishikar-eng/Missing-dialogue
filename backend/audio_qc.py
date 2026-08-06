@@ -768,6 +768,107 @@ def _groq_call(audio16: np.ndarray, lang1: str) -> list[tuple[float, float, str]
     raise RuntimeError(f"Groq transcription failed after 5 attempts (last: {last})")
 
 
+
+# A MISSING flag says "the dub never says this line". WHAT the dub does instead is a
+# different, useful fact: a silent hole reads as a plain drop, while continuous
+# low-dynamic-range energy is walla/ambience laid over an un-dubbed line — which is what
+# BOTH ear-verified drops of POA EP12 turned out to be. Speech-like energy (big swings
+# between words) means something IS spoken and the flag deserves more suspicion.
+_FILL_SILENCE_REL_DB = -22.0     # this far below the dub's own typical speech = a hole
+_FILL_FLAT_DYN_DB = 22.0         # less swing than this across the slot = a steady wash
+
+
+def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
+              ref_db: float | None) -> dict | None:
+    """Classify the dub audio under a missing line: silence | ambience | speech-like.
+    Levels are RELATIVE to the dub's own typical speech level, so mastering/gain choices
+    cannot move the verdict. Returns None when the slot cannot be measured."""
+    if dv is None or ref_db is None or not len(dv):
+        return None
+    i0 = max(0, int((s + drift) * 16000))
+    i1 = min(len(dv), int((e + drift) * 16000))
+    if i1 - i0 < 3200:                                  # under 0.2 s: nothing to judge
+        return None
+    x = dv[i0:i1].astype("float64")
+    hop = 1600                                          # 100 ms frames
+    n = len(x) // hop
+    if n < 2:
+        return None
+    fr = np.sqrt((x[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    mean_db = 20.0 * np.log10(max(float(fr.mean()), 1e-9))
+    dyn_db = 20.0 * np.log10(max(float(fr.max()), 1e-9) / max(float(fr.min()), 1e-9))
+    rel = mean_db - ref_db
+    if rel <= _FILL_SILENCE_REL_DB:
+        kind = "silence"
+    elif dyn_db < _FILL_FLAT_DYN_DB:
+        kind = "ambience"
+    else:
+        kind = "speech-like"
+    return {"fill": kind, "fill_rel_db": round(rel, 1), "fill_dyn_db": round(dyn_db, 1)}
+
+
+def _speech_ref_db(dv: np.ndarray, dseg: list) -> float | None:
+    """The dub's OWN typical speech level (median 100 ms frame across its speech windows) —
+    the yardstick every fill measurement is relative to."""
+    if dv is None or not len(dv) or not dseg:
+        return None
+    vals = []
+    for a, b in dseg[:400]:
+        i0, i1 = max(0, int(a * 16000)), min(len(dv), int(b * 16000))
+        n = (i1 - i0) // 1600
+        if n < 1:
+            continue
+        x = dv[i0:i0 + n * 1600].astype("float64").reshape(n, 1600)
+        vals.append(np.sqrt((x ** 2).mean(axis=1)))
+    if not vals:
+        return None
+    allf = np.concatenate(vals)
+    return 20.0 * np.log10(max(float(np.median(allf)), 1e-9))
+
+
+# --- Feature A: consecutive missing lines are ONE finding -------------------
+# 18 of POA EP12's 33 flags were the untranslated opening song: eighteen "separate" findings
+# that are really one fact — nobody dubbed 00:16-01:22. Grouping is presentation only:
+# every line is still reported (recall untouched), they just carry a block id so the
+# summary can count the block once and the report can say what it really is.
+_BLOCK_GAP_S = 10.0      # measured on EP12: 10 s captures the whole song, 8 s missed one line
+_BLOCK_MIN = 4           # EP12's real drops sat in groups of 1 and 2 — well clear of this
+_BLOCK_MAX_SLOT_COV = 0.35   # a block means the dub is SILENT throughout, not just unmatched
+
+
+def _group_missing(errors: list[dict]) -> int:
+    """Tag contiguous runs of MISSING lines (dub quiet throughout) with a shared block id.
+    Returns the number of blocks found. Mutates the error dicts; removes nothing."""
+    miss = sorted((e for e in errors if e.get("type") == "MISSING"
+                   and e.get("script_start_s") is not None),
+                  key=lambda e: e["script_start_s"])
+    if not miss:
+        return 0
+    runs, cur = [], [miss[0]]
+    for e in miss[1:]:
+        prev = cur[-1]
+        prev_end = prev.get("script_end_s") or prev["script_start_s"]
+        quiet = (e.get("slot_speech_cov") or 0.0) <= _BLOCK_MAX_SLOT_COV
+        prev_quiet = (prev.get("slot_speech_cov") or 0.0) <= _BLOCK_MAX_SLOT_COV
+        if e["script_start_s"] - prev_end <= _BLOCK_GAP_S and quiet and prev_quiet:
+            cur.append(e)
+        else:
+            runs.append(cur)
+            cur = [e]
+    runs.append(cur)
+    bid = 0
+    for run in runs:
+        if len(run) < _BLOCK_MIN:
+            continue
+        bid += 1
+        b0 = run[0]["script_start_s"]
+        b1 = run[-1].get("script_end_s") or run[-1]["script_start_s"]
+        for i, e in enumerate(run):
+            e["block"] = {"id": bid, "start": round(b0, 2), "end": round(b1, 2),
+                          "n": len(run), "first": i == 0}
+    return bid
+
+
 def _reliable(q: dict | None, text: str | None = None) -> bool:
     """Whisper's own confidence in a segment. A flag built on a garbled transcript is noise —
     EP43's fight scene produced ~20 false 'missing' from exactly that.
@@ -1034,6 +1135,10 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         oqual = [q for _, _, _, q in osegs]
         dqual = [q for _, _, _, q in dsegs]
         _say(f"lines: original={len(oseg)} dub={len(dseg)}")
+        try:
+            _fill_ref = _speech_ref_db(dv, dseg)
+        except Exception:  # noqa: BLE001
+            _fill_ref = None
         if not oseg:
             return _empty("no speech transcribed in the original", tol_s, dub_label)
         if not dseg:
@@ -1174,8 +1279,17 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 if verdict == "present":
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
-            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}  {txt!r}")
-            errors.append(_missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov))
+            _err = _missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov)
+            try:
+                # descriptive extra — must NEVER be able to kill a detection run
+                _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref)
+            except Exception:  # noqa: BLE001
+                _f = None
+            if _f:
+                _err.update(_f)
+            _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}"
+                 + (f" [dub: {_f['fill']}]" if _f else "") + f"  {txt!r}")
+            errors.append(_err)
     else:
         # SONAR engine only: re-check each candidate against the raw dub audio near its
         # expected (sync-corrected) position before reporting it missing.
@@ -1283,9 +1397,22 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             n_unchecked: int = 0) -> dict[str, Any]:
+    try:
+        n_blocks = _group_missing(errors)      # presentation only; never fatal
+    except Exception:  # noqa: BLE001
+        n_blocks = 0
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
             for c in ("high", "medium", "low")}
+    # FINDINGS vs LINES. 18 of POA EP12's 33 missing lines were one untranslated song, i.e.
+    # ONE thing to act on. A grouped block counts once here; the individual lines are all
+    # still in `errors`, so nothing is hidden and recall is untouched.
+    grouped_lines = sum(1 for e in errors if e.get("block"))
+    n_findings = n["MISSING"] - grouped_lines + n_blocks
+    fills = {}
+    for e in errors:
+        if e.get("type") == "MISSING" and e.get("fill"):
+            fills[e["fill"]] = fills.get(e["fill"], 0) + 1
     total = len(oseg)
     return {
         "mode": "audio_only",
@@ -1306,6 +1433,11 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
             # triage order for the sound team: verify high first, low last
             "n_missing_by_confidence": conf,
+            # one contiguous un-dubbed stretch = one finding, however many lines it spans
+            "n_missing_findings": n_findings,
+            "n_missing_blocks": n_blocks,
+            # what the dub does under a missing line: silence | ambience | speech-like
+            "missing_by_dub_fill": fills,
         },
     }
 
