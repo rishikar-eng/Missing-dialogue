@@ -1,52 +1,118 @@
 {
   "jungle-tales-mowgli": {
     "display_name": "Jungle Tales With Mowgli",
-    "aliases": ["mowgli", "jtwm", "jungle tales", "jungle tales with mowgli", "jungle book"],
-    "languages": ["Tamil", "Telugu"],
+    "aliases": [
+      "mowgli",
+      "jtwm",
+      "jungle tales",
+      "jungle tales with mowgli",
+      "jungle book"
+    ],
+    "languages": [
+      "Tamil",
+      "Telugu"
+    ],
     "original_language": "hindi",
     "box": {
-      "premix_folders": ["395067770339", "405724902258"],
+      "premix_folders": [
+        "395067770339",
+        "405724902258"
+      ],
       "dub_stage": "premix",
       "mixes_folders": {
-        "Tamil": ["396129676440", "406458459883"],
-        "Telugu": ["396130127095", "406460754969"]
+        "Tamil": [
+          "396129676440",
+          "406458459883"
+        ],
+        "Telugu": [
+          "396130127095",
+          "406460754969"
+        ]
       },
       "_note": "SCRIPTLESS-ONLY series (no per-character stems). Monthly Box trees merged as lists: July 2026_06_29_021 + August 2026_08_03_024. Original = Hindi PREMIX only (DIS_Source_Jungle_Tales_With_Mowgli_SH21936_S1_E{n}_HINDI_PREMIX.wav) - no Hindi ST_MIX exists, so dub_stage=premix compares premix-vs-premix (mixing stages manufactures drift, see EP38/EP40). Dubs: Delivery/V1.0/{TAMIL,TELUGU}/EP NN/ with *_TAM_ST_MIX.wav + *_TAM_PREMIX.wav. July also has Delivery/V2.0 redeliveries (EP 11/12) - NOT wired; point runs at them manually if needed."
     }
   },
   "chikoo-aur-bunty": {
     "display_name": "Chikoo Aur Bunty",
-    "aliases": ["chikoo", "chiku", "chikoo bunty", "chikoo aur bunty", "chikoo and bunty", "cab", "chikoo&bunty"],
-    "languages": ["Tamil", "Telugu"],
+    "aliases": [
+      "chikoo",
+      "chiku",
+      "chikoo bunty",
+      "chikoo aur bunty",
+      "chikoo and bunty",
+      "cab",
+      "chikoo&bunty"
+    ],
+    "languages": [
+      "Tamil",
+      "Telugu"
+    ],
     "original_language": "hindi",
     "box": {
-      "premix_folders": ["394100416326", "397841740466", "405722379604"],
+      "premix_folders": [
+        "394100416326",
+        "397841740466",
+        "405722379604"
+      ],
       "dub_stage": "premix",
       "mixes_folders": {
-        "Tamil": ["390731432538"],
-        "Telugu": ["390730208742"]
+        "Tamil": [
+          "390731432538"
+        ],
+        "Telugu": [
+          "390730208742"
+        ]
       },
       "_note": "SCRIPTLESS-ONLY. Episodes are channel numbers (E319-E336, seasons S3/S4 mixed - use the E number). Original premixes across three folders: July Batch 1 'Hindi Premix', July Batch 2 'Premix', August 'Premix'. Dubs: July Delivery/V1.0/{TAMIL,TELUGU}/EP NNN/ with *_Tam_MIX.wav + *_Tam_PREMIX.wav ('MIX' without ST - premix preferred via dub_stage, which also stage-matches the premix original). August 2026_08_03_023 Delivery/V1.0 was EMPTY on 2026-08-04 - add its language folder ids here when they deliver."
     }
   },
   "poa-show": {
     "display_name": "POA (Paulo, O Apostolo)",
-    "aliases": ["poa", "paulo", "poa show", "apostolo", "paulo o apostolo"],
-    "languages": ["English"],
+    "aliases": [
+      "poa",
+      "paulo",
+      "poa show",
+      "apostolo",
+      "paulo o apostolo"
+    ],
+    "languages": [
+      "English"
+    ],
     "original_language": "portuguese",
     "box": {
       "original_videos_folder": "391123775822",
       "mixes_folders": {
-        "English": ["377680674527"]
+        "English": [
+          "377680674527"
+        ]
       },
-      "dub_prefer": ["dialogue", "premix", "mix"],
-      "_note": "SCRIPTLESS-ONLY (scripts unreliable per the studio). Portuguese original dubbed to ENGLISH - NOT Indic, so runs use the Whisper double-pass path automatically (no Sarvam). Original = Low-res episode VIDEOS (POA_EPnn Low Res.mp4, ~50 min) - the runner extracts the audio track (ffmpeg) then separates dialogue as usual. Dub = Delivery/POA Episode NN/: prefer the clean DIALOGUE_EN track (newest revision R2>R1>base, --clean-dub skips separation), else Print Premix, else Print Mix. EP13/14 have V2.0 redelivery subfolders - not wired, use the Choose-files picker for those. ~50-min episodes cost roughly 2x a 25-min one in compute."
+      "dub_prefer": [
+        "dialogue",
+        "premix",
+        "mix"
+      ],
+      "_note": "SCRIPTLESS-ONLY (scripts unreliable per the studio). Portuguese original dubbed to ENGLISH - NOT Indic, so runs use the Whisper double-pass path automatically (no Sarvam). Original = Low-res episode VIDEOS (POA_EPnn Low Res.mp4, ~50 min) - the runner extracts the audio track (ffmpeg) then separates dialogue as usual. Dub = Delivery/POA Episode NN/: prefer the clean DIALOGUE_EN track (newest revision R2>R1>base, --clean-dub skips separation), else Print Premix, else Print Mix. EP13/14 have V2.0 redelivery subfolders - not wired, use the Choose-files picker for those. ~50-min episodes cost roughly 2x a 25-min one in compute.",
+      "engine": "scribe",
+      "_engine_note": "ElevenLabs Scribe instead of the Whisper 5-draw union: ~2 min vs ~20+ per run, and it handles pt->en (Sarvam is Indic-only). Validated 2026-08-04 on Gavv EP41 synthetic — 3/3 muted spoken lines caught (both medium-confidence flags were real). Known limit, accepted by the studio: Scribe transcribes words, not non-verbal vocalizations, so a dropped grunt/sigh is invisible to it (EP38's verified grunt was missed)."
     }
   },
   "kamen-rider-gavv": {
     "display_name": "Kamen Rider Gavv",
-    "aliases": ["gavv", "krg", "kamen rider gavv", "kamen rider", "kr gavv"],
-    "languages": ["Malayalam", "Tamil", "Telugu", "Kannada", "Bengali", "Marathi"],
+    "aliases": [
+      "gavv",
+      "krg",
+      "kamen rider gavv",
+      "kamen rider",
+      "kr gavv"
+    ],
+    "languages": [
+      "Malayalam",
+      "Tamil",
+      "Telugu",
+      "Kannada",
+      "Bengali",
+      "Marathi"
+    ],
     "original_language": "hindi",
     "box": {
       "scripts_folder": "375861426771",

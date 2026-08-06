@@ -328,8 +328,11 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
                          "value": os.environ.get("SARVAM_API_KEY", "")},
                         # Scribe: one reading per side, all languages, real confidences.
                         # AQC_SCRIBE_ONLY=1 on the server makes it the engine everywhere.
+                        # Per-series engine beats the server default: POA runs Scribe
+                        # (fast, multilingual) where the Whisper union is otherwise used.
                         {"name": "AQC_SCRIBE_ONLY",
-                         "value": os.environ.get("AQC_SCRIBE_ONLY", "")},
+                         "value": ("1" if cfg["box"].get("engine") == "scribe"
+                                   else os.environ.get("AQC_SCRIBE_ONLY", ""))},
                         {"name": "ELEVENLABS_API_KEY",
                          "value": os.environ.get("ELEVENLABS_API_KEY", "")}],
     }]}
@@ -409,7 +412,8 @@ def _prewarm(series_key: str, cfg: dict[str, Any], episode: int, token: str,
                             {"name": "SARVAM_API_KEY",
                              "value": os.environ.get("SARVAM_API_KEY", "")},
                             {"name": "AQC_SCRIBE_ONLY",
-                             "value": os.environ.get("AQC_SCRIBE_ONLY", "")},
+                             "value": ("1" if cfg["box"].get("engine") == "scribe"
+                                       else os.environ.get("AQC_SCRIBE_ONLY", ""))},
                             {"name": "ELEVENLABS_API_KEY",
                              "value": os.environ.get("ELEVENLABS_API_KEY", "")}],
         }]})
@@ -450,7 +454,8 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
     # disables it if the extra up-front wall-clock ever matters more than the API spend.
     if (len(pending) > 1 and os.environ.get("DQC_AQC_PREWARM", "1").strip() != "0"
             and (os.environ.get("AQC_SARVAM_ONLY", "1").strip() == "1"
-                 or os.environ.get("AQC_SCRIBE_ONLY", "").strip() == "1")):
+                 or os.environ.get("AQC_SCRIBE_ONLY", "").strip() == "1"
+                 or cfg["box"].get("engine") == "scribe")):
         try:
             _prewarm(series_key, cfg, int(episode),
                      box_oauth.get_token(min_ttl_s=2700), original_file, say=say)
