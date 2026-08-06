@@ -1573,10 +1573,11 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 icon = "🟢" if not n_missing else ("🟠" if conf.get("high") else "🟡")
                 # findings, not raw lines: one un-dubbed stretch is one thing to act on
                 n_find = int(s.get("findings") or n_missing)
-                blocks = int(s.get("blocks") or 0)
+                # NB: `blocks` is the render accumulator in this scope — do not shadow it
+                n_blocks = int(s.get("blocks") or 0)
                 head = (f"{n_find} possible missing"
-                        + (f" ({n_missing} lines, {blocks} in un-dubbed stretches)"
-                           if blocks else ""))
+                        + (f" ({n_missing} lines, {n_blocks} in un-dubbed stretches)"
+                           if n_blocks else ""))
                 ln = [f"{icon} **{lang}** — {head} "
                       f"(high {conf.get('high', 0)} / med {conf.get('medium', 0)} / low {conf.get('low', 0)})",
                       f"   checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} "

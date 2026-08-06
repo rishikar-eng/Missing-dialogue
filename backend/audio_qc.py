@@ -779,17 +779,33 @@ _FILL_FLAT_DYN_DB = 22.0         # less swing than this across the slot = a stea
 
 
 def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
-              ref_db: float | None) -> dict | None:
+              ref_db: float | None, dwin: list | None = None) -> dict | None:
     """Classify the dub audio under a missing line: silence | ambience | speech-like.
     Levels are RELATIVE to the dub's own typical speech level, so mastering/gain choices
-    cannot move the verdict. Returns None when the slot cannot be measured."""
+    cannot move the verdict. Returns None when the slot cannot be measured.
+
+    NEIGHBOUR SPEECH IS EXCLUDED. A line reaches here having passed the slot gate, which
+    tolerates up to 40% of the slot being real dub speech from the line next door — dense
+    dialogue always clips a neighbour's edge. Measuring the whole slot would let those few
+    frames read as 'dub speaks here' and invite a reviewer to dismiss a genuine drop, so the
+    VAD-confirmed dub windows are cut out first and only the REMAINDER is described. Too
+    little remainder to judge honestly -> None (the column stays blank) rather than a guess.
+    """
     if dv is None or ref_db is None or not len(dv):
         return None
     i0 = max(0, int((s + drift) * 16000))
     i1 = min(len(dv), int((e + drift) * 16000))
     if i1 - i0 < 3200:                                  # under 0.2 s: nothing to judge
         return None
-    x = dv[i0:i1].astype("float64")
+    keep = np.ones(i1 - i0, dtype=bool)
+    for wa, wb in (dwin or []):
+        ja, jb = int(wa * 16000) - i0, int(wb * 16000) - i0
+        if jb <= 0 or ja >= len(keep):
+            continue
+        keep[max(0, ja):min(len(keep), jb)] = False
+    x = dv[i0:i1][keep].astype("float64")
+    if len(x) < 8000:                    # under 0.5 s of slot that ISN'T the neighbour
+        return None
     hop = 1600                                          # 100 ms frames
     n = len(x) // hop
     if n < 2:
@@ -1282,7 +1298,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             _err = _missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov)
             try:
                 # descriptive extra — must NEVER be able to kill a detection run
-                _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref)
+                _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref, dwin)
             except Exception:  # noqa: BLE001
                 _f = None
             if _f:
