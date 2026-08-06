@@ -364,28 +364,26 @@
    "dub_box_id": "auto:Delivery/POA EPISODE 10/POA EP 10 DIALOGUE_EN.wav",
    "original_lang": "portuguese",
    "dub_lang": "english",
-   "verified_missing": [
+   "verified_missing": [],
+   "verified_present": [],
+   "note_expected": "CORRECTED 2026-08-06: the 14:31-14:56 cluster was first recorded as three dropped dialogue lines on the strength of an ear-check (Portuguese present, English silent). That hearing was right but the INTERPRETATION was wrong — all three lyrics recur verbatim inside the closing-song block at 38:16-38:36, so it is a mid-episode reprise of the same untranslated song. Block grouping missed it because the three lines sit ~16 s and ~9 s apart (over the 10 s window) and number only 3 (under the 4-line minimum). PROPOSED RULE: a missing line whose text also appears inside a detected song block is the same song — tag it to that block instead of reporting it as dialogue. Would have removed all three automatically.",
+   "untranslated_song": [
     {
      "start": 871.4,
      "end": 872.6,
-     "confidence": "certain",
-     "note": "'Voce diz quando se vira pra ir.' — MEDIUM confidence, dub fill = SILENCE. Ear-verified missing."
+     "note": "'Voce diz quando se vira pra ir.' — ear-verified absent from the English dub, but NOT dropped dialogue: the identical lyric appears in the closing-song block at 38:19.6-38:23.2. Same for its neighbours. This is a mid-episode SONG REPRISE, i.e. the same untranslated-song class as blocks 1-3, and it is expected behaviour."
     },
     {
      "start": 887.56,
      "end": 888.6,
-     "confidence": "certain",
-     "note": "'Pra me sentir assim, nao.' — low confidence, dub fill = SILENCE. Ear-verified missing."
+     "note": "'Pra me sentir assim, nao.' — matches closing-block lyric @38:33.75. Song reprise."
     },
     {
      "start": 896.2,
      "end": 897.2,
-     "confidence": "certain",
-     "note": "'Eu sei que...' — low confidence, dub fill = SILENCE. Ear-verified missing."
+     "note": "'Eu sei que...' — matches closing-block lyric @38:16.1 / @38:30.2. Song reprise."
     }
-   ],
-   "verified_present": [],
-   "note_expected": "THREE consecutive real drops across 14:31-14:56 — a dropped exchange, not an isolated line. All three carried the SILENCE fill label. Gaps between them (~15 s) exceed the 10 s block window, so they correctly stayed individual findings."
+   ]
   },
   "poa-ep11": {
    "description": "POA EP11, same pairing and same no-QC status as EP10 (tracker: QC fields blank, Delivered). 45 missing lines = 19 findings (3 blocks). Ear-verified 2026-08-06.",
@@ -402,7 +400,7 @@
     }
    ],
    "verified_present": [],
-   "note_expected": "One ear-verified drop; carried the SILENCE fill label."
+   "note_expected": "One ear-verified drop, fill=SILENCE. Checked against the song blocks: 'Alguem paga ele.' does NOT recur in any block, and it is isolated (no other missing line within 60 s), so unlike EP10's cluster this is genuine dropped dialogue."
   },
   "poa-ep9": {
    "description": "POA EP9 — HAS been QC-ed (tracker: QC by Shreya / Cross-QC Abhijeet, both Cleared) and its feedback column records '1 open: missing dialogue line'. Our run gave 27 missing lines = 9 findings (1 block = the opening song). Ear-checked 2026-08-06.",
