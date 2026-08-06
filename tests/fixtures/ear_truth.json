@@ -300,13 +300,13 @@
      "start": 361.9,
      "end": 363.5,
      "confidence": "certain",
-     "note": "'Nao e possivel, seu charlatao.' - user ear-verified MISSING 2026-08-06; the dub transcript jumps 360.7-361.8 'and the sky above' straight to 366.1 'You know what, Barnabas?', a 4.3 s hole exactly where the original speaks. FLAGGED by the tool (low confidence)."
+     "note": "'Nao e possivel, seu charlatao.' - user ear-verified MISSING 2026-08-06; the dub transcript jumps 360.7-361.8 'and the sky above' straight to 366.1 'You know what, Barnabas?', a 4.3 s hole exactly where the original speaks. FLAGGED by the tool (low confidence). WALLA SUBSTITUTION (user + waveform, 2026-08-06): the original line is QUIET, and the dub does not leave a hole - it carries continuous crowd ambience there (mean -25.5 dB, peak -21.7 dB, dynamic range only 15 dB, i.e. no inter-word silences), versus real dub speech either side of it which swings from -120 dB to -25 dB. So the specific line was never dubbed and the gap is covered by generic walla."
     },
     {
      "start": 1216.3,
      "end": 1218.6,
      "confidence": "high",
-     "note": "Crowd heckles 'Mentira.' / 'Mentiroso total.' / 'Voces sao mentirosos.' - user heard it as missing (unsure, noisy section); transcripts corroborate: the dub goes from 'Don't be like them' (ends 1215.8) to one 1216.0-1221.5 segment 'He, he's proof that we're not fooling anyone', with no heckle content at all. FLAGGED by the tool at 1216.62 (MEDIUM confidence - the run's only medium-tier true positive)."
+     "note": "Crowd heckles 'Mentira.' / 'Mentiroso total.' / 'Voces sao mentirosos.' - user heard it as missing (unsure, noisy section); transcripts corroborate: the dub goes from 'Don't be like them' (ends 1215.8) to one 1216.0-1221.5 segment 'He, he's proof that we're not fooling anyone', with no heckle content at all. FLAGGED by the tool at 1216.62 (MEDIUM confidence - the run's only medium-tier true positive). Same WALLA SUBSTITUTION signature: dub mean -24.1 dB with only 10.5 dB of dynamic range across the window - continuous crowd wash, not dialogue."
     }
    ],
    "verified_present": [
@@ -354,7 +354,8 @@
      "note": "'charlatoes!' - user leaned PRESENT but was unsure (noisy). Transcripts are ambiguous: the dub says 'These men did nothing to deserve such treatment' (266.6-269.2) where the original says 'Saiam ja daqui seus / charlatoes!' - a rewrite/reorder rather than a clean drop. NOT ground truth either way."
     }
    ],
-   "note_expected": "Recall must include BOTH verified_missing entries; the tool caught both on 2026-08-06 (Scribe). Known false-positive classes on this episode: the 00:16-01:22 opening song (18 flags - songs stay untranslated by design) and short interjections that are present but quiet. Of the 9 flags ear-checked, 2 were real, 6 present, 1 ambiguous."
+   "note_expected": "Recall must include BOTH verified_missing entries; the tool caught both on 2026-08-06 (Scribe). Known false-positive classes on this episode: the 00:16-01:22 opening song (18 flags - songs stay untranslated by design) and short interjections that are present but quiet. Of the 9 flags ear-checked, 2 were real, 6 present, 1 ambiguous.",
+   "walla_substitution_note": "BOTH true positives on this episode share one pattern: the dub replaces an un-dubbed crowd/reaction line with generic ambience rather than leaving silence. Two consequences. (1) DETECTION RISK: walla sits at speech-like levels (-24 to -25 dB), so if Silero ever classifies it as speech the acoustic tie-breaker suppresses the flag as 'dub speaks here'. It did not here (slot coverage 0.07 and 0.0), but that is the near-miss to watch - it is the most likely source of a future false NEGATIVE on crowd scenes. (2) OPPORTUNITY: 'original has a line, dub has continuous low-dynamic-range energy and no transcript' is a distinctive, checkable signature - a candidate finding type of its own ('covered by ambience' vs 'silent hole') that would raise precision rather than lower it."
   }
  }
 }
