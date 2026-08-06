@@ -2079,8 +2079,11 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
                         return
                     jid, names = info["job_id"], {want: info}
                 else:                                 # default: EVERY delivered language
-                    res = audio_jobs.launch_all(key, cfg, int(ep), conv=conv,
-                                                original_file=o_fid)
+                    res = audio_jobs.launch_all(
+                        key, cfg, int(ep), conv=conv, original_file=o_fid,
+                        # pre-warm takes minutes before the languages start — say so rather
+                        # than leaving the channel silent after "Starting…"
+                        say=(lambda m: notify.post(url, m)) if url else None)
                     jid, names = res["parent_id"], res["langs"]
                     if not res["launched"]:
                         why = "; ".join(f"{k}: {v.get('error') or v.get('skipped')}"

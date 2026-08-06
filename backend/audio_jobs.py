@@ -355,8 +355,71 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
             "note": "audio QC started; poll get_audio_result with this job_id"}
 
 
+def _prewarm(series_key: str, cfg: dict[str, Any], episode: int, token: str,
+             original_file: str | None, say: Any = None) -> None:
+    """Prepare the ORIGINAL once before a fan-out: one task separates it and takes its single
+    Sarvam reading, publishing both to the S3 cache; the language tasks then start warm.
+
+    Without this every language re-separates AND re-transcribes the same original — six
+    Sarvam readings of one Hindi mix per episode, the largest avoidable cost in the whole
+    pipeline. Costs one extra task's wall-clock up front and gives most of it back, since
+    each language task then skips the original's separation too. Best-effort throughout: any
+    failure just means the languages do it themselves, exactly as before."""
+    import time as _t
+    c = fargate._cfg()
+    box = box_discovery._Box(token)
+    n = int(episode)
+    if original_file:
+        orig: dict[str, Any] | None = {"id": str(original_file)}
+    else:
+        orig = (find_original_mix(box, cfg, n) or find_original_premix(box, cfg, n)
+                or find_original_video(box, cfg, n))
+        if not orig:
+            try:
+                orig = box_discovery.find_original(box, cfg, n)
+            except Exception:  # noqa: BLE001
+                orig = None
+    if not orig:
+        return
+    if say:
+        say("🔥 Preparing the original once (shared by every language) — this saves "
+            "re-doing it per language. Languages start in a few minutes.")
+    r = fargate._ecs().run_task(
+        cluster=c["cluster"],
+        taskDefinition=os.environ.get("DQC_AUDIO_TASKDEF", "dialogue-qc-sonar:3"),
+        launchType="FARGATE",
+        networkConfiguration={"awsvpcConfiguration": {
+            "subnets": c["subnets"], "securityGroups": [c["sg"]], "assignPublicIp": "ENABLED"}},
+        overrides={"containerOverrides": [{
+            "name": "sonar",
+            # the dub arg is a positional placeholder — warm mode never downloads it
+            "command": ["audio_qc_run.py", f"box://{orig['id']}", f"box://{orig['id']}",
+                        cfg.get("original_language", "hindi"), "warm", "--warm-only"],
+            "environment": [{"name": "BOX_ACCESS_TOKEN", "value": token},
+                            {"name": "DQC_S3_BUCKET", "value": c["bucket"]},
+                            {"name": "AQC_SARVAM_ONLY", "value": "1"},
+                            {"name": "AQC_SARVAM_BATCH", "value": "1"},
+                            {"name": "GROQ_API_KEY", "value": os.environ.get("GROQ_API_KEY", "")},
+                            {"name": "SARVAM_API_KEY",
+                             "value": os.environ.get("SARVAM_API_KEY", "")}],
+        }]})
+    if r.get("failures") or not r.get("tasks"):
+        return                                        # quota/etc — fan out unwarmed
+    arn = r["tasks"][0]["taskArn"]
+    deadline = _t.time() + 1500                       # 25 min ceiling, then go anyway
+    while _t.time() < deadline:
+        _t.sleep(30)
+        try:
+            t = fargate._ecs().describe_tasks(cluster=c["cluster"], tasks=[arn])["tasks"][0]
+            if t["lastStatus"] == "STOPPED":
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+
 def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
-               conv: str | None = None, original_file: str | None = None) -> dict[str, Any]:
+               conv: str | None = None, original_file: str | None = None,
+               say: Any = None) -> dict[str, Any]:
     """Audio-QC every delivered language for an episode, one Fargate task each — the audio
     counterpart of fargate.launch_parallel, so `audio check ep 42` behaves like `run ep 42`.
 
@@ -372,6 +435,16 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
     # and the old code recorded the quota failures permanently — 1 language ran, 5 "failed".
     # Languages that bounce on the vCPU limit are retried as earlier tasks finish, up to
     # ~25 min, which covers two full task generations even cold.
+    # Pre-warm the shared original when more than one language is going out (and Sarvam is
+    # the engine — the Whisper path has nothing per-episode to share). DQC_AQC_PREWARM=0
+    # disables it if the extra up-front wall-clock ever matters more than the API spend.
+    if (len(pending) > 1 and os.environ.get("DQC_AQC_PREWARM", "1").strip() != "0"
+            and os.environ.get("AQC_SARVAM_ONLY", "1").strip() == "1"):
+        try:
+            _prewarm(series_key, cfg, int(episode),
+                     box_oauth.get_token(min_ttl_s=2700), original_file, say=say)
+        except Exception:  # noqa: BLE001 — warming is an optimisation, never a blocker
+            pass
     deadline = _t.time() + 1500
     while pending:
         still: list[str] = []

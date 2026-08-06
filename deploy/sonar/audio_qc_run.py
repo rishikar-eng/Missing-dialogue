@@ -31,16 +31,23 @@ BUCKET = os.environ.get("DQC_S3_BUCKET", "dialogue-qc-output-848005667477")
 _SEP_CACHE: dict[str, tuple[str, str, list[str]]] = {}   # local -> (bucket, base, hit sufs)
 
 
+# Cached artefacts, keyed by SOURCE file (sha1/etag): the two separation stems and the
+# Sarvam reading. The reading is per-FILE and language-independent, so caching it stops a
+# 6-language fan-out from paying Sarvam six times for the same original — the single
+# biggest source of avoidable spend (see docs/scriptless-qc-cost.md).
+_CACHE_SUF = (".voc16.npy", ".acc16.npy", ".sarvam.json")
+
+
 def _cache_attach(dst: str, base: str) -> None:
-    """Pull any cached separation for `base` next to `dst` and remember what to push back."""
+    """Pull any cached artefacts for `base` next to `dst` and remember what to push back."""
     import boto3
     s3 = boto3.client("s3")
     hits = []
-    for suf in (".voc16.npy", ".acc16.npy"):
+    for suf in _CACHE_SUF:
         try:
             s3.download_file(BUCKET, base + suf, dst + suf)
             hits.append(suf)
-            print(f"[run] separation cache HIT {base + suf}", flush=True)
+            print(f"[run] cache HIT {base + suf}", flush=True)
         except Exception:
             pass
     _SEP_CACHE[dst] = (BUCKET, base, hits)
@@ -87,7 +94,8 @@ def _local(p: str) -> str:
             # Cache FIRST: when both separation stems are cached, the source is never
             # read (Demucs loads the .npy pair), so skipping its download is free.
             _cache_attach(target, f"sepcache/{name}.{info.get('sha1') or fid}")
-            if len(_SEP_CACHE.get(target, (None, None, []))[2]) == 2:
+            _hit = _SEP_CACHE.get(target, (None, None, []))[2]
+            if ".voc16.npy" in _hit and ".acc16.npy" in _hit:
                 print(f"[run] both stems cached — skipping download of {name}", flush=True)
                 return target
         except Exception as e:  # cache is an optimization, never a blocker
@@ -115,11 +123,11 @@ def _push_sep_cache() -> None:
     import boto3
     s3 = boto3.client("s3")
     for local, (bucket, base, hits) in _SEP_CACHE.items():
-        for suf in (".voc16.npy", ".acc16.npy"):
+        for suf in _CACHE_SUF:
             if suf not in hits and os.path.exists(local + suf):
                 try:
                     s3.upload_file(local + suf, bucket, base + suf)
-                    print(f"[run] separation cached -> {base + suf}", flush=True)
+                    print(f"[run] cached -> {base + suf}", flush=True)
                 except Exception as e:  # noqa: BLE001
                     print(f"[run] cache upload failed: {e}", flush=True)
 
@@ -143,13 +151,18 @@ def _main():
     out_prefix = _opt("--out")
     clean = "--clean-dub" in args
     mkmix = "--make-dub-mix" in args
+    warm_only = "--warm-only" in args
+    t0 = time.time()
     args = [a for a in args if not a.startswith("--")]
     o, d, ol, dl = args[:4]
     # the two ~450MB inputs download CONCURRENTLY — pure network wait
     import concurrent.futures as _cfdl
-    with _cfdl.ThreadPoolExecutor(max_workers=2) as _dl:
-        _fo, _fd = _dl.submit(_local, o), _dl.submit(_local, d)
-        o, d = _fo.result(), _fd.result()
+    if warm_only:
+        o = _local(o)
+    else:
+        with _cfdl.ThreadPoolExecutor(max_workers=2) as _dl:
+            _fo, _fd = _dl.submit(_local, o), _dl.submit(_local, d)
+            o, d = _fo.result(), _fd.result()
 
     if mkmix:
         print("[run] constructing dub mix = original accompaniment + clean dub dialogue", flush=True)
@@ -199,6 +212,24 @@ def _main():
                 return
 
     _progress(8, "inputs downloaded")
+
+    if warm_only:
+        # Pre-warm for a fan-out: do the per-EPISODE work (separate the original, read it
+        # once with Sarvam) so the N language tasks all start from cache. Without this each
+        # language re-separates AND re-transcribes the same original — 6x the Sarvam spend.
+        print("[run] WARM-ONLY: preparing the original for every language", flush=True)
+        _progress(20, "separating the original")
+        ov = audio_qc.separate_dialogue(o)
+        if (os.environ.get("AQC_SARVAM_ONLY", "").strip() == "1"
+                and ol.lower() in ("hindi", "tamil", "telugu", "kannada", "bengali",
+                                   "marathi", "malayalam", "punjabi")):
+            _progress(55, "transcribing the original (shared)")
+            segs = audio_qc.transcribe_sarvam(ov, o + ".sarvam.json")
+            print(f"[run] warm: original transcript = {len(segs or [])} lines", flush=True)
+        _push_sep_cache()
+        _progress(100, "original ready — languages starting")
+        print(f"[run] WARM done in {time.time() - t0:.0f}s", flush=True)
+        return
 
     t = time.time()
     # AQC_DRAWS>1: run detection N times and UNION the MISSING flags. Groq's transcription is
