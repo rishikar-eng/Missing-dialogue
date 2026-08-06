@@ -288,6 +288,73 @@
      "confidence": "medium"
     }
    ]
+  },
+  "poa-ep12": {
+   "description": "POA (Paulo, O Apostolo) EP12, Portuguese original video vs the delivered English DIALOGUE_EN track. FIRST ground truth found by the tool in a delivery the studio had NOT yet QC-ed, ear-verified by the user 2026-08-06 and corroborated by the cached Scribe transcripts of both sides. Engine: Scribe. The run produced 33 MISSING flags, of which 18 were the untranslated opening SONG (00:16-01:22) - a systematic false-positive class, see note_expected.",
+   "original_box_id": "auto:original_videos_folder/POA_EP12 Low Res.mp4",
+   "dub_box_id": "auto:Delivery/POA Episode 12/POA EP 12 DIALOGUE_EN.wav",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 361.9,
+     "end": 363.5,
+     "confidence": "certain",
+     "note": "'Nao e possivel, seu charlatao.' - user ear-verified MISSING 2026-08-06; the dub transcript jumps 360.7-361.8 'and the sky above' straight to 366.1 'You know what, Barnabas?', a 4.3 s hole exactly where the original speaks. FLAGGED by the tool (low confidence)."
+    },
+    {
+     "start": 1216.3,
+     "end": 1218.6,
+     "confidence": "high",
+     "note": "Crowd heckles 'Mentira.' / 'Mentiroso total.' / 'Voces sao mentirosos.' - user heard it as missing (unsure, noisy section); transcripts corroborate: the dub goes from 'Don't be like them' (ends 1215.8) to one 1216.0-1221.5 segment 'He, he's proof that we're not fooling anyone', with no heckle content at all. FLAGGED by the tool at 1216.62 (MEDIUM confidence - the run's only medium-tier true positive)."
+    }
+   ],
+   "verified_present": [
+    {
+     "start": 262.86,
+     "end": 263.3,
+     "confidence": "certain",
+     "note": "'Ou entao' - present in both (original has more background noise)"
+    },
+    {
+     "start": 419.07,
+     "end": 419.5,
+     "confidence": "certain",
+     "note": "'Esperem!' - present in both"
+    },
+    {
+     "start": 429.17,
+     "end": 429.7,
+     "confidence": "certain",
+     "note": "'Obrigado.' - present"
+    },
+    {
+     "start": 448.51,
+     "end": 448.9,
+     "confidence": "certain",
+     "note": "'Por favor,' - present"
+    },
+    {
+     "start": 579.47,
+     "end": 580.3,
+     "confidence": "certain",
+     "note": "'O que?' - present"
+    },
+    {
+     "start": 1424.89,
+     "end": 1425.5,
+     "confidence": "certain",
+     "note": "'Obrigada.' - present in both"
+    }
+   ],
+   "uncertain": [
+    {
+     "start": 269.48,
+     "end": 270.1,
+     "note": "'charlatoes!' - user leaned PRESENT but was unsure (noisy). Transcripts are ambiguous: the dub says 'These men did nothing to deserve such treatment' (266.6-269.2) where the original says 'Saiam ja daqui seus / charlatoes!' - a rewrite/reorder rather than a clean drop. NOT ground truth either way."
+    }
+   ],
+   "note_expected": "Recall must include BOTH verified_missing entries; the tool caught both on 2026-08-06 (Scribe). Known false-positive classes on this episode: the 00:16-01:22 opening song (18 flags - songs stay untranslated by design) and short interjections that are present but quiet. Of the 9 flags ear-checked, 2 were real, 6 present, 1 ambiguous."
   }
  }
 }
