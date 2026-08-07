@@ -1105,8 +1105,17 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     if len(_cold) == 2:
         _say("separating original and dub concurrently (2 workers)")
         _warm_pair(_cold)
-    _say("separating dialogue from the original mix")
-    ov = separate_dialogue(original_path)
+    if os.environ.get("AQC_NO_SEP", "").strip() == "1":
+        # EXPERIMENT: skip Demucs on the reference and hand Scribe the raw mix. Separation is
+        # 8-11 min of every run — the largest remaining cost once downloads are parallel — and
+        # it is not obviously helping ASR: Scribe is trained on real-world audio, while Demucs
+        # leaves artefacts that can be transcribed as words (POA EP21's laughter hallucination
+        # is a candidate). Detection quality decides, not speed.
+        _say("NO-SEP: using the original mix directly (Demucs skipped)")
+        ov = _load16(original_path)
+    else:
+        _say("separating dialogue from the original mix")
+        ov = separate_dialogue(original_path)
     if dub_is_clean:
         _say("dub is already clean dialogue — loading without separation")
         dv = _load16(dub_path)
