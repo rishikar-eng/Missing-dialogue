@@ -261,6 +261,9 @@ def _main():
 
     dump_key = _opt("--dump")
     series = _opt("--series") or ""
+    if series:
+        # the song bank is per-series and lives in S3; compare() reads it from here
+        os.environ["AQC_SERIES"] = series
     episode = _opt("--episode") or ""
     out_prefix = _opt("--out")
     clean = "--clean-dub" in args

@@ -471,6 +471,78 @@
     }
    ],
    "note_expected": "Use this case to defend the fill label: speech-like => present. Tally so far — SILENCE 7/8 real (EP10 x3 were song reprises, EP11 x1, EP21 x1, EP22 x2 real), SPEECH-LIKE 1/1 correctly present, AMBIENCE 2/3 real."
+  },
+  "poa-ep11-stems": {
+   "description": "POA EP11 QC'd from its 26 UNIFORM speaker tracks (validation that summing is sound when the folder is well-formed, after EP22's malformed set fabricated a dub). It independently re-found the drop at 20:15 that the mixed-dub run found. User ear-checked 5 more findings 2026-08-07.",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 427.02,
+     "end": 428.6,
+     "confidence": "certain",
+     "note": "'retiveram as chuvas,' — MEDIUM, dub silent. Ear-verified missing; the English right after says 'because the gods'."
+    },
+    {
+     "start": 1863.7,
+     "end": 1864.3,
+     "confidence": "certain",
+     "note": "'muitas coisas.' — low, dub silent. Ear-verified missing."
+    }
+   ],
+   "verified_present": [
+    {
+     "start": 732.27,
+     "end": 733.3,
+     "confidence": "certain",
+     "note": "'E voce sabe disso.' — dub says 'you know what'. NOT a song despite the repeat-heuristic tag."
+    },
+    {
+     "start": 780.85,
+     "end": 781.6,
+     "confidence": "certain",
+     "note": "'Claro que tinha.' — dub says 'no he was' (Paul wasn't ashamed), delivered faster. NOT a song."
+    },
+    {
+     "start": 974.27,
+     "end": 975.6,
+     "confidence": "certain",
+     "note": "'que sao por, por natureza.' — dub says 'who are ... by nature'."
+    }
+   ],
+   "note_expected": "The naive repeat heuristic mislabelled two DIALOGUE lines as songs (732.27, 780.85) — repetition alone is not a song signal; the per-series lyric bank is."
+  },
+  "poa-ep25": {
+   "description": "POA EP25 — never QC'd by the studio (tracker: not scheduled) and no mixed dub exists; QC'd from 29 uniform speaker tracks. 34 lines -> 5 findings. Ear-checked 2026-08-07.",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 767.66,
+     "end": 768.4,
+     "confidence": "certain",
+     "note": "'E, e.' — the English is missing TWO pain moans before 'is it very difficult Peter'. A VOCALIZATION drop that we caught only because the Portuguese moans were transcribed as words — the class Scribe normally cannot see."
+    }
+   ],
+   "verified_present": [],
+   "untranslated_song": [
+    {
+     "start": 1363.22,
+     "end": 1366.0,
+     "note": "'Voce diz quando se vira' — 100% overlap with the series lyric bank; same closing song as EP10."
+    },
+    {
+     "start": 1373.84,
+     "end": 1374.6,
+     "note": "'Eu sei...' — user judged missing; sits between two confirmed song lines, so most likely the same song. Bank does not catch it (words too short)."
+    },
+    {
+     "start": 1388.02,
+     "end": 1390.0,
+     "note": "'Eu sei que voce nao e meu...' — user identified it as a song; 80% bank overlap."
+    }
+   ],
+   "note_expected": "The song plays UNDER a dialogue scene at 22:35-23:12: song lines interleave with plain dialogue ('Quando foi que voce e o Lucas chegaram em Jerusalem?'), which is why block grouping cannot catch them — they are not contiguous."
   }
  },
  "_measurement_rule": "Durations/ends in verified_missing MUST be copied from the run's report.json, never estimated. An estimated set of ends made a duration-based false-flag rule look perfect in validation while it actually demoted a verified drop (2026-08-07)."

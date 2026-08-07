@@ -29,6 +29,7 @@ meant to run inside the `dialogue-qc-sonar` Fargate task, not on the always-on b
 from __future__ import annotations
 
 import os
+import re
 import threading
 from typing import Any
 
@@ -859,7 +860,61 @@ def _norm_words(t: str | None) -> set:
                                  (t or "").lower()) if len(w) >= 2}
 
 
-def _tag_song_reprise(errors: list[dict]) -> int:
+def _song_bank(series: str | None) -> set:
+    """Lyrics this SERIES is known to leave untranslated, learned from every episode we have
+    already run. A show's theme recurs in all of its episodes, so a block detected in EP10
+    teaches EP25 — which matters because the reprise rule can otherwise only match against
+    the block found in the SAME episode. EP25 proved the gap: its detected block is the
+    OPENING song, so a mid-episode burst of the CLOSING song ("Voce diz quando se vira") had
+    nothing local to match and was reported as dropped dialogue.
+    Best-effort: no bank, no behaviour change."""
+    if not series:
+        return set()
+    try:
+        import json as _json
+
+        import boto3
+        b = os.environ.get("DQC_S3_BUCKET", "")
+        if not b:
+            return set()
+        key = f"songbank/{re.sub(r'[^A-Za-z0-9]+', '-', series).strip('-').lower()}.json"
+        body = boto3.client("s3").get_object(Bucket=b, Key=key)["Body"].read()
+        return {w for w in _json.loads(body).get("words", []) if len(w) > 2}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _save_song_bank(series: str | None, errors: list[dict]) -> None:
+    """Merge this run's block lyrics into the series bank so later episodes benefit."""
+    if not series:
+        return
+    try:
+        import json as _json
+
+        import boto3
+        b = os.environ.get("DQC_S3_BUCKET", "")
+        if not b:
+            return
+        words = set()
+        for e in errors:
+            if e.get("type") == "MISSING" and e.get("block"):
+                words |= {w for w in _norm_words(e.get("text")) if len(w) > 2}
+        if not words:
+            return
+        s3 = boto3.client("s3")
+        key = f"songbank/{re.sub(r'[^A-Za-z0-9]+', '-', series).strip('-').lower()}.json"
+        try:
+            old = set(_json.loads(s3.get_object(Bucket=b, Key=key)["Body"].read()).get("words", []))
+        except Exception:  # noqa: BLE001
+            old = set()
+        merged = sorted(old | words)
+        s3.put_object(Bucket=b, Key=key, Body=_json.dumps({"words": merged}).encode())
+        print(f"[audio_qc] song bank for {series}: {len(old)} -> {len(merged)} words", flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _tag_song_reprise(errors: list[dict], bank: set | None = None) -> int:
     """A missing line whose words also appear INSIDE a detected block is the same song.
 
     POA EP10 flagged three lines at 14:31-14:56 that a listener confirmed absent from the
@@ -874,10 +929,12 @@ def _tag_song_reprise(errors: list[dict]) -> int:
     """
     blocked = [e for e in errors if e.get("type") == "MISSING" and e.get("block")]
     loose = [e for e in errors if e.get("type") == "MISSING" and not e.get("block")]
-    if not blocked or not loose:
+    if not loose or (not blocked and not bank):
         return 0
     lyr = [(e["block"]["id"], e.get("script_start_s"), _norm_words(e.get("text")))
            for e in blocked]
+    if bank:                       # the series' known lyrics, learned from earlier episodes
+        lyr.append((0, None, set(bank)))
     n = 0
     for e in loose:
         w = _norm_words(e.get("text"))
@@ -1463,7 +1520,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     if n_unchecked:
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
              f"({n_unchecked} unchecked — transcript unreliable on one side)")
-    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked)
+    return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
+                   series=os.environ.get("AQC_SERIES") or None)
 
 
 def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
@@ -1501,15 +1559,19 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
-            n_unchecked: int = 0) -> dict[str, Any]:
+            n_unchecked: int = 0, series: str | None = None) -> dict[str, Any]:
     try:
         n_blocks = _group_missing(errors)      # presentation only; never fatal
     except Exception:  # noqa: BLE001
         n_blocks = 0
     try:
-        n_reprise = _tag_song_reprise(errors)  # same song, sung again elsewhere
+        n_reprise = _tag_song_reprise(errors, _song_bank(series))
     except Exception:  # noqa: BLE001
         n_reprise = 0
+    try:
+        _save_song_bank(series, errors)        # teach the bank for the next episode
+    except Exception:  # noqa: BLE001
+        pass
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
             for c in ("high", "medium", "low")}
