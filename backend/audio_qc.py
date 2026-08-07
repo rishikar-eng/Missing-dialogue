@@ -1140,7 +1140,13 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             _say("SCRIBE-ONLY: one ElevenLabs Scribe reading per side")
             import concurrent.futures as _cfs
             with _cfs.ThreadPoolExecutor(max_workers=2) as _tp:
-                _fo = _tp.submit(transcribe_scribe, ov, original_path + ".scribe.json",
+                # The cache key must encode HOW the audio was prepared: a transcript of the
+                # SEPARATED reference and one of the RAW mix are different readings of the
+                # same file, and keying both on the file id silently served the wrong one
+                # (it made the first no-sep A/B a no-op that looked like a perfect match).
+                _osuf = (".raw.scribe.json"
+                         if os.environ.get("AQC_NO_SEP", "").strip() == "1" else ".scribe.json")
+                _fo = _tp.submit(transcribe_scribe, ov, original_path + _osuf,
                                  LANG1.get(original_lang.lower()))
                 _fd = _tp.submit(transcribe_scribe, dv, dub_path + ".scribe.json",
                                  LANG1.get(dub_lang.lower()))

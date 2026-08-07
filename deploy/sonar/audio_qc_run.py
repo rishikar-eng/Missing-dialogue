@@ -35,7 +35,8 @@ _SEP_CACHE: dict[str, tuple[str, str, list[str]]] = {}   # local -> (bucket, bas
 # Sarvam reading. The reading is per-FILE and language-independent, so caching it stops a
 # 6-language fan-out from paying Sarvam six times for the same original — the single
 # biggest source of avoidable spend (see docs/scriptless-qc-cost.md).
-_CACHE_SUF = (".voc16.npy", ".acc16.npy", ".sarvam.json", ".scribe.json")
+_CACHE_SUF = (".voc16.npy", ".acc16.npy", ".sarvam.json", ".scribe.json",
+              ".raw.scribe.json")   # raw-mix reading is a DIFFERENT artefact
 
 
 def _cache_attach(dst: str, base: str) -> None:
