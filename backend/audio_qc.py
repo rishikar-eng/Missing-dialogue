@@ -937,13 +937,14 @@ _SCRIBE_MIN_ALP = -0.35
 # The bar is ONE word, not two, because it must not demote a verified catch: EP12's real drop
 # "Mentiroso total." is two words, and a 2-word rule would have buried it.
 _FRAGMENT_MAX_WORDS = 1
-# DURATION is the sharpest discriminator we have measured. Across every ear-checked POA line:
-#   real drops   1.0 s (Alguem paga ele) .. 5 s (Damaris), with Mentiroso total at 0.9 s
-#   false flags  0.4 s (Ou entao, Por favor, Esperem) .. 0.8 s (O que?)
-# A sub-second reference line carries too little for the matcher to pair, and studios routinely
-# fold such interjections into the neighbouring line rather than dropping them. 0.85 s sits in
-# the measured gap: it demotes 6 of the 7 verified false flags and none of the real ones.
-_FRAGMENT_MIN_SECONDS = 0.85
+# DURATION LOOKED like the sharpest discriminator and IS NOT — recorded so nobody retries it.
+# Measured from the reports (not estimated): real drops run 0.42 s (Alguem paga ele), 0.93 s
+# (Mentiroso total), 1.58 s (charlatao), 2.96 s (Damaris); false flags run 0.38 s (Ou entao) to
+# 1.70 s (Pra soltar esse romano). The classes overlap almost entirely, so no threshold
+# separates them — an 0.85 s bar demoted a VERIFIED drop, which the EP11 stem run then
+# demonstrated in production. The rule was shipped on a validation that compared the threshold
+# against durations invented for the fixture rather than measured, and reverted on real data.
+_FRAGMENT_MIN_SECONDS = 0.0     # disabled: word count only
 
 
 def _reliable(q: dict | None, text: str | None = None) -> bool:
@@ -1387,7 +1388,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             except Exception:  # noqa: BLE001
                 _f = None
             if (len((txt or "").split()) <= _FRAGMENT_MAX_WORDS
-                    or (e - s) < _FRAGMENT_MIN_SECONDS):
+                    or (_FRAGMENT_MIN_SECONDS > 0 and (e - s) < _FRAGMENT_MIN_SECONDS)):
                 _err["fragment"] = True
             if _f:
                 _err.update(_f)
