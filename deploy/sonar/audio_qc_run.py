@@ -184,7 +184,10 @@ def _local(p: str) -> str:
             # read (Demucs loads the .npy pair), so skipping its download is free.
             _cache_attach(target, f"sepcache/{name}.{info.get('sha1') or fid}")
             _hit = _SEP_CACHE.get(target, (None, None, []))[2]
-            if ".voc16.npy" in _hit and ".acc16.npy" in _hit:
+            # The skip is only safe when the stems are all we need. AQC_NO_SEP reads the RAW
+            # audio instead, so skipping its download leaves nothing to open.
+            if (".voc16.npy" in _hit and ".acc16.npy" in _hit
+                    and os.environ.get("AQC_NO_SEP", "").strip() != "1"):
                 print(f"[run] both stems cached — skipping download of {name}", flush=True)
                 return target
         except Exception as e:  # cache is an optimization, never a blocker
