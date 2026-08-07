@@ -449,22 +449,11 @@
    "description": "POA EP22 — NO MIXED DUB EXISTS; QC'd from 45 summed character tracks. 49 missing lines = 32 findings (1 song block). Ear-checked 2026-08-06 + transcript diff.",
    "original_box_id": "auto:original_videos_folder/POA_EP22 Low Res.mp4",
    "dub_box_id": "auto:Voiceover/POA_EPISODE22 (45 character tracks, summed)",
-   "verified_missing": [
-    {
-     "start": 1052.92,
-     "end": 1055.5,
-     "confidence": "certain",
-     "note": "'Eu quero saber como que jamais faria isso.' — MEDIUM, fill=silence. Transcript diff: the English goes from 'They're plotting against you there.' directly to 'It's because you don't know what's happening in the cities of the Gentiles.'"
-    },
-    {
-     "start": 1055.96,
-     "end": 1058.0,
-     "confidence": "certain",
-     "note": "'Jamais eu faria isso com voces.' — low, fill=silence. Same hole; the two lines form ONE dropped exchange of ~5 s."
-    }
-   ],
+   "verified_missing": [],
    "verified_present": [],
-   "note_expected": "Two consecutive real drops — a dropped exchange, both dub-silent."
+   "note_expected": "Two consecutive real drops — a dropped exchange, both dub-silent.",
+   "INVALID": true,
+   "invalidated_note": "RETRACTED 2026-08-07. This episode was QC'd from a SUMMED speaker folder, and that folder is not a timeline set: of its 45 tracks, 34 have different lengths (148 s to 3376 s) and the short ones carry BWF TimeReference = 0, so nothing records where they belong. The summing code stacked every track from 00:00, which moves those characters' dialogue to the top of the episode and leaves their true slots silent — indistinguishable from a dropped line. The two drops recorded here (1052.92, 1055.96) were ear-verified AND transcript-verified, but BOTH used that fabricated dub, so neither is trustworthy. The user spotted it from a clip that was silent in a way that felt wrong. Re-verify against a real mixed dub before restoring. EP21 (39 tracks, all 444 MB) and EP23 (48 tracks, all 343 MB) are uniform full-length sets and remain valid."
   },
   "poa-ep23": {
    "original_lang": "portuguese",

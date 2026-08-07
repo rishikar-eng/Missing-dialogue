@@ -109,6 +109,7 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
     BATCH = 8
     acc = None
     done_n = 0
+    durations, names = [], []
     for b0 in range(0, len(files), BATCH):
         batch = files[b0:b0 + BATCH]
         paths = {}
@@ -135,6 +136,8 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
                         acc = np.pad(acc, (0, len(x) - len(acc)))
                     acc[:len(x)] += x
                 done_n += 1
+                durations.append(len(x) / 16000.0)
+                names.append(f["name"])
                 print(f"[run]   +{done_n}/{len(files)} {f['name'][:38]} "
                       f"({len(x) / 16000:.0f}s)", flush=True)
             finally:
@@ -144,6 +147,22 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
                     pass
     if acc is None:
         raise RuntimeError("no speaker track could be read")
+    # TIMELINE SANITY. Summing assumes every track is a full-length timeline file that starts
+    # at 00:00 — true for EP21/EP23 (39 and 48 tracks, all identical length). EP22 is not:
+    # 45 tracks ranging 148 s to 3376 s, and the short ones carry BWF TimeReference = 0, so
+    # NOTHING says where they belong. Stacking them from zero silently moves those
+    # characters' dialogue to the top of the episode and leaves their real slots empty —
+    # which then reads as missing dialogue. Refuse rather than QC a fabricated dub.
+    full = max(durations)
+    short = [(n, d) for n, d in zip(names, durations) if d < 0.9 * full]
+    if short:
+        raise RuntimeError(
+            f"speaker folder {folder_id} is not a timeline set: {len(short)} of {len(durations)} "
+            f"tracks are shorter than the episode ({full:.0f}s) and carry no BWF TimeReference, "
+            f"so their position is unknown — e.g. "
+            + ", ".join(f"{n} ({d:.0f}s)" for n, d in short[:4])
+            + ". Summing them would misplace that dialogue and manufacture missing-line flags. "
+              "Use a mixed dub for this episode, or ask the studio for full-length stems.")
     peak = float(np.abs(acc).max())
     if peak > 0.99:                       # summing N tracks can clip; keep headroom
         acc *= 0.9 / peak
