@@ -301,11 +301,22 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
 
 
 
-def build_marker_midi(report, out_path):
+def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
     """Pro Tools-importable marker file: every MISSING flag becomes a named Memory
     Location at its timecode (File > Import > MIDI, markers enabled). A true .ptx is
-    Avid-proprietary and cannot be written outside Pro Tools; marker MIDI is the standard
-    interchange - the sound team jumps flag-to-flag inside their own session."""
+    Avid-proprietary and encrypted — no open tool writes one — so marker MIDI is the
+    interchange the sound team can actually use.
+
+    Written for POST, not music, because that is where imports go wrong:
+      * TYPE 1 with a dedicated conductor track — several importers ignore a bare type-0.
+      * A named marker track, since unnamed tracks get skipped.
+      * An SMPTE offset meta event, so a session that starts at 01:00:00:00 does not put
+        every marker an hour out. Pass start_tc_s to match the session start.
+      * Tempo pinned to 120 BPM with 480 ppqn, i.e. exactly 960 ticks per second, so the
+        tick maths is round and a tempo-following import lands where it should.
+    `start_tc_s` shifts every marker EARLIER by the session start, so a marker at 6:01 in
+    a session starting at 01:00:00:00 is written at 6:01 past that start.
+    """
     import struct
 
     TPQ = 480                      # at 120 BPM -> 960 ticks per second
@@ -317,7 +328,23 @@ def build_marker_midi(report, out_path):
             out.append((n & 0x7F) | 0x80)
         return bytes(reversed(out))
 
-    events = []
+    def track(events):
+        data = b"".join(events) + bytes([0, 255, 47, 0])          # + EOT
+        return b"MTrk" + struct.pack(">I", len(data)) + data
+
+    # --- conductor track: tempo + SMPTE start, what a post session needs to place ticks
+    fps_code = {24: 0, 25: 1, 29.97: 2, 30: 3}.get(round(float(fps), 2), 1)
+    t0 = max(0.0, float(start_tc_s))
+    hh, mm = int(t0 // 3600), int((t0 % 3600) // 60)
+    ss, ff = int(t0 % 60), int(round((t0 % 1) * fps))
+    conductor = [
+        bytes([0, 255, 3, 8]) + b"Markers ",                       # track name
+        bytes([0, 255, 81, 3, 7, 161, 32]),                        # 120 BPM
+        bytes([0, 255, 84, 5, (fps_code << 5) | hh, mm, ss, ff, 0]),  # SMPTE offset
+        bytes([0, 255, 88, 4, 4, 2, 24, 8]),                       # 4/4 time signature
+    ]
+
+    events, prev = [bytes([0, 255, 3, 12]) + b"QC Markers  "], 0
     for e in sorted((x for x in report.get("errors", []) if x["type"] == "MISSING"),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
@@ -325,19 +352,15 @@ def build_marker_midi(report, out_path):
                  + ((" " + str(e["character"])) if e.get("character") else "")
                  + ((" " + str(e["confidence"])) if e.get("confidence") else "")
                  + ((" " + e["stability"]) if e.get("stability") else "")
+                 + (" [song]" if (e.get("block") or e.get("song_reprise")) else "")
+                 + (" [fragment]" if e.get("fragment") else "")
                  + " @%d:%04.1f" % (int(t // 60), t % 60))
-        events.append((int(round(t * 2 * TPQ)), label.encode("ascii", "replace")[:60]))
-    TEMPO = bytes([0, 255, 81, 3, 7, 161, 32])   # 120 BPM meta event
-    MARK = bytes([255, 6])                       # marker meta type
-    EOT = bytes([0, 255, 47, 0])
-    track = TEMPO
-    prev = 0
-    for tick, name in events:
-        track += vlq(tick - prev) + MARK + vlq(len(name)) + name
+        name = label.encode("ascii", "replace")[:60]
+        tick = int(round(t * 2 * TPQ))
+        events.append(vlq(tick - prev) + bytes([255, 6]) + vlq(len(name)) + name)
         prev = tick
-    track += EOT
-    data = (b"MThd" + struct.pack(">IHHH", 6, 0, 1, TPQ)
-            + b"MTrk" + struct.pack(">I", len(track)) + track)
+    data = (b"MThd" + struct.pack(">IHHH", 6, 1, 2, TPQ)           # TYPE 1, two tracks
+            + track(conductor) + track(events))
     with open(out_path, "wb") as f:
         f.write(data)
     return out_path
