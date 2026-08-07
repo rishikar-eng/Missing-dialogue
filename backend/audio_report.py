@@ -175,13 +175,15 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
 
 
 
+    # fragments (1-2 word reference lines) rank below every real finding, whatever their tier
     order = {"high": 0, "medium": 1, "low": 2}
 
 
     missing = sorted((e for e in report.get("errors", []) if e["type"] == "MISSING"),
 
 
-                     key=lambda e: (order.get(e.get("confidence"), 3),
+                     key=lambda e: (1 if e.get("fragment") else 0,
+                                    order.get(e.get("confidence"), 3),
 
 
                                     e.get("script_start_s") or 0.0))
@@ -229,6 +231,8 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         if fill and e.get("fill_dyn_db") is not None:
             fill += f" ({e['fill_rel_db']:+.0f} dB vs speech, {e['fill_dyn_db']:.0f} dB range)"
         blk = ""
+        if e.get("fragment") and not e.get("block") and not e.get("song_reprise"):
+            blk = "fragment (1-2 words) — too short to match reliably; check last"
         if e.get("song_reprise") and not e.get("block"):
             r = e["song_reprise"]
             blk = (f"same lyric as block {r['block']} (sung again at "

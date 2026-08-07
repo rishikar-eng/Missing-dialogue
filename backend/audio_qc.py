@@ -928,6 +928,17 @@ def _group_missing(errors: list[dict]) -> int:
     return bid
 
 
+# Scribe reports a genuine mean per-word logprob, so a low one means the ENGINE doubts its
+# own words — the signature of words invented over laughter/noise. See _reliable.
+_SCRIBE_MIN_ALP = -0.35
+# A single-word reference line ("Sim.", "Tá.", "É!") gives the matcher almost nothing to match
+# on, and 44% of POA's individual flags are exactly that. They are NOT suppressed (a real
+# "Obrigada." can exist) — just marked so the report ranks them below findings worth acting on.
+# The bar is ONE word, not two, because it must not demote a verified catch: EP12's real drop
+# "Mentiroso total." is two words, and a 2-word rule would have buried it.
+_FRAGMENT_MAX_WORDS = 1
+
+
 def _reliable(q: dict | None, text: str | None = None) -> bool:
     """Whisper's own confidence in a segment. A flag built on a garbled transcript is noise —
     EP43's fight scene produced ~20 false 'missing' from exactly that.
@@ -947,6 +958,15 @@ def _reliable(q: dict | None, text: str | None = None) -> bool:
     if q.get("cr", 1.0) > (1.7 if q.get("engine") == "sarvam" else 2.4):
         return False
     words = len((text or "").split())
+    # SCRIBE's alp is a REAL per-word mean logprob (Whisper's is shared across a whole ~30 s
+    # decode window, which is why it only disqualifies short segments there). Measured on the
+    # POA ear-checks: the one confirmed hallucination — laughter transcribed as "Se impostor"
+    # — scored -0.578, while every verified REAL drop scored -0.031, -0.046 and -0.220 and a
+    # correctly-present line scored -0.000. -0.35 sits in that gap with room on both sides and
+    # removes ~10% of flags. Applied regardless of length: a confident engine saying it is
+    # unsure is evidence, not something a word count should override.
+    if q.get("engine") == "scribe" and q.get("alp", 0.0) < _SCRIBE_MIN_ALP:
+        return False
     return q.get("alp", -9.0) > -1.2 or words >= 4
 
 
@@ -1344,6 +1364,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref, dwin)
             except Exception:  # noqa: BLE001
                 _f = None
+            if len((txt or "").split()) <= _FRAGMENT_MAX_WORDS:
+                _err["fragment"] = True
             if _f:
                 _err.update(_f)
             _say(f"  MISSING @{s:.1f}-{e:.1f}s best={best_seg:.2f}"
@@ -1472,7 +1494,10 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
     # still in `errors`, so nothing is hidden and recall is untouched.
     grouped_lines = sum(1 for e in errors if e.get("block"))
     reprise_lines = sum(1 for e in errors if e.get("song_reprise") and not e.get("block"))
-    n_findings = max(n_blocks, n["MISSING"] - grouped_lines - reprise_lines + n_blocks)
+    frag_lines = sum(1 for e in errors if e.get("fragment") and not e.get("block")
+                     and not e.get("song_reprise"))
+    n_findings = max(n_blocks,
+                     n["MISSING"] - grouped_lines - reprise_lines - frag_lines + n_blocks)
     fills = {}
     for e in errors:
         if e.get("type") == "MISSING" and e.get("fill"):
@@ -1502,6 +1527,8 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "n_missing_blocks": n_blocks,
             # lines that are the same song sung elsewhere in the episode, not dialogue
             "n_song_reprise": n_reprise,
+            # one/two-word reference lines — reported, but ranked below real findings
+            "n_fragments": frag_lines,
             # what the dub does under a missing line: silence | ambience | speech-like
             "missing_by_dub_fill": fills,
         },
