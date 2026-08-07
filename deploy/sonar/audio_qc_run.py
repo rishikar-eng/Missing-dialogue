@@ -104,7 +104,9 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
     # single episode, and Box is the only thing working. Fetch a batch CONCURRENTLY, sum it,
     # delete it. Peak disk stays ~BATCH x 450 MB.
     import concurrent.futures as _cf
-    BATCH = 4
+    # 8-wide: measured 54 s/track serial, ~20 s at 4-wide — Box, not the task, is the limit,
+    # and peak disk is only BATCH x ~450 MB.
+    BATCH = 8
     acc = None
     done_n = 0
     for b0 in range(0, len(files), BATCH):
@@ -250,11 +252,29 @@ def _main():
     o, d, ol, dl = args[:4]
     # the two ~450MB inputs download CONCURRENTLY — pure network wait
     import concurrent.futures as _cfdl
+
+    def _prep_original(path: str) -> str:
+        """Fetch the original AND separate it, so Demucs runs while the dub is still
+        downloading. On a speaker-track episode that dub side is 10-16 minutes of pure
+        network with the CPU otherwise idle, and separation is 8-11 minutes of pure CPU —
+        overlapping them is free wall-clock. The stems land in the on-disk cache next to the
+        file, so compare()'s own separate_dialogue() call is a cache read.
+        """
+        local = _local(path)
+        if os.environ.get("AQC_NO_SEP", "").strip() == "1":
+            return local                      # raw-mix mode never separates the reference
+        try:
+            print("[run] pre-separating the original while the dub downloads", flush=True)
+            audio_qc.separate_dialogue(local)
+        except Exception as e:  # noqa: BLE001 — compare() will just separate it itself
+            print(f"[run] pre-separation skipped: {e}", flush=True)
+        return local
+
     if warm_only:
         o = _local(o)
     else:
         with _cfdl.ThreadPoolExecutor(max_workers=2) as _dl:
-            _fo, _fd = _dl.submit(_local, o), _dl.submit(_local, d)
+            _fo, _fd = _dl.submit(_prep_original, o), _dl.submit(_local, d)
             o, d = _fo.result(), _fd.result()
 
     if mkmix:
