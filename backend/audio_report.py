@@ -390,3 +390,52 @@ def build_ref_audio(errors, original_path, out_path, timeline_path=None,
     if tl is not None:
         sf.write(str(timeline_path), tl, sr, format="FLAC")
     return out_path
+
+
+def build_marker_csv(report, out_path, fps=25.0):
+    """Marker list as REAPER-format CSV — the text format Pro Tools marker converters read.
+
+    Pro Tools cannot import a plain text marker list natively (File > Import > Session Data
+    only reads another SESSION), so the studio route to a real .ptx is a converter such as
+    EdiMarker (soundsinsync.com), which ingests Nuendo/Reaper/iZotope-RX marker text or Excel
+    and exports PTX or MIDI. We already ship the MIDI; this gives them the text side, so they
+    can produce a .ptx session of markers without us guessing at Avid's closed format.
+
+    Columns are Reaper's own export layout, which is what those tools expect:
+        #,Name,Start,End,Length,Color
+    Times are HH:MM:SS.mmm. Every MISSING flag becomes one marker; block members and song
+    reprises are labelled so the sound team can see what NOT to chase.
+    """
+    import csv
+
+    def tc(t):
+        t = max(0.0, float(t))
+        return "%d:%02d:%06.3f" % (int(t // 3600), int((t % 3600) // 60), t % 60)
+
+    rows = []
+    for i, e in enumerate(sorted((x for x in report.get("errors", [])
+                                  if x["type"] == "MISSING" and x.get("script_start_s") is not None),
+                                 key=lambda x: x["script_start_s"]), start=1):
+        t = float(e["script_start_s"])
+        bits = ["MISSING"]
+        if e.get("confidence"):
+            bits.append(str(e["confidence"]).upper())
+        if e.get("block"):
+            bits.append("[song/un-dubbed block %d]" % e["block"]["id"])
+        elif e.get("song_reprise"):
+            bits.append("[song reprise]")
+        elif e.get("fragment"):
+            bits.append("[fragment]")
+        if e.get("fill") == "silence":
+            bits.append("(dub silent)")
+        elif e.get("fill") == "ambience":
+            bits.append("(covered by ambience)")
+        txt = (e.get("text") or "").strip().replace('"', "'")
+        if txt:
+            bits.append("- " + txt[:60])
+        rows.append(["M%d" % i, " ".join(bits), tc(t), tc(t), "0", ""])
+    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["#", "Name", "Start", "End", "Length", "Color"])
+        w.writerows(rows)
+    return out_path
