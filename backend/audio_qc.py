@@ -876,6 +876,7 @@ def _speech_ref_db(dv: np.ndarray, dseg: list) -> float | None:
 # summary can count the block once and the report can say what it really is.
 _BLOCK_GAP_S = 10.0      # measured on EP12: 10 s captures the whole song, 8 s missed one line
 _BLOCK_MIN = 4           # EP12's real drops sat in groups of 1 and 2 — well clear of this
+_SONG_EDGE_S = 15.0      # how far past the outermost confirmed lyric a song still reaches
 _BLOCK_MAX_SLOT_COV = 0.35   # a block means the dub is SILENT throughout, not just unmatched
 
 
@@ -921,38 +922,54 @@ def _save_song_bank(series: str | None, errors: list[dict]) -> None:
         b = os.environ.get("DQC_S3_BUCKET", "")
         if not b:
             return
-        # ONLY BANK BLOCKS THAT ACTUALLY LOOK LIKE A SONG. A block is a purely structural
-        # artefact — 4+ consecutive missing lines with the dub quiet — which is also the
-        # exact signature of a genuinely un-dubbed SCENE, or of a bad delivery (EP22's
-        # fabricated dub produced 49 missing lines and a "song block"). Banking those
-        # taught the series bank that ordinary dialogue is lyric, permanently and
-        # silently, and the bank is a monotonic union that is never pruned. Songs repeat
-        # themselves and scenes do not, so the block's combined text must pass the same
-        # repetition test used elsewhere before a single word of it is learned.
-        by_block: dict[Any, list[str]] = {}
+        # A LYRIC IS A LINE THAT COMES BACK IN ANOTHER EPISODE.
+        #
+        # A block is a purely structural artefact — 4+ consecutive missing lines with the
+        # dub quiet — which is also the exact signature of an un-dubbed SCENE or a bad
+        # delivery. Banking every block taught the series that ordinary dialogue was lyric,
+        # permanently and silently (POA's live bank had absorbed 122 words of plain
+        # vocabulary). But testing a block for internal repetition is the wrong instrument
+        # too: POA's theme does not repeat WITHIN an episode, it repeats ACROSS them, so
+        # that test refused to learn the real songs and the closing theme came back as
+        # four high-confidence "drops".
+        #
+        # So block lines are recorded as CANDIDATES with the episode that produced them,
+        # and words are promoted to the bank only once the same line has appeared in two
+        # DIFFERENT episodes. A dropped scene happens once; a title theme happens weekly.
+        episode = str(os.environ.get("AQC_EPISODE") or "").strip() or "?"
+        cand_key = f"songbank/{re.sub(r'[^A-Za-z0-9]+', '-', series).strip('-').lower()}.candidates.json"
+        s3 = boto3.client("s3")
+        try:
+            cands = _json.loads(s3.get_object(Bucket=b, Key=cand_key)["Body"].read())
+        except Exception:  # noqa: BLE001
+            cands = {}
         for e in errors:
             if e.get("type") == "MISSING" and e.get("block"):
-                by_block.setdefault(e["block"].get("id"), []).append(e.get("text") or "")
+                line = " ".join(sorted(w for w in _norm_words(e.get("text")) if len(w) > 2))
+                if len(line.split()) < 3:
+                    continue                   # too generic to identify a lyric by
+                seen = set(cands.get(line, []))
+                seen.add(episode)
+                cands[line] = sorted(seen)
+        s3.put_object(Bucket=b, Key=cand_key, Body=_json.dumps(cands).encode())
         words = set()
-        for bid, texts in by_block.items():
-            joined = " ".join(t for t in texts if t)
-            if not _songlike(joined):
-                print(f"[audio_qc] block {bid} is not song-like — not learned as lyric",
-                      flush=True)
-                continue
-            for t in texts:
-                words |= {w for w in _norm_words(t) if len(w) > 2}
+        for line, eps in cands.items():
+            if len(eps) >= 2:                  # the same line, in two different episodes
+                words |= set(line.split())
         if not words:
+            print(f"[audio_qc] song bank: {len(cands)} candidate lines, none yet seen in "
+                  f"two episodes — nothing promoted", flush=True)
             return
-        s3 = boto3.client("s3")
         key = f"songbank/{re.sub(r'[^A-Za-z0-9]+', '-', series).strip('-').lower()}.json"
-        try:
-            old = set(_json.loads(s3.get_object(Bucket=b, Key=key)["Body"].read()).get("words", []))
-        except Exception:  # noqa: BLE001
-            old = set()
-        merged = sorted(old | words)
+        # Derived from the candidate ledger every time rather than unioned into the old
+        # bank, so the bank stays a pure function of what has actually been observed twice
+        # — a wrong promotion can be undone by correcting the ledger instead of living
+        # forever in a set nothing ever prunes.
+        merged = sorted(words)
         s3.put_object(Bucket=b, Key=key, Body=_json.dumps({"words": merged}).encode())
-        print(f"[audio_qc] song bank for {series}: {len(old)} -> {len(merged)} words", flush=True)
+        print(f"[audio_qc] song bank for {series}: {len(merged)} words promoted from "
+              f"{sum(1 for e in cands.values() if len(e) >= 2)} of {len(cands)} candidate "
+              f"lines", flush=True)
     except Exception:  # noqa: BLE001
         pass
 
@@ -998,6 +1015,32 @@ def _tag_song_reprise(errors: list[dict], bank: set | None = None) -> int:
                                      "source": "series bank" if bid == 0 else "this episode"}
                 n += 1
                 break
+
+    # SONG NEIGHBOURHOOD. Word overlap can only judge a line with three-plus content words,
+    # so the short lines of a theme ("Te deixar ir.", "Me sentir assim...") slip through and
+    # arrive at the top of the queue as high-confidence drops — four of them did on EP11.
+    # A song is contiguous in time: where two or more confirmed lyric lines bracket a
+    # stretch, the untagged flags between them belong to the same performance. Requiring
+    # two anchors, and only reaching inside the stretch they bound, keeps this from
+    # swallowing ordinary dialogue that merely sits near a song.
+    # Anchors use a WEAKER bar than demotion does. Two shared lyric words is not enough to
+    # call a line a reprise, but it is enough to say "a song is happening around here" —
+    # and a stretch bracketed by two such hints, each independently pointing at the same
+    # known lyrics, is strong evidence even though neither hint is on its own.
+    anchors = sorted(e["script_start_s"] for e in errors
+                     if e.get("script_start_s") is not None
+                     and (e.get("song_reprise")
+                          or any(len(_norm_words(e.get("text")) & bw) >= 2
+                                 for _, _, bw in lyr if len(bw) >= 3)))
+    if len(anchors) >= 2:
+        lo, hi = anchors[0] - _SONG_EDGE_S, anchors[-1] + _SONG_EDGE_S
+        for e in loose:
+            t = e.get("script_start_s")
+            if e.get("song_reprise") or t is None or not (lo <= t <= hi):
+                continue
+            e["song_reprise"] = {"block": None, "matches_at": None,
+                                 "source": "between confirmed lyric lines"}
+            n += 1
     return n
 
 

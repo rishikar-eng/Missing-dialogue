@@ -265,6 +265,10 @@ def _main():
         # the song bank is per-series and lives in S3; compare() reads it from here
         os.environ["AQC_SERIES"] = series
     episode = _opt("--episode") or ""
+    if episode:
+        # the song bank promotes a lyric only once the SAME line has been seen in two
+        # different episodes, so it has to know which episode produced this run
+        os.environ["AQC_EPISODE"] = str(episode)
     out_prefix = _opt("--out")
     clean = "--clean-dub" in args
     mkmix = "--make-dub-mix" in args
