@@ -850,6 +850,48 @@ def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
     return {"fill": kind, "fill_rel_db": round(rel, 1), "fill_dyn_db": round(dyn_db, 1)}
 
 
+_SUNG_ACC_OVER_VOC_DB = 0.0   # accompaniment at or above the vocal = a music mix, not speech
+
+
+def _sung(oacc: np.ndarray | None, ov: np.ndarray, s: float, e: float) -> dict | None:
+    """Was this reference line SUNG rather than spoken?
+
+    Nothing else in the pipeline asks. Demucs' vocals stem contains singing by definition —
+    separating the original hands us a clean a cappella of the theme song, which VAD reads as
+    speech and the ASR transcribes into ordinary-looking reference lines. The dub side is a
+    dialogue-only delivery that cannot contain a song vocal, so every sung line is flagged
+    missing on every episode forever. POA's songs are retained in Portuguese and never dubbed
+    (ear-verified 2026-08-10), so those flags can never be a real finding.
+
+    The discriminator is the OTHER half of the separation we already pay for: in a song the
+    music bed sits at or above the vocal; in dialogue speech leads its background by a wide
+    margin, because a mix where it did not would be unintelligible. Measured over 8 episodes
+    and 327 flags: sung median +1.7 dB, spoken median -12.3 dB.
+
+    Validated against every ear-verified line we have — 7 real drops and 11 confirmed false
+    flags, all of them dialogue: NONE reaches the threshold, the closest by 2.1 dB. This
+    only ever DEMOTES a line and drops it from the markers; it is never deleted, so a
+    mislabel costs a reviewer nothing but a row in the workbook.
+    """
+    if oacc is None or ov is None or not len(oacc) or not len(ov):
+        return None
+    # A very short line is widened to a 0.3 s window rather than skipped: we are measuring
+    # the music-to-voice BALANCE around the line, which is stable over a wider window, and
+    # sub-second lines are precisely where the rest of the pipeline is least reliable. The
+    # 0 dB threshold was validated with this same widening applied.
+    i0 = max(0, int(s * 16000))
+    i1 = min(len(ov), len(oacc), int(max(e, s + 0.3) * 16000))
+    if i1 - i0 < 1600:                       # ran off the end of the file — cannot measure
+        return None
+
+    def _db(x: np.ndarray) -> float:
+        x = x.astype("float64")
+        return 20.0 * np.log10(max(float(np.sqrt((x ** 2).mean())), 1e-9))
+
+    d = _db(oacc[i0:i1]) - _db(ov[i0:i1])
+    return {"sung": bool(d >= _SUNG_ACC_OVER_VOC_DB), "sung_margin_db": round(d, 1)}
+
+
 def _speech_ref_db(dv: np.ndarray, dseg: list) -> float | None:
     """The dub's OWN typical speech level (median 100 ms frame across its speech windows) —
     the yardstick every fill measurement is relative to."""
@@ -1366,9 +1408,13 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         # is a candidate). Detection quality decides, not speed.
         _say("NO-SEP: using the original mix directly (Demucs skipped)")
         ov = _load16(original_path)
+        oacc = None                       # no accompaniment exists: the sung test stands down
     else:
         _say("separating dialogue from the original mix")
-        ov = separate_dialogue(original_path)
+        ov, oacc = _separate(original_path)
+        # The accompaniment half is normally discarded. Keeping it is what lets us tell a
+        # SUNG reference line from a spoken one (see _sung) — the only signal in the
+        # pipeline that can, and it is already computed and cached.
     if dub_is_clean:
         _say("dub is already clean dialogue — loading without separation")
         dv = _load16(dub_path)
@@ -1632,6 +1678,12 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref, dwin)
             except Exception:  # noqa: BLE001
                 _f = None
+            try:
+                _sg = _sung(oacc, ov, s, e)   # sung or spoken — descriptive, never fatal
+            except Exception:  # noqa: BLE001
+                _sg = None
+            if _sg:
+                _err.update(_sg)
             if (len((txt or "").split()) <= _FRAGMENT_MAX_WORDS
                     or (_FRAGMENT_MIN_SECONDS > 0 and (e - s) < _FRAGMENT_MIN_SECONDS)):
                 _err["fragment"] = True
@@ -1761,7 +1813,9 @@ def _tier_from_features(e: dict[str, Any]) -> str:
     """
     words = len((e.get("text") or "").split())
     blk = e.get("block") or {}
-    if e.get("song_reprise") or e.get("fragment") or words <= 1:
+    # A sung line is never a finding on a series whose songs are left untranslated, and it
+    # is measured from the audio rather than inferred from words, so it caps first.
+    if e.get("sung") or e.get("song_reprise") or e.get("fragment") or words <= 1:
         return "low"
     if (blk.get("n") or 0) >= 4:
         return "medium" if blk.get("first") else "low"

@@ -345,7 +345,14 @@ def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
     ]
 
     events, prev = [bytes([0, 255, 3, 12]) + b"QC Markers  "], 0
-    for e in sorted((x for x in report.get("errors", []) if x["type"] == "MISSING"),
+    # SUNG LINES DO NOT GET A MARKER. On a series whose songs are left untranslated a sung
+    # line can never be a real finding, and the engineers' complaint about the first PTX
+    # batch was exactly this: hundreds of markers over the themes, all correctly ranked low
+    # and all useless to click through. 430 of the flags across 15 POA episodes sat inside
+    # song regions. They remain in the WORKBOOK — this only keeps them off the timeline, so
+    # nothing is hidden, it just stops being something a human has to dismiss one by one.
+    for e in sorted((x for x in report.get("errors", [])
+                     if x["type"] == "MISSING" and not x.get("sung")),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
         label = ("MISSING"
