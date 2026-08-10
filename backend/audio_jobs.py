@@ -392,7 +392,13 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
                          "value": ("1" if cfg["box"].get("engine") == "scribe"
                                    else os.environ.get("AQC_SCRIBE_ONLY", ""))},
                         {"name": "ELEVENLABS_API_KEY",
-                         "value": os.environ.get("ELEVENLABS_API_KEY", "")}],
+                         "value": os.environ.get("ELEVENLABS_API_KEY", "")},
+                        # The last-gate LLM judge prefers this over Groq's free per-day
+                        # quota, which a handful of episodes exhausts — after which the
+                        # judge is dead for hours and every flag it would have cleared
+                        # ships as a false positive.
+                        {"name": "ANTHROPIC_API_KEY",
+                         "value": os.environ.get("ANTHROPIC_API_KEY", "")}],
     }]}
     r = fargate._ecs().run_task(
         cluster=c["cluster"],

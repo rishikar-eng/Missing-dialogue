@@ -1119,8 +1119,9 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
     import time as _t
 
     import httpx
+    akey = os.environ.get("ANTHROPIC_API_KEY", "")
     key = os.environ.get("GROQ_API_KEY", "")
-    if not key or _judge_state["off"]:
+    if not (akey or key) or _judge_state["off"]:
         return "missing"
     if _judge_state["spent"] >= _JUDGE_MAX_S:
         _judge_state["off"] = True
@@ -1135,16 +1136,39 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
               '"coherent" = the original line reads as a real piece of dialogue, not '
               'speech-recognition gibberish. "conveyed" = at least one dub line expresses '
               "roughly the same meaning (translations are loose; judge meaning, not words).")
+    # PREFER THE PAID ACCOUNT. Groq's free tier is a per-DAY token quota, and one QC run
+    # spends a judge call per candidate — a handful of episodes exhausts it, after which
+    # the judge is dead for eleven hours and every flag it would have cleared ships as a
+    # false positive. The studio already pays for Anthropic (the Teams agent uses the same
+    # key), and at Haiku prices a judged episode costs on the order of two paise. Groq
+    # stays as the fallback for the desktop app, where only that key may be configured.
+    def _post():
+        if akey:
+            return httpx.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": akey, "anthropic-version": "2023-06-01"},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 64,
+                      "temperature": 0,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=60)
+        return httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                          headers={"Authorization": f"Bearer {key}"},
+                          json={"model": "llama-3.3-70b-versatile", "temperature": 0,
+                                "response_format": {"type": "json_object"},
+                                "messages": [{"role": "user", "content": prompt}]},
+                          timeout=60)
+
+    def _content(r):
+        j = r.json()
+        if akey:                                   # Anthropic returns a content block list
+            return "".join(b.get("text", "") for b in j.get("content", []))
+        return j["choices"][0]["message"]["content"]
+
     _t0 = _t.time()
     try:
         for attempt in range(3):
             try:
-                r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
-                               headers={"Authorization": f"Bearer {key}"},
-                               json={"model": "llama-3.3-70b-versatile", "temperature": 0,
-                                     "response_format": {"type": "json_object"},
-                                     "messages": [{"role": "user", "content": prompt}]},
-                               timeout=60)
+                r = _post()
                 if r.status_code == 429:
                     # Sleep only while there is budget left to sleep in — the quota is
                     # per-DAY, so on an exhausted key every candidate would otherwise
@@ -1156,7 +1180,11 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
                     _t.sleep(nap)
                     continue
                 r.raise_for_status()
-                v = _json.loads(r.json()["choices"][0]["message"]["content"])
+                txt = _content(r).strip()
+                if not txt.startswith("{"):        # tolerate a ```json fence or a preamble
+                    i, j = txt.find("{"), txt.rfind("}")
+                    txt = txt[i:j + 1] if 0 <= i < j else txt
+                v = _json.loads(txt)
                 _judge_state["fails"] = 0
                 if not v.get("coherent"):
                     return "garble"
