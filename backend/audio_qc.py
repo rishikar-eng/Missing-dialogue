@@ -818,7 +818,13 @@ def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
             continue
         keep[max(0, ja):min(len(keep), jb)] = False
     x = dv[i0:i1][keep].astype("float64")
-    if len(x) < 8000:                    # under 0.5 s of slot that ISN'T the neighbour
+    # 0.2 s of non-neighbour slot, matching the i1-i0 test above. This floor used to be
+    # 0.5 s, which silently blanked the acoustic column for EVERY flag shorter than that —
+    # including POA EP11's ear-verified real drop ('Alguem paga ele.', 0.42 s), whose dub
+    # slot is digital silence. Short lines are exactly where the semantic score is least
+    # trustworthy, so losing the physical measurement there was backwards. 0.2 s still
+    # yields the 2+ frames the dynamic-range test below needs.
+    if len(x) < 3200:
         return None
     hop = 1600                                          # 100 ms frames
     n = len(x) // hop
@@ -1553,6 +1559,93 @@ def _confidence(best: float, text: str | None, slot_cov: float | None = None) ->
     return "low"
 
 
+# --- confidence tiers ------------------------------------------------------------------
+# Free parameters, named so they can be argued with. They are NOT fitted to the ear-verified
+# set: there are 7 confirmed drops on POA, and a rule tuned on 7 points is a rule that has
+# memorised 7 points. They are set from what each signal physically means, then checked
+# against the whole corpus for distributional sanity (tools/tier_eval.py).
+_HOLE_SLOT_COV = 0.05      # below this the dub simply is not speaking in the slot
+_OCCUPIED_SLOT_COV = 0.25  # above this the dub IS speaking there — a weak absence claim
+_HIGH_MIN_WORDS = 3        # one- and two-word lines are grunts/names as often as dialogue
+_HIGH_MIN_SECONDS = 0.35   # shorter than this the slot itself is barely measurable
+_STRONG_SEMANTIC = 0.35    # a genuinely poor text match, used only when acoustics are mute
+
+
+def _tier_from_features(e: dict[str, Any]) -> str:
+    """The confidence tier for one MISSING flag, from the features recorded on it.
+
+    Deliberately ordered: CONTEXT first, then ACOUSTICS, then SEMANTICS.
+
+    Context first, because a line can be perfectly absent from the dub and still not be a
+    defect — POA's untranslated opening theme is absent by design, and a long un-dubbed
+    stretch is one editorial fact rather than forty independent ones. Nothing may promote
+    those, however strong the evidence of absence.
+
+    Acoustics next, because 'the dub has no audio where this line belongs' is a measurement
+    of the delivered file. The semantic score is a similarity between machine translations
+    of machine transcripts of two languages, and when the two disagree the measurement is
+    the better witness. On POA EP11 the old rule ranked 27 of 43 flags LOW while their dub
+    slots were completely silent, and buried the one ear-verified real drop at LOW because
+    a wrong dub line elsewhere scored 0.73 against it.
+
+    Semantics last, and only to break ties or to speak when the acoustics cannot.
+    """
+    words = len((e.get("text") or "").split())
+    blk = e.get("block") or {}
+    if e.get("song_reprise") or e.get("fragment") or words <= 1:
+        return "low"
+    if (blk.get("n") or 0) >= 4:
+        return "medium" if blk.get("first") else "low"
+
+    sc = e.get("slot_speech_cov")
+    fill = e.get("fill")
+    best = e.get("coverage")
+    try:
+        dur = float(e.get("script_end_s", 0)) - float(e.get("script_start_s", 0))
+    except (TypeError, ValueError):
+        dur = 0.0
+
+    # WHEN fill EXISTS IT OVERRULES slot_cov, because they measure different things.
+    # slot_cov counts ALL dub speech overlapping the slot, and the slot gate upstream
+    # deliberately tolerates up to 40% of it as bleed from the line next door. _dub_fill
+    # then cuts those neighbour windows out and describes what is actually left. So a line
+    # with slot_cov 0.36 and fill 'silence' is a hole with a neighbour clipping its edge —
+    # reading 0.36 as "the dub speaks here" demoted three ear-verified real drops
+    # (EP11 @427.0 and @1863.7, EP25 @767.7, all fill=silence at slot 0.30-0.36).
+    # slot_cov is only consulted when _dub_fill could not measure at all.
+    if fill:
+        occupied = fill == "speech-like"
+        hole = fill == "silence"
+        quiet = fill == "ambience"
+    else:
+        occupied = sc is not None and sc >= _OCCUPIED_SLOT_COV
+        hole = sc is not None and sc < _HOLE_SLOT_COV
+        quiet = False
+
+    if occupied:                      # the dub speaks under the line — weakest case there is
+        return "low"
+    if hole and words >= _HIGH_MIN_WORDS and dur >= _HIGH_MIN_SECONDS:
+        return "high"
+    if hole or quiet:
+        return "medium"
+    if best is not None and best < _STRONG_SEMANTIC:
+        return "medium"
+    return "low"
+
+
+def _retier(errors: list[dict[str, Any]]) -> None:
+    """Re-rank every MISSING flag once the whole picture exists.
+
+    _confidence() runs inside _missing() at detection time, so it cannot see the three
+    signals that matter most: the dub fill (attached immediately afterwards), block
+    membership and song-reprise tags (both computed here in _report). This pass runs after
+    all of them, which is the only point at which a tier can be honest.
+    """
+    for e in errors:
+        if e.get("type") == "MISSING":
+            e["confidence"] = _tier_from_features(e)
+
+
 def _missing(i: int, s: float, e: float, ch: str, best: float,
              text: str | None = None, slot_cov: float | None = None) -> dict[str, Any]:
     return {
@@ -1584,6 +1677,11 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
     try:
         _save_song_bank(series, errors)        # teach the bank for the next episode
     except Exception:  # noqa: BLE001
+        pass
+    try:
+        # LAST, once block + song context exists: re-rank on the full picture.
+        _retier(errors)
+    except Exception:  # noqa: BLE001 — a ranking failure must not lose the findings
         pass
     n = {t: sum(1 for e in errors if e["type"] == t) for t in ("MISSING", "MISALIGNED", "EXTRA")}
     conf = {c: sum(1 for e in errors if e["type"] == "MISSING" and e.get("confidence") == c)
