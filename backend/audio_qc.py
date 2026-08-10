@@ -28,6 +28,7 @@ meant to run inside the `dialogue-qc-sonar` Fargate task, not on the always-on b
 """
 from __future__ import annotations
 
+import json as _json
 import os
 import re
 import threading
@@ -402,6 +403,34 @@ def _sarvam_req(method: str, url: str, **kw):
 _SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
 
+def _tcache_read(cache_path: str | None) -> list | None:
+    """A cached transcript, or None to recompute.
+
+    An EMPTY cache counts as a MISS. On 2026-08-10 Sarvam ran out of credits, returned
+    nothing for Gavv EP41's Hindi original, and we persisted `[]` — which every later run
+    would have read back as the settled truth "this audio contains no speech", silently
+    flagging the entire episode as missing with no API call left to notice. A genuinely
+    silent side is rare and costs one recompute; a poisoned cache costs an episode.
+    """
+    if not (cache_path and os.path.exists(cache_path)):
+        return None
+    try:
+        rows = [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
+    except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
+        return None
+    return rows or None
+
+
+def _tcache_write(cache_path: str | None, out: list) -> None:
+    """Persist a transcript — never an empty one (see _tcache_read)."""
+    if not (cache_path and out):
+        return
+    try:
+        _json.dump(out, open(cache_path, "w"))
+    except OSError:
+        pass
+
+
 def transcribe_scribe(audio16: np.ndarray, cache_path: str | None = None,
                       lang1: str | None = None) -> list:
     """ONE ElevenLabs Scribe reading of a whole side — the fast alternative to Whisper's
@@ -427,11 +456,9 @@ def transcribe_scribe(audio16: np.ndarray, cache_path: str | None = None,
 
     import httpx
     import soundfile as sf
-    if cache_path and os.path.exists(cache_path):
-        try:
-            return [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
-        except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
-            pass
+    _hit = _tcache_read(cache_path)
+    if _hit is not None:
+        return _hit
     key = os.environ.get("ELEVENLABS_API_KEY", "")
     if not key:
         return []
@@ -515,11 +542,7 @@ def transcribe_scribe(audio16: np.ndarray, cache_path: str | None = None,
             "engine": "scribe"}))
     out.sort(key=lambda x: (x[0], x[1]))
     print(f"[audio_qc] scribe: {len(out)} lines", flush=True)
-    if cache_path:
-        try:
-            _json.dump(out, open(cache_path, "w"))
-        except OSError:
-            pass
+    _tcache_write(cache_path, out)
     return out
 
 
@@ -652,11 +675,9 @@ def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> lis
     AQC_SARVAM_BATCH=1 routes the whole side through ONE Batch-API job instead (~400 sync
     requests -> 1); any batch failure logs and falls back to the sync path unchanged."""
     import json as _json
-    if cache_path and os.path.exists(cache_path):
-        try:
-            return [(x[0], x[1], x[2], x[3]) for x in _json.load(open(cache_path))]
-        except Exception:  # noqa: BLE001 — a corrupt cache just recomputes
-            pass
+    _hit = _tcache_read(cache_path)
+    if _hit is not None:
+        return _hit
     if os.environ.get("AQC_SARVAM_BATCH", "").strip() == "1":
         try:
             out = _sarvam_batch(audio16)
@@ -665,11 +686,7 @@ def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> lis
                   flush=True)
             out = None
         if out is not None:
-            if cache_path:
-                try:
-                    _json.dump(out, open(cache_path, "w"))
-                except OSError:
-                    pass
+            _tcache_write(cache_path, out)
             return out
     import concurrent.futures as _cf
     wins = []
@@ -684,11 +701,7 @@ def transcribe_sarvam(audio16: np.ndarray, cache_path: str | None = None) -> lis
             if r:
                 out.append(r)
     out.sort(key=lambda x: x[0])
-    if cache_path:
-        try:
-            _json.dump(out, open(cache_path, "w"))
-        except OSError:
-            pass
+    _tcache_write(cache_path, out)
     return out
 
 

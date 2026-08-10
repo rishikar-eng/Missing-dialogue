@@ -145,6 +145,8 @@
         "name": "GAV character list.docx",
         "_note": "Box: Rian - External Storage/JioStar/2026_04_09_018 (Kamen Rider)/Original - Source Files/Updated/Character list/. Table: Character | Pic | Voice name (e.g. Shouma -> KMR_GAV_Shouma) — canonical names + studio voice-name convention, usable as a mapping roster."
       },
+      "engine": "scribe",
+      "_engine_note": "Was Sarvam Saaras (Indic). Sarvam's credits ran out on 2026-08-06 and it now returns nothing, which on 2026-08-10 dropped EP41 Tamil's coverage from 0.862 to 0.528 — Scribe scored that 0.862 on the same episode, so it is the engine until Sarvam is topped up. Scribe's known limit still applies: it transcribes words, not non-verbal vocalizations.",
       "voice_list": {
         "file_id": "2243947086368",
         "name": "KAMEN RIDER CHARACTER LIST & VOICES.xlsx",
