@@ -545,5 +545,15 @@
    "note_expected": "The song plays UNDER a dialogue scene at 22:35-23:12: song lines interleave with plain dialogue ('Quando foi que voce e o Lucas chegaram em Jerusalem?'), which is why block grouping cannot catch them — they are not contiguous."
   }
  },
- "_measurement_rule": "Durations/ends in verified_missing MUST be copied from the run's report.json, never estimated. An estimated set of ends made a duration-based false-flag rule look perfect in validation while it actually demoted a verified drop (2026-08-07)."
+ "_measurement_rule": "Durations/ends in verified_missing MUST be copied from the run's report.json, never estimated. An estimated set of ends made a duration-based false-flag rule look perfect in validation while it actually demoted a verified drop (2026-08-07).",
+ "_series_facts": {
+  "poa-show": {
+   "songs_are_not_dubbed": true,
+   "verified": "2026-08-10, by ear, on EP04 and EP11 opening themes",
+   "what_was_heard": "The English delivery's FULL STEREO MIX carries the original PORTUGUESE vocal through the theme song. The song is retained untranslated, not re-sung in English.",
+   "why_it_matters": "A song line can never be a real finding, so every flag inside a song region is noise. It also explains a result that would otherwise mislead: comparing EP11 against the full stereo mix removed 28 of 31 song-region flags, which looks like 'the song was dubbed and lives in the music stem'. It is not — the original Portuguese audio is sitting in the English mix, so it matched ITSELF. Do not switch the dub source to the full mix on the strength of that number; it also took ordinary-dialogue false flags from 6 to 11.",
+   "mechanism": "Demucs' vocals stem contains SINGING by definition, so separating the original hands us a clean a cappella of the theme (measured -31.5 dBFS through EP11's opening song, vs -30.9 during dialogue). The dub side is a dialogue-only delivery which cannot contain a song vocal (-180 dBFS, digital silence). Nothing in the pipeline asks whether a line was sung or spoken.",
+   "chosen_fix": "(accompaniment - vocals) dB per line, from the two stems already cached. Sung lines median +1.7 dB, spoken lines median -12.3 dB over 8 episodes / 327 flags. At a 0 dB threshold: 72% of song lines caught, 9.8% of dialogue mislabelled, and all four ear-verified real drops safely below (closest -2.0 dB)."
+  }
+ }
 }
