@@ -1291,7 +1291,14 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
                     txt = txt[i:j + 1] if 0 <= i < j else txt
                 v = _json.loads(txt)
                 _judge_state["fails"] = 0
-                if not v.get("coherent"):
+                # A ONE- OR TWO-WORD LINE CANNOT BE JUDGED INCOHERENT FROM TEXT. "Mentira."
+                # is a complete, ordinary heckle; out of context it reads exactly like ASR
+                # debris, and calling it garble sends a real dropped line to UNCHECKED where
+                # nobody will ever see it. EP12's ear-verified crowd heckle went missing this
+                # way the moment the judge started working reliably. Short lines are already
+                # ranked at the bottom by the fragment rule, so keeping them costs a low-tier
+                # row; dropping them costs a finding.
+                if not v.get("coherent") and len((ref_text or "").split()) > 2:
                     return "garble"
                 return "present" if v.get("conveyed") else "missing"
             except Exception:  # noqa: BLE001 — judge trouble must never suppress a real flag
@@ -1590,6 +1597,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
 
     errors: list[dict[str, Any]] = []
     n_unchecked = 0
+    _judged: list[dict[str, Any]] = []      # every LLM-judge verdict, for the summary
     if engine == "text" or not missing:
         # EVIDENCE-GATED flagging: "no match found" is NOT the same claim as "this dialogue
         # line is absent". EP43's fight scene produced ~20 false MISSING (all disproved by
@@ -1665,6 +1673,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 near_lines = [dtext[j] for j in range(len(dseg))
                               if abs(dseg[j][0] - (s + drift0)) <= 12.0]
                 verdict = _judge(txt, original_lang, near_lines, dub_lang)
+                # RECORD WHAT THE JUDGE DID. Its verdicts were invisible: a cleared line
+                # vanished leaving only a stdout line in a Fargate log nobody can read, so
+                # when EP12's ear-verified heckle stopped being reported there was no way to
+                # tell which gate had taken it. These land in the summary.
+                _judged.append({"at": round(s, 2), "verdict": verdict, "text": txt})
                 if verdict == "garble":
                     n_unchecked += 1
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — judge: not coherent dialogue  {txt!r}")
@@ -1761,7 +1774,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
              f"({n_unchecked} unchecked — transcript unreliable on one side)")
     return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
-                   series=os.environ.get("AQC_SERIES") or None)
+                   series=os.environ.get("AQC_SERIES") or None, judged=_judged)
 
 
 def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
@@ -1888,7 +1901,8 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
-            n_unchecked: int = 0, series: str | None = None) -> dict[str, Any]:
+            n_unchecked: int = 0, series: str | None = None,
+            judged: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     try:
         n_blocks = _group_missing(errors)      # presentation only; never fatal
     except Exception:  # noqa: BLE001
@@ -1951,6 +1965,13 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "n_fragments": frag_lines,
             # what the dub does under a missing line: silence | ambience | speech-like
             "missing_by_dub_fill": fills,
+            # WHAT THE LLM JUDGE DID. A 'present' verdict deletes a candidate outright and a
+            # 'garble' sends it to unchecked, so these two counts are the difference between
+            # a quiet report and a report that quietly lost findings. The cleared lines are
+            # listed so a reviewer can audit them instead of taking the gate on trust.
+            "n_judge_cleared": sum(1 for j in (judged or []) if j["verdict"] == "present"),
+            "n_judge_garble": sum(1 for j in (judged or []) if j["verdict"] == "garble"),
+            "judge_cleared": [j for j in (judged or []) if j["verdict"] != "missing"][:40],
         },
     }
 
