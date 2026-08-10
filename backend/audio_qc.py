@@ -1598,6 +1598,17 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
     errors: list[dict[str, Any]] = []
     n_unchecked = 0
     _judged: list[dict[str, Any]] = []      # every LLM-judge verdict, for the summary
+    # WHY EACH CANDIDATE WAS DROPPED. Six gates can remove a candidate before it becomes a
+    # flag, and none of them recorded anything a reader could see — EP12's ear-verified
+    # heckle stopped being reported and there was no way to tell which gate took it without
+    # a Fargate log the EC2 role cannot read. Every drop is now recorded with the numbers
+    # that decided it, so "a line vanished" is answerable from the report itself.
+    _dropped: list[dict[str, Any]] = []
+
+    def _drop(gate: str, at: float, end: float, text: str | None, **why: Any) -> None:
+        _dropped.append({"gate": gate, "at": round(at, 2), "end": round(end, 2),
+                         "text": (text or "")[:80], **why})
+
     if engine == "text" or not missing:
         # EVIDENCE-GATED flagging: "no match found" is NOT the same claim as "this dialogue
         # line is absent". EP43's fight scene produced ~20 false MISSING (all disproved by
@@ -1615,17 +1626,22 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             q = oqual[i] if oqual else None
             best_seg = float(sim[i].max()) if sim.size else 0.0
             if txt and _songlike(txt):
+                _drop("song-like", s, e, txt,
+                      unique_ratio=round(len(set(txt.split())) / max(1, len(txt.split())), 2))
                 _say(f"  song-like @{s:.1f}-{e:.1f}s — not dialogue, not flagged  {txt!r}")
                 continue
             if (e - s) > 12.0:
                 # A single "line" spanning tens of seconds is a decode artefact or a song
                 # section, never one piece of dialogue (EP43: 28-40 s blobs passed as lines).
                 n_unchecked += 1
+                _drop("long-span", s, e, txt, span_s=round(e - s, 1))
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — {e - s:.0f}s span is not a single "
                      f"dialogue line  {txt!r}")
                 continue
             if q is not None and not _reliable(q, txt):
                 n_unchecked += 1
+                _drop("reference-unreliable", s, e, txt, nsp=q.get("nsp"), alp=q.get("alp"),
+                      cr=q.get("cr"), engine=q.get("engine"))
                 _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — reference transcript unreliable "
                      f"(nsp={q['nsp']:.2f} alp={q['alp']:.2f})  {txt!r}")
                 continue
@@ -1639,6 +1655,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 if nearby and not any(_reliable(dqual[j], dtext[j] if dtext else None)
                                       for j in nearby):
                     n_unchecked += 1
+                    _drop("dub-unreadable", s, e, txt, n_nearby_dub_lines=len(nearby))
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech near this slot is "
                          f"unreadable; cannot certify absence  {txt!r}")
                     continue
@@ -1665,6 +1682,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 # (incl. EP41 @916.6, slot 0.49, production 2026-08-04).
                 if cov / dur >= 0.4:
                     n_unchecked += 1
+                    _drop("slot-occupied", s, e, txt, slot_cov=round(cov / dur, 2))
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — dub speech covers "
                          f"{cov / dur:.0%} of this slot but gave no usable transcript; "
                          f"cannot certify absence  {txt!r}")
@@ -1680,9 +1698,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                 _judged.append({"at": round(s, 2), "verdict": verdict, "text": txt})
                 if verdict == "garble":
                     n_unchecked += 1
+                    _drop("judge-garble", s, e, txt)
                     _say(f"  UNCHECKED @{s:.1f}-{e:.1f}s — judge: not coherent dialogue  {txt!r}")
                     continue
                 if verdict == "present":
+                    _drop("judge-present", s, e, txt, n_dub_lines_seen=len(near_lines))
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
             _err = _missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov)
@@ -1774,7 +1794,8 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
              f"({n_unchecked} unchecked — transcript unreliable on one side)")
     return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
-                   series=os.environ.get("AQC_SERIES") or None, judged=_judged)
+                   series=os.environ.get("AQC_SERIES") or None, judged=_judged,
+                   dropped=_dropped)
 
 
 def _confidence(best: float, text: str | None, slot_cov: float | None = None) -> str:
@@ -1902,7 +1923,8 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
 
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             n_unchecked: int = 0, series: str | None = None,
-            judged: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+            judged: list[dict[str, Any]] | None = None,
+            dropped: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     try:
         n_blocks = _group_missing(errors)      # presentation only; never fatal
     except Exception:  # noqa: BLE001
@@ -1972,6 +1994,12 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "n_judge_cleared": sum(1 for j in (judged or []) if j["verdict"] == "present"),
             "n_judge_garble": sum(1 for j in (judged or []) if j["verdict"] == "garble"),
             "judge_cleared": [j for j in (judged or []) if j["verdict"] != "missing"][:40],
+            # EVERY candidate that a gate removed, and the numbers that decided it. Six
+            # gates sit between "the matcher found nothing" and "this is a finding"; when a
+            # known line stops being reported this says which one took it.
+            "dropped_by_gate": {g: sum(1 for d in (dropped or []) if d["gate"] == g)
+                                for g in sorted({d["gate"] for d in (dropped or [])})},
+            "dropped": (dropped or [])[:120],
         },
     }
 
