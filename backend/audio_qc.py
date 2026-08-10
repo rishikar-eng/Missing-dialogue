@@ -831,8 +831,15 @@ def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
     if n < 2:
         return None
     fr = np.sqrt((x[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
-    mean_db = 20.0 * np.log10(max(float(fr.mean()), 1e-9))
-    dyn_db = 20.0 * np.log10(max(float(fr.max()), 1e-9) / max(float(fr.min()), 1e-9))
+    # ROBUST STATISTICS, because one frame decides a verdict otherwise. A slot of digital
+    # black with a single 100 ms leak from a neighbour's word onset used to read as
+    # 'speech-like': the MEAN was dragged above the silence bar by that one frame, and the
+    # dynamic range was max/min with min == 0, giving ~156 dB of "dynamics" from silence.
+    # The workbook then told the reviewer "dub speaks here" over a genuine hole. Median and
+    # a p90/p10 spread describe the same slot without letting one frame speak for twelve.
+    mean_db = 20.0 * np.log10(max(float(np.median(fr)), 1e-9))
+    hi, lo = float(np.percentile(fr, 90)), float(np.percentile(fr, 10))
+    dyn_db = 20.0 * np.log10(max(hi, 1e-9) / max(lo, 1e-9))
     rel = mean_db - ref_db
     if rel <= _FILL_SILENCE_REL_DB:
         kind = "silence"
@@ -914,10 +921,27 @@ def _save_song_bank(series: str | None, errors: list[dict]) -> None:
         b = os.environ.get("DQC_S3_BUCKET", "")
         if not b:
             return
-        words = set()
+        # ONLY BANK BLOCKS THAT ACTUALLY LOOK LIKE A SONG. A block is a purely structural
+        # artefact — 4+ consecutive missing lines with the dub quiet — which is also the
+        # exact signature of a genuinely un-dubbed SCENE, or of a bad delivery (EP22's
+        # fabricated dub produced 49 missing lines and a "song block"). Banking those
+        # taught the series bank that ordinary dialogue is lyric, permanently and
+        # silently, and the bank is a monotonic union that is never pruned. Songs repeat
+        # themselves and scenes do not, so the block's combined text must pass the same
+        # repetition test used elsewhere before a single word of it is learned.
+        by_block: dict[Any, list[str]] = {}
         for e in errors:
             if e.get("type") == "MISSING" and e.get("block"):
-                words |= {w for w in _norm_words(e.get("text")) if len(w) > 2}
+                by_block.setdefault(e["block"].get("id"), []).append(e.get("text") or "")
+        words = set()
+        for bid, texts in by_block.items():
+            joined = " ".join(t for t in texts if t)
+            if not _songlike(joined):
+                print(f"[audio_qc] block {bid} is not song-like — not learned as lyric",
+                      flush=True)
+                continue
+            for t in texts:
+                words |= {w for w in _norm_words(t) if len(w) > 2}
         if not words:
             return
         s3 = boto3.client("s3")
@@ -964,8 +988,14 @@ def _tag_song_reprise(errors: list[dict], bank: set | None = None) -> int:
             if len(bw) < 3:
                 continue
             shared = w & bw
-            if len(shared) >= 3 and len(shared) / min(len(w), len(bw)) >= 0.75:
-                e["song_reprise"] = {"block": bid, "matches_at": bt}
+            # Denominator is THIS line's own word count, not min(). With min(), a
+            # three-word lyric built from function words ('eu sei que') scored 1.00
+            # against any longer line that merely contained those three words, so one
+            # short lyric could demote a whole episode's real drops. The question that
+            # matters is "how much of the FLAGGED line is lyric", which is len(w).
+            if len(shared) >= 3 and len(shared) / len(w) >= 0.75:
+                e["song_reprise"] = {"block": bid, "matches_at": bt,
+                                     "source": "series bank" if bid == 0 else "this episode"}
                 n += 1
                 break
     return n
@@ -985,7 +1015,16 @@ def _group_missing(errors: list[dict]) -> int:
         prev_end = prev.get("script_end_s") or prev["script_start_s"]
         quiet = (e.get("slot_speech_cov") or 0.0) <= _BLOCK_MAX_SLOT_COV
         prev_quiet = (prev.get("slot_speech_cov") or 0.0) <= _BLOCK_MAX_SLOT_COV
-        if e["script_start_s"] - prev_end <= _BLOCK_GAP_S and quiet and prev_quiet:
+        # ADJACENT ORIGINAL LINES, not merely nearby ones. The block's claim is "no dub
+        # audio throughout this stretch"; chaining on the time gap alone let four
+        # unrelated real drops at 100/109/118/127 s merge into one block even though the
+        # lines at 104/113/122 s between them were dubbed correctly. That both stated a
+        # falsehood and collapsed four findings into one. Consecutive script indices are
+        # what the claim actually requires.
+        i_prev, i_cur = prev.get("script_index"), e.get("script_index")
+        adjacent = (i_prev is None or i_cur is None or i_cur == i_prev + 1)
+        if (e["script_start_s"] - prev_end <= _BLOCK_GAP_S and quiet and prev_quiet
+                and adjacent):
             cur.append(e)
         else:
             runs.append(cur)
