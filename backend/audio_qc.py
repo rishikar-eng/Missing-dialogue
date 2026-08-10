@@ -877,6 +877,10 @@ def _speech_ref_db(dv: np.ndarray, dseg: list) -> float | None:
 _BLOCK_GAP_S = 10.0      # measured on EP12: 10 s captures the whole song, 8 s missed one line
 _BLOCK_MIN = 4           # EP12's real drops sat in groups of 1 and 2 — well clear of this
 _SONG_EDGE_S = 15.0      # how far past the outermost confirmed lyric a song still reaches
+_SONG_CLUSTER_S = 60.0   # anchors further apart than this belong to DIFFERENT songs.
+#                        Measured on EP11: 45-120 s all give the same answer (the closing
+#                        theme whole, nothing else touched), so 60 sits mid-plateau rather
+#                        than on a knife edge. Its widest internal anchor gap is ~37 s.
 _BLOCK_MAX_SLOT_COV = 0.35   # a block means the dub is SILENT throughout, not just unmatched
 
 
@@ -1032,12 +1036,28 @@ def _tag_song_reprise(errors: list[dict], bank: set | None = None) -> int:
                      and (e.get("song_reprise")
                           or any(len(_norm_words(e.get("text")) & bw) >= 2
                                  for _, _, bw in lyr if len(bw) >= 3)))
-    if len(anchors) >= 2:
-        lo, hi = anchors[0] - _SONG_EDGE_S, anchors[-1] + _SONG_EDGE_S
-        for e in loose:
-            t = e.get("script_start_s")
-            if e.get("song_reprise") or t is None or not (lo <= t <= hi):
-                continue
+    # ANCHORS MUST BE CLUSTERED. Taking min/max over every anchor in the episode spans the
+    # opening theme to the closing theme — i.e. the whole running time — and tags all the
+    # dialogue in between. That is exactly what happened on EP11: 16 lines tagged as song
+    # and the ear-verified drop at 20:15 demoted to the bottom of the queue. A song is one
+    # contiguous performance, so anchors only join a cluster while they stay within
+    # _SONG_CLUSTER_S of each other, and only a cluster holding two or more of them marks
+    # the stretch it actually covers.
+    spans = []
+    run: list[float] = []
+    for t in anchors:
+        if run and t - run[-1] > _SONG_CLUSTER_S:
+            if len(run) >= 2:
+                spans.append((run[0] - _SONG_EDGE_S, run[-1] + _SONG_EDGE_S))
+            run = []
+        run.append(t)
+    if len(run) >= 2:
+        spans.append((run[0] - _SONG_EDGE_S, run[-1] + _SONG_EDGE_S))
+    for e in loose:
+        t = e.get("script_start_s")
+        if e.get("song_reprise") or t is None:
+            continue
+        if any(lo <= t <= hi for lo, hi in spans):
             e["song_reprise"] = {"block": None, "matches_at": None,
                                  "source": "between confirmed lyric lines"}
             n += 1
