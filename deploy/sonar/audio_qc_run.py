@@ -482,7 +482,17 @@ def _main():
             # audio for every flag — stitched, and on-timeline (silent between flags).
             rname = naming.missing_flac(series or None, episode or 0, dl, False)
             tname = naming.missing_flac(series or None, episode or 0, dl, True)
-            if audio_report.build_ref_audio(rep.get("errors", []), o,
+            ref_src = o
+            if not os.path.exists(ref_src):
+                # A fully cached run never downloads the source (Demucs reads the .npy pair),
+                # so cut the reference from the cached DIALOGUE stem instead — which is
+                # arguably better to listen to anyway: no music or effects over the line.
+                voc = o + ".voc16.npy"
+                if os.path.exists(voc):
+                    sf.write("/tmp/_refsrc.wav", np.load(voc), 16000)
+                    ref_src = "/tmp/_refsrc.wav"
+                    print("[run] ref audio cut from the cached dialogue stem", flush=True)
+            if audio_report.build_ref_audio(rep.get("errors", []), ref_src,
                                             f"/tmp/{rname}", f"/tmp/{tname}"):
                 s3.upload_file(f"/tmp/{rname}", BUCKET, f"{pre}/{rname}")
                 s3.upload_file(f"/tmp/{tname}", BUCKET, f"{pre}/{tname}")

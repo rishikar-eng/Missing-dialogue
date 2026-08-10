@@ -85,8 +85,18 @@ def find_dub_speakers(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
             except Exception:  # noqa: BLE001
                 continue
             if len(files) >= 3:            # a real speaker set, not a stray file
+                # USABLE only if every track is a full-length timeline file. Mixed lengths
+                # mean trimmed clips with no position information (BWF TimeReference = 0),
+                # and summing those fabricates a dub — EP22 proved it. Size is the cheap
+                # proxy: a uniform set is one size, give or take container overhead.
+                sizes = [int(f.get("size") or 0) for f in files]
+                uniform = bool(sizes) and min(sizes) >= 0.9 * max(sizes)
                 return {"id": d["id"], "name": d["name"], "n_tracks": len(files),
-                        "_stage": "speakers"}
+                        "_stage": "speakers", "uniform": uniform,
+                        "why_not": None if uniform else
+                        (f"{sum(1 for x in sizes if x < 0.9 * max(sizes))} of {len(sizes)} "
+                         f"tracks are shorter than the episode and carry no timeline "
+                         f"position — summing them would invent a dub")}
     return None
 
 
@@ -258,13 +268,16 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
         except Exception:  # noqa: BLE001 — scriptless-only series lack script-QC folders
             orig = None
         stage = "ST_PREMIX"
-    ready, missing = {}, []
+    ready, missing, unusable = {}, [], {}
     for lang in cfg.get("languages", []):
         d = find_dub_mix(box, cfg, lang, n)
         if not d:
             sp = find_dub_speakers(box, cfg, lang, n)
-            if sp:
-                ready[lang] = f"{sp['name']} ({sp['n_tracks']} character tracks, summed)"
+            if sp and sp.get("uniform"):
+                ready[lang] = f"{sp['name']} ({sp['n_tracks']} character tracks)"
+                continue
+            if sp:                      # present but unusable — say so instead of promising
+                unusable[lang] = sp.get("why_not") or "speaker tracks are not a timeline set"
                 continue
         if d:
             ready[lang] = d["name"]
@@ -274,7 +287,7 @@ def availability(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str
             "episode": n, "original": orig["name"] if orig else None,
             "original_stage": stage if orig else None,
             "languages_ready": ready, "not_delivered": missing,
-            "runnable": bool(orig and ready)}
+            "unusable": unusable, "runnable": bool(orig and ready)}
 
 
 def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
@@ -329,6 +342,10 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
         if not dub:
             # no mixed dub — but per-character tracks may exist (POA EP21-25 have only these)
             dub = find_dub_speakers(box, cfg, lang, int(episode))
+            if dub and not dub.get("uniform"):
+                return {"error": f"{lang} has only per-character tracks and they are not a "
+                                 f"timeline set — {dub.get('why_not')}. Use a mixed dub, or "
+                                 f"ask the studio for full-length stems."}
     if not dub:
         return {"error": f"no {lang} full mix (ST_MIX) delivered for EP{int(episode):02d}"}
 

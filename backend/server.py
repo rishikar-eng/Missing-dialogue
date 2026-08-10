@@ -1221,13 +1221,17 @@ def _audio_availability_card(av: dict[str, Any], conv: str) -> dict[str, Any]:
     n = av.get("episode")
     ready = av.get("languages_ready") or {}
     orig = av.get("original")
+    stage = {"VIDEO": "from the episode video", "ST_MIX": "final mix",
+             "ST_PREMIX": "premix", "CUSTOM": "hand-picked"}.get(av.get("original_stage"), "")
     facts = [
-        {"title": "Original mix", "value": (f"{orig} ({av.get('original_stage')})"
-                                            if orig else "missing")},
-        {"title": "Dub mixes ready", "value": ", ".join(sorted(ready)) or "none"},
+        {"title": "Original", "value": (f"{orig}" + (f" — {stage}" if stage else ""))
+                                       if orig else "NOT FOUND"},
+        {"title": "Ready to check", "value": ", ".join(sorted(ready)) or "nothing"},
     ]
     if av.get("not_delivered"):
-        facts.append({"title": "Not delivered", "value": ", ".join(av["not_delivered"])})
+        facts.append({"title": "Not delivered yet", "value": ", ".join(av["not_delivered"])})
+    for lang, why in (av.get("unusable") or {}).items():
+        facts.append({"title": f"{lang} — cannot check", "value": why})
     actions = []
     base = os.environ.get("DQC_PUBLIC_URL", "https://13-205-42-228.sslip.io").rstrip("/")
     if av.get("runnable"):
@@ -2037,9 +2041,12 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             return {"type": "message", "text": f"Couldn't check Box: {str(e)[:160]}"}
         ready = av.get("languages_ready") or {}
-        summary = (f"EP {ep} — {av.get('series')}: original mix "
-                   f"{'present' if av.get('original') else 'MISSING'}, "
-                   f"{len(ready)}/{len(cfg.get('languages', []))} dub mixes delivered.")
+        n_all = len(cfg.get("languages", []))
+        bad = len(av.get("unusable") or {})
+        summary = (f"EP {ep} — {av.get('series')}: "
+                   + ("original found, " if av.get("original") else "**original NOT found**, ")
+                   + f"{len(ready)}/{n_all} ready to check"
+                   + (f", {bad} cannot be checked" if bad else ""))
         return {"type": "message", "text": summary,
                 "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
                                  "content": _audio_availability_card(av, conv)}]}
