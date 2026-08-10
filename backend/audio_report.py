@@ -97,7 +97,11 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         ("Generated", meta.get("generated_at", "")),
 
 
-        ("Mode", "audio-only (no script) — original full mix vs dub full mix"),
+        # Describe what was ACTUALLY compared. This line used to read "original full mix vs
+        # dub full mix" unconditionally, which is false in every word for POA: a video
+        # original against a dialogue-only or speaker-summed dub.
+        ("Mode", "audio-only (no script) — %s vs %s"
+                 % (meta.get("original_kind") or "original", meta.get("dub_kind") or "dub")),
 
 
         ("Original lines found", s.get("n_original_regions", 0)),

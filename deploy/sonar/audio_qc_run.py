@@ -276,6 +276,9 @@ def _main():
     t0 = time.time()
     args = [a for a in args if not a.startswith("--")]
     o, d, ol, dl = args[:4]
+    # Keep the ARGUMENTS: o and d are rebound to local /tmp paths below, and by the time the
+    # workbook is built there is nothing left to say what kind of source this run compared.
+    orig_arg, dub_arg = o, d
     # the two ~450MB inputs download CONCURRENTLY — pure network wait
     import concurrent.futures as _cfdl
 
@@ -466,7 +469,13 @@ def _main():
             rep,
             meta={"series": series, "episode": f"EP{int(episode):02d}" if episode.isdigit() else episode,
                   "original": f"{os.path.basename(o)} ({ol})", "dub": f"{os.path.basename(d)} ({dl})",
-                  "generated_at": time.strftime("%Y-%m-%d %H:%M")},
+                  "generated_at": time.strftime("%Y-%m-%d %H:%M"),
+                  # What the workbook's "Mode" line reports. It used to claim "original full
+                  # mix vs dub full mix" for every run, which is false in every word for POA.
+                  "original_kind": ("episode video (audio extracted)"
+                                    if orig_arg.lower().endswith(_VIDEO_EXT) else "original mix"),
+                  "dub_kind": ("per-character speaker tracks (summed)" if dub_arg.startswith("spk://")
+                               else "clean dialogue track" if clean else "dub full mix")},
             out_path=f"/tmp/{fname}")
         import boto3
         s3 = boto3.client("s3")

@@ -55,7 +55,12 @@ def find_dub_mix(box: box_discovery._Box, cfg: dict[str, Any], lang: str,
                   or (["premix", "stmix"] if cfg["box"].get("dub_stage") == "premix"
                       else ["stmix", "premix"]))
         for stage_key in stages:
-            if stage_key == "mix":     # plain 'mix' must not swallow 'premix'/'stmix' names
+            if stage_key in ("mix", "stmix"):
+                # 'mix' and 'stmix' both mean THE FINAL MIX, and studios name it either way:
+                # Gavv ships *_ST_MIX.wav, Chikoo ships *_Tam_MIX.wav. Matching 'stmix' as a
+                # literal substring meant Chikoo could not satisfy its own stage preference —
+                # an episode delivered with only a MIX and no PREMIX was reported as NOT
+                # DELIVERED. Both keys now mean "a mix that is not a premix".
                 hit = [f for f in files
                        if "mix" in _sq(f["name"]) and "premix" not in _sq(f["name"])]
             else:
