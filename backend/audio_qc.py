@@ -1093,6 +1093,22 @@ def _reliable(q: dict | None, text: str | None = None) -> bool:
     return q.get("alp", -9.0) > -1.2 or words >= 4
 
 
+# THE JUDGE NEEDS A BUDGET. It is called once per missing candidate, serially, and retries
+# a 429 three times at 10/20/30 s. Groq's quota is per-day, so once an account has burned
+# its tokens EVERY remaining candidate costs a full minute of sleeping — a run that takes
+# four minutes warm sat at 75% for eighteen (2026-08-10, EP11, with 11,962 tokens left on
+# the key and an 11-hour reset). The judge is an optional refinement that fails open, so
+# when it starts failing it must stand down and let the flags through rather than hold the
+# whole episode hostage. Budget is per-run; compare() resets it.
+_JUDGE_MAX_S = 240.0        # total wall-clock the judge may spend on one episode
+_JUDGE_MAX_FAILS = 3        # consecutive API failures before standing down for the run
+_judge_state: dict[str, Any] = {"spent": 0.0, "fails": 0, "off": False}
+
+
+def _judge_reset() -> None:
+    _judge_state.update(spent=0.0, fails=0, off=False)
+
+
 def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) -> str:
     """Last gate before a MISSING flag: a cheap LLM look at the actual text, doing exactly
     what a human reviewer does — 'is this original line even coherent dialogue, and does any
@@ -1104,7 +1120,12 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
 
     import httpx
     key = os.environ.get("GROQ_API_KEY", "")
-    if not key:
+    if not key or _judge_state["off"]:
+        return "missing"
+    if _judge_state["spent"] >= _JUDGE_MAX_S:
+        _judge_state["off"] = True
+        print(f"[audio_qc] judge stood down after {_JUDGE_MAX_S:.0f}s — remaining "
+              f"candidates keep their flags (fail open)", flush=True)
         return "missing"
     listing = "\n".join(f"{k + 1}. {t}" for k, t in enumerate(dub_lines)) or "(none)"
     prompt = (f"You are QC-checking a dubbed TV episode.\n"
@@ -1114,25 +1135,42 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
               '"coherent" = the original line reads as a real piece of dialogue, not '
               'speech-recognition gibberish. "conveyed" = at least one dub line expresses '
               "roughly the same meaning (translations are loose; judge meaning, not words).")
-    for attempt in range(3):
-        try:
-            r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
-                           headers={"Authorization": f"Bearer {key}"},
-                           json={"model": "llama-3.3-70b-versatile", "temperature": 0,
-                                 "response_format": {"type": "json_object"},
-                                 "messages": [{"role": "user", "content": prompt}]},
-                           timeout=60)
-            if r.status_code == 429:
-                _t.sleep(10 * (attempt + 1))
-                continue
-            r.raise_for_status()
-            v = _json.loads(r.json()["choices"][0]["message"]["content"])
-            if not v.get("coherent"):
-                return "garble"
-            return "present" if v.get("conveyed") else "missing"
-        except Exception:  # noqa: BLE001 — judge trouble must never suppress a real flag
-            return "missing"
-    return "missing"
+    _t0 = _t.time()
+    try:
+        for attempt in range(3):
+            try:
+                r = httpx.post("https://api.groq.com/openai/v1/chat/completions",
+                               headers={"Authorization": f"Bearer {key}"},
+                               json={"model": "llama-3.3-70b-versatile", "temperature": 0,
+                                     "response_format": {"type": "json_object"},
+                                     "messages": [{"role": "user", "content": prompt}]},
+                               timeout=60)
+                if r.status_code == 429:
+                    # Sleep only while there is budget left to sleep in — the quota is
+                    # per-DAY, so on an exhausted key every candidate would otherwise
+                    # burn the full 60 s ladder and the episode never finishes.
+                    nap = min(10 * (attempt + 1),
+                              max(0.0, _JUDGE_MAX_S - (_judge_state["spent"] + _t.time() - _t0)))
+                    if nap <= 0:
+                        break
+                    _t.sleep(nap)
+                    continue
+                r.raise_for_status()
+                v = _json.loads(r.json()["choices"][0]["message"]["content"])
+                _judge_state["fails"] = 0
+                if not v.get("coherent"):
+                    return "garble"
+                return "present" if v.get("conveyed") else "missing"
+            except Exception:  # noqa: BLE001 — judge trouble must never suppress a real flag
+                break
+        _judge_state["fails"] += 1
+        if _judge_state["fails"] >= _JUDGE_MAX_FAILS:
+            _judge_state["off"] = True
+            print(f"[audio_qc] judge stood down after {_JUDGE_MAX_FAILS} consecutive "
+                  f"failures — remaining candidates keep their flags (fail open)", flush=True)
+        return "missing"
+    finally:
+        _judge_state["spent"] += _t.time() - _t0
 
 
 def _songlike(text: str) -> bool:
@@ -1223,6 +1261,7 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             stage(m, 0, 0)
         print(f"[audio_qc] {m}", flush=True)
 
+    _judge_reset()                      # the judge's time budget is per episode
     _cold = [p for p in ([original_path] + ([] if dub_is_clean else [dub_path]))
              if not (os.path.exists(p + ".voc16.npy") and os.path.exists(p + ".acc16.npy"))]
     if len(_cold) == 2:
