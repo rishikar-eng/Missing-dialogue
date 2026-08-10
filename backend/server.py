@@ -1126,12 +1126,17 @@ def agent_pick(d: str):
     except Exception as e:  # noqa: BLE001
         return HTMLResponse(f"<h3>Couldn't list Box: {str(e)[:200]}</h3>", status_code=502)
 
+    from html import escape as _esc
+
     def _radios(name, items, none_label):
         h, any_default = "", any(i.get("default") for i in items)
         for i, it in enumerate(items):
             checked = " checked" if it.get("default") or (not any_default and i == 0) else ""
-            h += (f'<label><input type="radio" name="{name}" value="{it["id"]}"{checked}> '
-                  f'{it["name"]} <span class="w">({it["where"]})</span></label>')
+            # Box names carry '&' ("POA EP 11_M&E.wav") and the odd quote — unescaped they
+            # render as broken entities or split the attribute.
+            h += (f'<label><input type="radio" name="{name}" value="{_esc(str(it["id"]))}"'
+                  f'{checked}> {_esc(it["name"])} '
+                  f'<span class="w">({_esc(it["where"])})</span></label>')
         h += (f'<label><input type="radio" name="{name}" value="skip"'
               + ("" if items else " checked") + f'> {none_label}</label>')
         return h or f"<p class='w'>nothing found</p>"

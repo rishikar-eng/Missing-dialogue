@@ -194,7 +194,11 @@ def candidates(series_key: str, cfg: dict[str, Any], episode: int) -> dict[str, 
         except Exception:  # noqa: BLE001
             pass
 
-    default = (find_original_mix(box, cfg, n) or find_original_premix(box, cfg, n))
+    # Same order launch() falls through: mix -> premix -> video. POA has ONLY videos, so
+    # omitting the video step left its page with nothing pre-selected while the blurb
+    # promised "defaults are what the automatic run would use".
+    default = (find_original_mix(box, cfg, n) or find_original_premix(box, cfg, n)
+               or find_original_video(box, cfg, n))
     for c in out["original"]:
         c["default"] = bool(default and c["id"] == default["id"])
 
@@ -335,8 +339,14 @@ def launch(series_key: str, cfg: dict[str, Any], episode: int, lang: str,
     if not orig:
         return {"error": f"no original mix or premix found in Box for EP{int(episode):02d}"}
     if dub_file:
-        dub: dict[str, Any] | None = {"id": str(dub_file),
-                                      "name": _file_name(token, str(dub_file))}
+        _dn = _file_name(token, str(dub_file))
+        dub: dict[str, Any] | None = {"id": str(dub_file), "name": _dn}
+        # Classify the hand-picked file the way discovery would. Without this, picking the
+        # very file the automatic run uses (POA's "…DIALOGUE_EN_R1.wav") behaved DIFFERENTLY
+        # from the automatic run: no --clean-dub, so Demucs re-separated an already-clean
+        # dialogue track — 8-11 wasted minutes and a different reading of the same audio.
+        if "dialogue" in _sq(_dn):
+            dub["_stage"] = "dialogue"
     else:
         dub = find_dub_mix(box, cfg, lang, int(episode))
         if not dub:
