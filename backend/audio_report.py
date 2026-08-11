@@ -360,13 +360,15 @@ def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
                      and not (x.get("sung") and x.get("song_reprise"))),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
-        label = ("MISSING"
-                 + ((" " + str(e["character"])) if e.get("character") else "")
-                 + ((" " + str(e["confidence"])) if e.get("confidence") else "")
-                 + ((" " + e["stability"]) if e.get("stability") else "")
-                 + (" [song]" if (e.get("block") or e.get("song_reprise")) else "")
-                 + (" [fragment]" if e.get("fragment") else "")
-                 + " @%d:%04.1f" % (int(t // 60), t % 60))
+        # SHORT NAMES ON PURPOSE. Pro Tools clips a marker label to the pixel gap before the
+        # next marker, so a long name is simply unreadable wherever markers are dense — which
+        # is exactly where the interesting ones sit. The engineer's screenshots showed names
+        # arriving as "121" and "MISI27437" for that reason. The timecode is dropped too: the
+        # marker's own position already states it, and the Portuguese line travels in the
+        # COMMENT, which Pro Tools shows in the Markers window.
+        label = ("SONG" if (e.get("block") or e.get("song_reprise")) else
+                 "FRAG" if e.get("fragment") else
+                 {"high": "MISS-HI", "medium": "MISS-MED"}.get(e.get("confidence"), "MISS-LOW"))
         name = label.encode("ascii", "replace")[:60]
         tick = int(round(t * 2 * TPQ))
         events.append(vlq(tick - prev) + bytes([255, 6]) + vlq(len(name)) + name)

@@ -43,18 +43,18 @@ def smpte(t):
 
 
 def label(e):
-    """What the engineer sees on the marker, and the colour that goes with it."""
+    """Marker name and colour. SHORT on purpose: Pro Tools clips the label to the gap before
+    the next marker, so long names go unread exactly where markers are dense. The colour
+    carries the urgency and the COMMENT carries the original line, so nothing is lost."""
     if e.get("song_reprise") or e.get("sung"):
-        return "Blue", "SONG - not dubbed (ignore)"
+        return "Blue", "SONG"
     if e.get("block"):
-        b = e["block"]
-        return "Orange", "UN-DUBBED STRETCH (%d lines)" % (b.get("n") or 0)
+        return "Orange", "BLOCK"
     if e.get("fragment"):
-        return "Green", "FRAGMENT - 1 word, check last"
-    conf = (e.get("confidence") or "low").upper()
-    fill = {"silence": " - dub silent", "ambience": " - covered by ambience",
-            "speech-like": " - dub speaks here"}.get(e.get("fill"), "")
-    return ("Red" if conf in ("HIGH", "MEDIUM") else "Orange"), "MISSING %s%s" % (conf, fill)
+        return "Green", "FRAG"
+    conf = (e.get("confidence") or "low").lower()
+    return ({"high": "Red", "medium": "Red"}.get(conf, "Orange"),
+            {"high": "MISS-HI", "medium": "MISS-MED"}.get(conf, "MISS-LOW"))
 
 
 def newest_report(ep):
