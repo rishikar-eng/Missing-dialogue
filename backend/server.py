@@ -972,7 +972,16 @@ async def agent_teams(request: Request):
         data = _json.loads(body or b"{}")
     except Exception:
         data = {}
-    text = re.sub(r"<at>.*?</at>", "", data.get("text") or "").strip()
+    raw_text = data.get("text") or ""
+    text = re.sub(r"<at>.*?</at>", "", raw_text).strip()
+    # Teams rewrites the message on its way here — mentions, entities, non-breaking spaces —
+    # and a command that works when typed by hand can arrive as something the router does not
+    # recognise. When that happened the only visible symptom was the help text, with no way to
+    # tell what had actually been received. Log the raw and cleaned forms so the next report
+    # is one grep instead of a guessing game.
+    print("[teams] raw=%r cleaned=%r conv=%r"
+          % (raw_text[:200], text[:200],
+             ((data.get("conversation") or {}).get("id") or "")[:60]), flush=True)
     conv = (data.get("conversation") or {}).get("id") or data.get("id") or "teams-default"
     if not text:
         return {"type": "message", "text": "Tell me what to do, e.g. 'check episode 42 of Gavv'."}
@@ -980,8 +989,15 @@ async def agent_teams(request: Request):
     # (~10s). So Teams uses a FAST deterministic path (check / run / status parsed directly,
     # returning the same card). The full natural-language agent stays on /api/agent/chat.
     try:
-        return await run_in_threadpool(_teams_fast, text, conv)
+        reply = await run_in_threadpool(_teams_fast, text, conv)
+        _rt = (reply or {}).get("text") or ""
+        print("[teams] routed -> %s | %r"
+              % ("HELP" if "Dialogue QC bot" in _rt else
+                 ("card" if (reply or {}).get("attachments") else "text"), _rt[:110]),
+              flush=True)
+        return reply
     except Exception as e:
+        print("[teams] handler raised: %r" % (str(e)[:200],), flush=True)
         return {"type": "message", "text": f"Sorry - {str(e)[:160]}"}
 
 
