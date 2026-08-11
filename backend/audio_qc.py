@@ -2047,6 +2047,13 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "n_fragments": frag_lines,
             # what the dub does under a missing line: silence | ambience | speech-like
             "missing_by_dub_fill": fills,
+            # SUNG LINES ARE REPORTED BUT NOT MARKED. They stay in the workbook and in
+            # n_missing, and are left off the Pro Tools timeline — so the flag count and the
+            # marker count legitimately differ, and the card has to say by how much or it
+            # reads as though the song filter did nothing.
+            "n_sung": sum(1 for e in errors
+                          if e.get("type") == "MISSING"
+                          and (e.get("sung") or e.get("song_reprise"))),
             # WHAT THE LLM JUDGE DID. A 'present' verdict deletes a candidate outright and a
             # 'garble' sends it to unchecked, so these two counts are the difference between
             # a quiet report and a report that quietly lost findings. The cleared lines are

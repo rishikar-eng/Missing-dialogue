@@ -362,7 +362,8 @@ def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
     # song regions. They remain in the WORKBOOK — this only keeps them off the timeline, so
     # nothing is hidden, it just stops being something a human has to dismiss one by one.
     for e in sorted((x for x in report.get("errors", [])
-                     if x["type"] == "MISSING" and not x.get("sung")),
+                     if x["type"] == "MISSING"
+                     and not (x.get("sung") or x.get("song_reprise"))),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
         # SHORT NAMES ON PURPOSE. Pro Tools clips a marker label to the pixel gap before the
@@ -474,7 +475,7 @@ def build_marker_csv(report, out_path, fps=25.0):
 
     rows = sorted((x for x in report.get("errors", [])
                    if x["type"] == "MISSING" and x.get("script_start_s") is not None
-                   and not x.get("sung")),
+                   and not (x.get("sung") or x.get("song_reprise"))),
                   key=lambda x: x["script_start_s"])
     with open(out_path, "w", encoding="utf-8-sig", newline="") as fh:
         w = _csv.writer(fh)

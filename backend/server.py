@@ -1623,8 +1623,12 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                     ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
                     markers[lang] = st["protools_url"]
                 if st.get("markers_csv_url"):
-                    ln.append(f"   [Marker CSV]({st['markers_csv_url']}) — for the .ptx converter "
-                              "(25 fps, session start 00:00:00:00)")
+                    _sg = int(s.get("sung") or 0)
+                    _mk = max(0, int(s.get("missing") or 0) - _sg)
+                    ln.append(f"   [Marker CSV]({st['markers_csv_url']}) — {_mk} markers"
+                              + (f" ({_sg} song lines left off, still in the workbook)"
+                                 if _sg else "")
+                              + " · 25 fps, session start 00:00:00:00")
                 if st.get("ref_audio_url"):
                     ref = f"   [Missing-lines audio]({st['ref_audio_url']})"
                     if st.get("ref_timeline_url"):

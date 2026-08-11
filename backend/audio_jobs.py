@@ -628,6 +628,8 @@ def status(job_id: str) -> dict[str, Any]:
                 "findings": s.get("n_missing_findings"),
                 "blocks": s.get("n_missing_blocks") or 0,
                 "fills": s.get("missing_by_dub_fill") or {},
+                # lines reported but deliberately NOT given a Pro Tools marker
+                "sung": s.get("n_sung") or 0,
             },
         }
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):
