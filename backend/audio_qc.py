@@ -1303,8 +1303,18 @@ def _judge(ref_text: str, ref_lang: str, dub_lines: list[str], dub_lang: str) ->
                 # way the moment the judge started working reliably. Short lines are already
                 # ranked at the bottom by the fragment rule, so keeping them costs a low-tier
                 # row; dropping them costs a finding.
-                if not v.get("coherent") and len((ref_text or "").split()) > 2:
+                short = len((ref_text or "").split()) <= 2
+                if not v.get("coherent") and not short:
                     return "garble"
+                # AND IT MAY NOT CLEAR ONE EITHER. "muitas coisas." — two generic words — was
+                # cleared because the dub nearby said "Diani still has a lot to learn", which
+                # is a fair reading and a real drop the ear had confirmed. At one or two words
+                # a line carries too little to settle "is this conveyed" from text in EITHER
+                # direction, and the two mistakes cost differently: wrongly clearing loses a
+                # finding for good, wrongly keeping costs one low-tier row. The fragment rule
+                # already ranks these last.
+                if short:
+                    return "missing"
                 return "present" if v.get("conveyed") else "missing"
             except Exception:  # noqa: BLE001 — judge trouble must never suppress a real flag
                 break
