@@ -1829,6 +1829,13 @@ _OCCUPIED_SLOT_COV = 0.25  # above this the dub IS speaking there — a weak abs
 _HIGH_MIN_WORDS = 3        # one- and two-word lines are grunts/names as often as dialogue
 _HIGH_MIN_SECONDS = 0.35   # shorter than this the slot itself is barely measurable
 _STRONG_SEMANTIC = 0.35    # a genuinely poor text match, used only when acoustics are mute
+# HIGH also requires that the matcher did NOT already find this content. Two blind ear checks
+# put three false flags in the top tier, all of them lines the dub does say a beat offset
+# ("dub says 'right' just before"), and all three scored 0.62-0.81 against something. A silent
+# instant is not evidence of absence when the content was located elsewhere. Measured over
+# both batches: the three ear-verified real drops sit at 0.37, 0.72 and 0.73, so 0.75 removes
+# two of the three false highs and costs no real drop.
+_HIGH_MAX_COVERAGE = 0.75
 
 
 def _tier_from_features(e: dict[str, Any]) -> str:
@@ -1891,10 +1898,17 @@ def _tier_from_features(e: dict[str, Any]) -> str:
 
     if occupied:                      # the dub speaks under the line — weakest case there is
         return "low"
-    if hole and words >= _HIGH_MIN_WORDS and dur >= _HIGH_MIN_SECONDS:
+    if (hole and words >= _HIGH_MIN_WORDS and dur >= _HIGH_MIN_SECONDS
+            and (best is None or best < _HIGH_MAX_COVERAGE)):
         return "high"
-    if hole or quiet:
+    if hole:
         return "medium"
+    # AMBIENCE IS NOT EVIDENCE OF A DROP. It reads as "room tone where the line should be",
+    # which sounds like a finding, but across every ear-judged case we have — seven of them —
+    # not one was a real drop; they were lines the dub delivers slightly offset, under its own
+    # room tone. It was producing six of the thirteen false MEDIUM flags on its own.
+    if quiet:
+        return "low"
     if best is not None and best < _STRONG_SEMANTIC:
         return "medium"
     return "low"
