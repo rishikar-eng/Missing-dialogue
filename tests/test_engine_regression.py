@@ -40,7 +40,11 @@ from backend.audio_qc import (  # noqa: E402
 )
 
 CASES = os.path.join(HERE, "fixtures", "tier_cases.json")
+DISPO = os.path.join(HERE, "fixtures", "ear_disposition.json")
 TRUTH = os.path.join(HERE, "fixtures", "ear_truth.json")
+
+
+NL = chr(10)
 
 
 def _load(p):
@@ -185,6 +189,69 @@ def test_ear_verified_false_flags_do_not_reach_high():
             promoted.append("%s @%.1f  %s" % (ep, t, note[:60]))
     assert len(promoted) <= 1, (
         "%d ear-verified FALSE flags promoted to HIGH:\n%s" % (len(promoted), "\n".join(promoted)))
+
+
+# ------------------------------------------------------------------ GATES / END-TO-END
+# The tier fixture only contains lines that SURVIVED to become flags, so it is blind to the
+# six gates upstream of it: a line killed by slot-occupied never enters it. That is exactly
+# how EP12's verified heckle was lost while every ranking test stayed green.
+#
+# ear_disposition.json records what the pipeline actually DOES with each human-verified line —
+# flagged with its tier, or dropped by a named gate with the number that decided it. Deciding
+# that afresh needs a real run (Fargate, minutes per episode), so it cannot be a per-commit
+# test; `tools/check_recall.py` recomputes it after a deploy and diffs against this snapshot.
+# What the tests below do is stop the snapshot itself from silently getting worse.
+
+
+def test_recall_on_ear_verified_drops_has_not_regressed():
+    """Most lines a human confirmed are missing must still reach the report at all.
+
+    This is the number that matters more than any tier: a flag ranked badly can still be
+    found, a flag that never exists cannot. Captured 2026-08-10 at 5 flagged of 7.
+    """
+    d = _load(DISPO)
+    real = [r for r in d["points"] if r["ear"] == "missing"]
+    assert len(real) >= 6, "expected the ear-verified drops in the fixture, saw %d" % len(real)
+    flagged = [r for r in real if r["state"] == "flagged"]
+    lost = [r for r in real if r["state"] != "flagged"]
+    detail = "\n".join(
+        "  %s @%.1f  %s%s" % (r["episode"], r["at"], r["state"],
+                              (" (%s)" % r["gate"]) if r.get("gate") else "")
+        for r in lost)
+    assert len(flagged) >= 5, (
+        "only %d of %d ear-verified real drops still reach the report:\n%s"
+        % (len(flagged), len(real), detail))
+
+
+def test_no_ear_verified_drop_is_lost_to_a_gate_that_used_to_pass_it():
+    """A gate change that starts eating verified drops must be deliberate.
+
+    One is known and accepted: EP12's crowd heckle at 1216.3, taken by slot-occupied because
+    the dub genuinely speaks there — Paul's correctly-dubbed line runs over the top of the
+    Portuguese heckles. That is the overlap blind spot, not a gate misfiring. A SECOND loss
+    means something regressed.
+    """
+    d = _load(DISPO)
+    KNOWN = {("EP12", 1216.3)}
+    lost = [r for r in d["points"]
+            if r["ear"] == "missing" and r["state"] == "dropped"
+            and not any(r["episode"] == e and abs(r["at"] - t) < 2.5 for e, t in KNOWN)]
+    detail = NL.join("  %s @%.1f killed by %s %s"
+                     % (r["episode"], r["at"], r.get("gate"), r.get("why", ""))
+                     for r in lost)
+    assert not lost, ("ear-verified real drops newly suppressed by a gate:" + NL + detail)
+
+
+def test_the_judge_only_clears_lines_a_human_called_present():
+    """The judge deletes a candidate outright on a 'present' verdict, so it is the one gate
+    that can silently remove a finding. Every line it has cleared must be one a human
+    confirmed IS in the dub."""
+    d = _load(DISPO)
+    wrong = [r for r in d["points"]
+             if r.get("gate") == "judge-present" and r["ear"] != "present"]
+    detail = NL.join("  %s @%.1f  %s" % (r["episode"], r["at"], r["note"][:60])
+                     for r in wrong)
+    assert not wrong, ("the judge cleared lines a human confirmed are MISSING:" + NL + detail)
 
 
 # --------------------------------------------------------------------------- UNIT
