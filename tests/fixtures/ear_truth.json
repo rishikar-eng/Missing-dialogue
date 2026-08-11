@@ -543,6 +543,43 @@
     }
    ],
    "note_expected": "The song plays UNDER a dialogue scene at 22:35-23:12: song lines interleave with plain dialogue ('Quando foi que voce e o Lucas chegaram em Jerusalem?'), which is why block grouping cannot catch them — they are not contiguous."
+  },
+  "poa-sung-check-2026-08-11": {
+   "description": "Blind safety check on the sung detector once it began suppressing ~21 lines per episode. 16 suppressed lines plus 6 unmarked controls, 10 episodes. Ear-verified 2026-08-11.",
+   "original_lang": "portuguese",
+   "dub_lang": "english",
+   "verified_missing": [
+    {
+     "start": 2103.4,
+     "episode": "EP13",
+     "confidence": "certain",
+     "note": "'Ola.' — SPOKEN and missing. acc-voc -19.1 dB, correctly NOT suppressed."
+    },
+    {
+     "start": 1739.0,
+     "episode": "EP15",
+     "confidence": "certain",
+     "note": "'Eu' — SPOKEN and missing. acc-voc -10.3 dB, correctly NOT suppressed."
+    }
+   ],
+   "verified_present": [
+    {
+     "start": 2533.2,
+     "episode": "EP19",
+     "confidence": "certain",
+     "note": "'Obrigado.' — SPOKEN and PRESENT, but measured +4.4 dB and SUPPRESSED as sung. The one mislabel in 16. Harmless here because the line was a false flag anyway, but it is the failure mode to watch: a line spoken over loud music reads as sung."
+    }
+   ],
+   "sung_detector_result": {
+    "suppressed_checked": 16,
+    "confirmed_sung": 15,
+    "called_spoken": 1,
+    "spoken_AND_missing_suppressed": 0,
+    "controls_checked": 6,
+    "controls_correctly_not_sung": 4,
+    "songs_the_detector_missed": 2,
+    "verdict": "The critical question — is real dialogue being taken off the timeline — came back clean: 0 of 16. Errors run in the safe direction (2 songs missed, i.e. under-suppression). Suppression is safe at this scale."
+   }
   }
  },
  "_measurement_rule": "Durations/ends in verified_missing MUST be copied from the run's report.json, never estimated. An estimated set of ends made a duration-based false-flag rule look perfect in validation while it actually demoted a verified drop (2026-08-07).",
