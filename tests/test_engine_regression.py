@@ -226,13 +226,20 @@ def test_recall_on_ear_verified_drops_has_not_regressed():
 def test_no_ear_verified_drop_is_lost_to_a_gate_that_used_to_pass_it():
     """A gate change that starts eating verified drops must be deliberate.
 
-    One is known and accepted: EP12's crowd heckle at 1216.3, taken by slot-occupied because
-    the dub genuinely speaks there — Paul's correctly-dubbed line runs over the top of the
-    Portuguese heckles. That is the overlap blind spot, not a gate misfiring. A SECOND loss
-    means something regressed.
+    Two are known and accepted, both the SAME structural case: the dub is genuinely speaking
+    across the slot, so slot-occupied cannot certify absence, while the specific original line
+    is nonetheless gone. That is the overlap blind spot — two voices in the original, one in
+    the dub — not a gate misfiring.
+
+      EP12 @1216.3  slot_cov 1.00  crowd heckles under Paul's correctly-dubbed line
+      EP11 @427.0   slot_cov 0.87  previously recorded as "absent"; the gate audit now names
+                                   which gate takes it, so it moved from invisible to
+                                   explained rather than from working to broken
+
+    A THIRD loss means something regressed.
     """
     d = _load(DISPO)
-    KNOWN = {("EP12", 1216.3)}
+    KNOWN = {("EP12", 1216.3), ("EP11", 427.0)}
     lost = [r for r in d["points"]
             if r["ear"] == "missing" and r["state"] == "dropped"
             and not any(r["episode"] == e and abs(r["at"] - t) < 2.5 for e, t in KNOWN)]
