@@ -850,7 +850,13 @@ def _dub_fill(dv: np.ndarray, s: float, e: float, drift: float,
     return {"fill": kind, "fill_rel_db": round(rel, 1), "fill_dyn_db": round(dyn_db, 1)}
 
 
-_SUNG_ACC_OVER_VOC_DB = 0.0   # accompaniment at or above the vocal = a music mix, not speech
+# A song is music-dominant for SECONDS; a spoken line that happens to land on a music sting is
+# not. Measuring only the line's own span conflated the two: it tagged EP07's ear-verified
+# crowd-dialogue finding as sung (+1.1 dB over the line) and would have kept it off the Pro
+# Tools timeline. Widening to +/-4 s of context separates them cleanly on the blind sample —
+# loudest dialogue -4.7 dB, quietest song -3.4 dB — so the bar sits in that gap.
+_SUNG_WINDOW_S = 4.0          # context either side of the line centre
+_SUNG_ACC_OVER_VOC_DB = -4.0  # accompaniment this far above the vocal, sustained = a song
 
 
 def _sung(oacc: np.ndarray | None, ov: np.ndarray, s: float, e: float) -> dict | None:
@@ -875,12 +881,11 @@ def _sung(oacc: np.ndarray | None, ov: np.ndarray, s: float, e: float) -> dict |
     """
     if oacc is None or ov is None or not len(oacc) or not len(ov):
         return None
-    # A very short line is widened to a 0.3 s window rather than skipped: we are measuring
-    # the music-to-voice BALANCE around the line, which is stable over a wider window, and
-    # sub-second lines are precisely where the rest of the pipeline is least reliable. The
-    # 0 dB threshold was validated with this same widening applied.
-    i0 = max(0, int(s * 16000))
-    i1 = min(len(ov), len(oacc), int(max(e, s + 0.3) * 16000))
+    # Centred on the line and widened to _SUNG_WINDOW_S either side: what is being measured
+    # is the music-to-voice balance of the PASSAGE, not of the instant.
+    mid = 0.5 * (s + max(e, s + 0.3))
+    i0 = max(0, int((mid - _SUNG_WINDOW_S) * 16000))
+    i1 = min(len(ov), len(oacc), int((mid + _SUNG_WINDOW_S) * 16000))
     if i1 - i0 < 1600:                       # ran off the end of the file — cannot measure
         return None
 
