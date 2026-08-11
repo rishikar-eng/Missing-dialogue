@@ -493,6 +493,16 @@ def _main():
         s3.upload_file(f"/tmp/{fname}", BUCKET, f"{pre}/{fname}")
         print(f"WORKBOOK s3://{BUCKET}/{pre}/{fname}", flush=True)
         try:
+            # The studio's route to a real .ptx is a converter that ingests this CSV. It was
+            # never produced by a run — the files handed over were made by hand — so a
+            # Teams-triggered run could not deliver one.
+            cname = fname.rsplit(".", 1)[0] + "_QC-Markers.csv"
+            audio_report.build_marker_csv(rep, f"/tmp/{cname}")
+            s3.upload_file(f"/tmp/{cname}", BUCKET, f"{pre}/{cname}")
+            print(f"MARKERCSV s3://{BUCKET}/{pre}/{cname}", flush=True)
+        except Exception as _ce:  # noqa: BLE001 — a deliverable, but never fatal
+            print(f"[run] marker CSV failed: {_ce}", flush=True)
+        try:
             mname = fname.rsplit(".", 1)[0] + "_ProTools-Markers.mid"
             audio_report.build_marker_midi(rep, f"/tmp/{mname}")
             s3.upload_file(f"/tmp/{mname}", BUCKET, f"{pre}/{mname}")

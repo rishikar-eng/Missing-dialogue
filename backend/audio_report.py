@@ -435,49 +435,103 @@ def build_ref_audio(errors, original_path, out_path, timeline_path=None,
 
 
 def build_marker_csv(report, out_path, fps=25.0):
-    """Marker list as REAPER-format CSV — the text format Pro Tools marker converters read.
+    """Marker list as the CSV the studio's converter actually ingests.
 
-    Pro Tools cannot import a plain text marker list natively (File > Import > Session Data
-    only reads another SESSION), so the studio route to a real .ptx is a converter such as
-    EdiMarker (soundsinsync.com), which ingests Nuendo/Reaper/iZotope-RX marker text or Excel
-    and exports PTX or MIDI. We already ship the MIDI; this gives them the text side, so they
-    can produce a .ptx session of markers without us guessing at Avid's closed format.
+    Pro Tools cannot import a plain text marker list natively, so the route to a real .ptx is
+    a converter (editingtools.io / EdiMarker). This is the exact layout the sound team has
+    already converted successfully — No.,In,Color,Name,Comment with absolute SMPTE at 25 fps,
+    zero-based, because the delivered dubs carry BWF TimeReference 0 and need no session
+    offset. An earlier version of this function emitted Reaper's layout instead and was called
+    by nothing; matching what demonstrably worked beats shipping a second format for someone
+    to debug.
 
-    Columns are Reaper's own export layout, which is what those tools expect:
-        #,Name,Start,End,Length,Color
-    Times are HH:MM:SS.mmm. Every MISSING flag becomes one marker; block members and song
-    reprises are labelled so the sound team can see what NOT to chase.
+    Same contents as the MIDI: sung lines are left off (songs are not dubbed on this series and
+    they were 21 of every 33 flags), and names are short because Pro Tools clips a marker label
+    to the pixel gap before the next one.
     """
-    import csv
+    import csv as _csv
 
-    def tc(t):
+    def smpte(t):
         t = max(0.0, float(t))
-        return "%d:%02d:%06.3f" % (int(t // 3600), int((t % 3600) // 60), t % 60)
+        h, m = int(t // 3600), int((t % 3600) // 60)
+        sec, f = int(t % 60), int(round((t - int(t)) * fps))
+        if f >= fps:                      # rounding can tip a frame past the second
+            f, sec = 0, sec + 1
+            if sec == 60:
+                sec, m = 0, m + 1
+        return "%02d:%02d:%02d:%02d" % (h, m, sec, f)
 
-    rows = []
-    for i, e in enumerate(sorted((x for x in report.get("errors", [])
-                                  if x["type"] == "MISSING" and x.get("script_start_s") is not None),
-                                 key=lambda x: x["script_start_s"]), start=1):
-        t = float(e["script_start_s"])
-        bits = ["MISSING"]
-        if e.get("confidence"):
-            bits.append(str(e["confidence"]).upper())
+    def label(e):
+        if e.get("song_reprise") or e.get("sung"):
+            return "Blue", "SONG"
         if e.get("block"):
-            bits.append("[song/un-dubbed block %d]" % e["block"]["id"])
-        elif e.get("song_reprise"):
-            bits.append("[song reprise]")
-        elif e.get("fragment"):
-            bits.append("[fragment]")
-        if e.get("fill") == "silence":
-            bits.append("(dub silent)")
-        elif e.get("fill") == "ambience":
-            bits.append("(covered by ambience)")
-        txt = (e.get("text") or "").strip().replace('"', "'")
-        if txt:
-            bits.append("- " + txt[:60])
-        rows.append(["M%d" % i, " ".join(bits), tc(t), tc(t), "0", ""])
-    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.writer(f)
-        w.writerow(["#", "Name", "Start", "End", "Length", "Color"])
-        w.writerows(rows)
+            return "Orange", "BLOCK"
+        if e.get("fragment"):
+            return "Green", "FRAG"
+        c = (e.get("confidence") or "low").lower()
+        return ({"high": "Red", "medium": "Red"}.get(c, "Orange"),
+                {"high": "MISS-HI", "medium": "MISS-MED"}.get(c, "MISS-LOW"))
+
+    rows = sorted((x for x in report.get("errors", [])
+                   if x["type"] == "MISSING" and x.get("script_start_s") is not None
+                   and not x.get("sung")),
+                  key=lambda x: x["script_start_s"])
+    with open(out_path, "w", encoding="utf-8-sig", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["No.", "In", "Color", "Name", "Comment"])
+        for i, e in enumerate(rows, start=1):
+            colour, name = label(e)
+            w.writerow([i, smpte(e["script_start_s"]), colour, name,
+                        (e.get("text") or "").replace(chr(10), " ")])
     return out_path
+
+
+def build_ref_audio(errors, original_path, out_path, timeline_path=None,
+                    pad_s=2.5, gap_s=0.6):
+    """MISSING-only reference audio, shared by BOTH QC modes: the original-language audio of
+    every genuinely MISSING line. `out_path` = stitched (clips back-to-back);
+    `timeline_path` = same clips at their real episode timecodes (silent everywhere else),
+    for lining up 1:1 against the dub session. Returns the stitched path or None when there
+    is nothing missing. (Moved here from episode_runner so the scriptless runner — which
+    must not import the Box-fetch stack — can build the same deliverable.)"""
+    import numpy as np
+    import soundfile as sf
+    wins = sorted(
+        (max(0.0, e["script_start_s"] - pad_s),
+         (e.get("script_end_s") or e["script_start_s"]) + pad_s)
+        for e in errors
+        if e.get("type") == "MISSING" and e.get("script_start_s") is not None
+    )
+    merged = []
+    for s0, e0 in wins:
+        if merged and s0 <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e0)
+        else:
+            merged.append([s0, e0])
+    if not merged:
+        return None
+    with sf.SoundFile(str(original_path)) as f:
+        sr, total = f.samplerate, len(f)
+        gap = np.zeros(int(gap_s * sr), dtype=np.float32)
+        chunks = []
+        tl = np.zeros(total, dtype=np.float32) if timeline_path else None
+        for s0, e0 in merged:
+            i0, i1 = max(0, int(s0 * sr)), min(total, int(e0 * sr))
+            if i1 <= i0:
+                continue
+            f.seek(i0)
+            d = f.read(i1 - i0, dtype="float32", always_2d=False)
+            if getattr(d, "ndim", 1) > 1:
+                d = d.mean(axis=1)
+            chunks += [d, gap]
+            if tl is not None:
+                tl[i0:i0 + len(d)] = d
+        out = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+    if not len(out):
+        return None
+    sf.write(str(out_path), out, sr, format="FLAC")
+    if tl is not None:
+        sf.write(str(timeline_path), tl, sr, format="FLAC")
+    return out_path
+
+

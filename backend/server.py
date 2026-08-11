@@ -1597,6 +1597,9 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 if st.get("protools_url"):
                     ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
                     markers[lang] = st["protools_url"]
+                if st.get("markers_csv_url"):
+                    ln.append(f"   [Marker CSV]({st['markers_csv_url']}) — for the .ptx converter "
+                              "(25 fps, session start 00:00:00:00)")
                 if st.get("ref_audio_url"):
                     ref = f"   [Missing-lines audio]({st['ref_audio_url']})"
                     if st.get("ref_timeline_url"):

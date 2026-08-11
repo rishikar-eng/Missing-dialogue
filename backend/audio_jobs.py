@@ -635,6 +635,9 @@ def status(job_id: str) -> dict[str, Any]:
                 out["download_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".mid"):
                 out["protools_url"] = fargate.download_url(obj["Key"])
+            elif obj["Key"].endswith(".csv"):
+                # the marker list the studio's .ptx converter ingests
+                out["markers_csv_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".flac"):
                 # Missing-lines reference audio (same deliverable as script QC)
                 which = "ref_timeline_url" if "Timeline" in obj["Key"] else "ref_audio_url"
