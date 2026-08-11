@@ -1852,9 +1852,14 @@ def _tier_from_features(e: dict[str, Any]) -> str:
     """
     words = len((e.get("text") or "").split())
     blk = e.get("block") or {}
-    # A sung line is never a finding on a series whose songs are left untranslated, and it
-    # is measured from the audio rather than inferred from words, so it caps first.
-    if e.get("sung") or e.get("song_reprise") or e.get("fragment") or words <= 1:
+    # SUNG ALONE IS NOT ENOUGH TO WRITE A LINE OFF. Only the opening and closing THEME is
+    # known never to be dubbed, and what identifies the theme is not where it sits — episode
+    # lengths drift and a short episode puts a mid-episode song near the end — but that it
+    # comes back every week. So a line is dismissed only when both signals agree: measured as
+    # sung AND matching lyrics the series has sung in another episode. A mid-episode song is
+    # sung but does not recur, and stays a normal flag: they are rare, and suppressing them
+    # would cost real findings for very little noise.
+    if e.get("song_reprise") or e.get("fragment") or words <= 1:
         return "low"
     if (blk.get("n") or 0) >= 4:
         return "medium" if blk.get("first") else "low"

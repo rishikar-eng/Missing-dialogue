@@ -356,7 +356,8 @@ def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
     # song regions. They remain in the WORKBOOK — this only keeps them off the timeline, so
     # nothing is hidden, it just stops being something a human has to dismiss one by one.
     for e in sorted((x for x in report.get("errors", [])
-                     if x["type"] == "MISSING" and not x.get("sung")),
+                     if x["type"] == "MISSING"
+                     and not (x.get("sung") and x.get("song_reprise"))),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
         label = ("MISSING"

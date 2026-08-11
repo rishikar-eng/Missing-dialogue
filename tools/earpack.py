@@ -159,21 +159,39 @@ def cut(a, t0, t1):
 beep = (0.06 * np.sin(2 * np.pi * 880 * np.arange(int(0.18 * 16000)) / 16000)).astype("float32")
 gap = np.zeros(int(0.35 * 16000), dtype="float32")
 
+# ONE EPISODE AT A TIME, then free it. A 50-minute episode at 16 kHz float32 is ~190 MB
+# per side, so caching every episode's audio walked the box out of memory and the run was
+# killed after 13 clips with no key written.
 key = []
-for idx, r in enumerate(sorted(chosen, key=lambda x: (x["episode"], x["start"])), 1):
-    ep, t = r["episode"], float(r["start"])
+ordered = sorted(chosen, key=lambda x: (x["episode"], x["start"]))
+numbering = {id(r): i for i, r in enumerate(ordered, 1)}
+for ep in sorted({r["episode"] for r in ordered}):
+    todo = [r for r in ordered if r["episode"] == ep]
     O, D = orig_stem(ep), dub_audio(ep)
     if O is None or D is None:
-        print("  skip %s @%.1f (no audio available)" % (ep, t))
+        print("  skip %s entirely (no audio available)" % ep, flush=True)
+        _ocache.clear(); _dcache.clear()
         continue
-    a = cut(O, t - PAD, float(r["end"]) + PAD)
-    b = cut(D, t - PAD, float(r["end"]) + PAD)
-    clip = np.concatenate([a, gap, beep, gap, b])          # MATCHED GAIN, never normalised
-    name = "%02d_%s_%02dm%02ds.flac" % (idx, ep, int(t // 60), int(t % 60))
-    sf.write(os.path.join(OUT, name), clip, 16000)
-    key.append({"n": idx, "file": name, "episode": ep, "at_s": round(t, 2),
-                "tier": r["tier"], "text": r.get("text"), "fill": r.get("fill"),
-                "coverage": r.get("coverage"), "slot_cov": r.get("slot_cov")})
+    for r in todo:
+        idx, t = numbering[id(r)], float(r["start"])
+        a = cut(O, t - PAD, float(r["end"]) + PAD)
+        b = cut(D, t - PAD, float(r["end"]) + PAD)
+        clip = np.concatenate([a, gap, beep, gap, b])      # MATCHED GAIN, never normalised
+        name = "%02d_%s_%02dm%02ds.flac" % (idx, ep, int(t // 60), int(t % 60))
+        sf.write(os.path.join(OUT, name), clip, 16000)
+        key.append({"n": idx, "file": name, "episode": ep, "at_s": round(t, 2),
+                    "tier": r["tier"], "text": r.get("text"), "fill": r.get("fill"),
+                    "coverage": r.get("coverage"), "slot_cov": r.get("slot_cov")})
+    print("  %s: %d clips" % (ep, len(todo)), flush=True)
+    O = D = None
+    _ocache.clear()
+    _dcache.clear()
+    for f in os.listdir("/tmp"):
+        if f.startswith("o") and f.endswith(".npy"):
+            try:
+                os.remove(os.path.join("/tmp", f))
+            except OSError:
+                pass
 
 json.dump(key, open("/home/ubuntu/earpack_KEY.json", "w"), ensure_ascii=False, indent=1)
 with open(os.path.join(OUT, "HOW-TO-LISTEN.txt"), "w", encoding="utf-8") as fh:
