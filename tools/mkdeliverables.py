@@ -79,7 +79,12 @@ for ep in eps:
     rep = json.loads(s3.get_object(Bucket=B, Key=pre + "/report.json")["Body"].read())
     miss = [e for e in rep["errors"] if e["type"] == "MISSING"
             and e.get("script_start_s") is not None]
-    keep = [e for e in miss if not (e.get("sung") and e.get("song_reprise"))]
+    # Every SUNG line is kept off the timeline, not only the recurring theme. Measured over
+    # 8 episodes: 21.6 of 33.1 flags per episode are sung, and the theme-only rule was
+    # suppressing 0.5 of them. The detector earned this — 9 of 9 songs caught and 0 dialogue
+    # lines mislabelled across two blind ear checks — and the lines remain in the WORKBOOK,
+    # so a mid-episode song is still reported, just not as a marker to click through.
+    keep = [e for e in miss if not e.get("sung")]
     keep.sort(key=lambda e: e["script_start_s"])
 
     base = "POA_EP%02d_English_QC-Markers" % ep

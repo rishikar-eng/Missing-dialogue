@@ -235,12 +235,18 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         if fill and e.get("fill_dyn_db") is not None:
             fill += f" ({e['fill_rel_db']:+.0f} dB vs speech, {e['fill_dyn_db']:.0f} dB range)"
         blk = ""
-        if e.get("fragment") and not e.get("block") and not e.get("song_reprise"):
+        if e.get("sung"):
+            blk = ("sung line (music above the vocal) — songs are not dubbed on this series, "
+                   "so this is listed but NOT given a Pro Tools marker")
+        if e.get("fragment") and not e.get("block") and not e.get("song_reprise") and not e.get("sung"):
             blk = "fragment (1-2 words) — too short to match reliably; check last"
-        if e.get("song_reprise") and not e.get("block"):
-            r = e["song_reprise"]
-            blk = (f"same lyric as block {r['block']} (sung again at "
-                   f"{_ms(r.get('matches_at'))}) — untranslated song, not dialogue")
+        if e.get("song_reprise") and not e.get("block") and not e.get("sung"):
+            # Defensive: this is the ONLY report builder not wrapped in try/except, so a
+            # malformed field here aborts the whole run before markers or reference audio are
+            # written. Treat anything that is not the expected dict as a bare flag.
+            r = e["song_reprise"] if isinstance(e["song_reprise"], dict) else {}
+            where = _ms(r.get("matches_at")) if r.get("matches_at") is not None else "elsewhere"
+            blk = f"same lyric sung {where} — untranslated song, not dialogue"
         if e.get("block"):
             b = e["block"]
             blk = (f"block {b['id']}: {_ms(b['start'])}-{_ms(b['end'])} "
@@ -356,8 +362,7 @@ def build_marker_midi(report, out_path, start_tc_s=0.0, fps=25.0):
     # song regions. They remain in the WORKBOOK — this only keeps them off the timeline, so
     # nothing is hidden, it just stops being something a human has to dismiss one by one.
     for e in sorted((x for x in report.get("errors", [])
-                     if x["type"] == "MISSING"
-                     and not (x.get("sung") and x.get("song_reprise"))),
+                     if x["type"] == "MISSING" and not x.get("sung")),
                     key=lambda x: x["script_start_s"]):
         t = float(e["script_start_s"])
         # SHORT NAMES ON PURPOSE. Pro Tools clips a marker label to the pixel gap before the
