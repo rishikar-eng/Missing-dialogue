@@ -6715,7 +6715,7 @@
       "n": 18,
       "first": true
      },
-     "expected_tier": "low"
+     "expected_tier": "medium"
     },
     {
      "script_start_s": 20.14,
