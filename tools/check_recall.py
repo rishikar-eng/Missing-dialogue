@@ -115,6 +115,11 @@ def main(argv):
             print("  NEW   %s @%.1f  %s" % (p["episode"], p["at"], _state_key(p)))
             continue
         a, b = RANK.get(_state_key(o), 9), RANK.get(_state_key(p), 9)
+        # For a line the ear confirmed is PRESENT the ranking is inverted: being dropped or
+        # demoted is the tool getting it RIGHT. Reporting that as "WORSE" trains the reader to
+        # ignore the warnings, which defeats the check.
+        if p["ear"] == "present":
+            a, b = b, a
         line = ("  %-6s @%-8.1f %-8s %-16s -> %-16s %s"
                 % (p["episode"], p["at"], p["ear"], _state_key(o), _state_key(p),
                    (p.get("gate") or "") + " " + str(p.get("why") or "")))

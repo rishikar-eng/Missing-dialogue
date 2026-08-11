@@ -1,6 +1,6 @@
 {
  "_what": "For every ear-verified line: what the pipeline currently DOES with it — flagged (with its tier) or dropped (by which gate, with the number that decided it). The tier fixture only holds lines that survived to become flags, so it cannot see a gate suppressing one. EP12's verified heckle was lost exactly that way, to slot-occupied at slot_cov 1.0.",
- "_captured": "2026-08-10",
+ "_captured": "updated by tools/check_recall.py",
  "_how_to_refresh": "python tools/mkear.py > tests/fixtures/ear_disposition.json (needs S3)",
  "points": [
   {
@@ -9,9 +9,12 @@
    "at": 2558.6,
    "ear": "present",
    "note": "'Pra soltar esse romano.' — flagged MEDIUM with fill=ambience, i.e. the exact profile of E",
-   "state": "flagged",
-   "tier": "medium",
-   "sung": false
+   "report_at": "2026-08-11 10:12",
+   "state": "dropped",
+   "gate": "judge-present",
+   "why": {
+    "n_dub_lines_seen": 9
+   }
   },
   {
    "case": "poa-ep11-stems",
@@ -19,7 +22,12 @@
    "at": 427.02,
    "ear": "missing",
    "note": "'retiveram as chuvas,' — MEDIUM, dub silent. Ear-verified missing; the English right after",
-   "state": "absent"
+   "report_at": "2026-08-11 11:48",
+   "state": "dropped",
+   "gate": "slot-occupied",
+   "why": {
+    "slot_cov": 0.87
+   }
   },
   {
    "case": "poa-ep11-stems",
@@ -27,7 +35,12 @@
    "at": 732.27,
    "ear": "present",
    "note": "'E voce sabe disso.' — dub says 'you know what'. NOT a song despite the repeat-heuristic t",
-   "state": "absent"
+   "report_at": "2026-08-11 11:48",
+   "state": "dropped",
+   "gate": "slot-occupied",
+   "why": {
+    "slot_cov": 0.86
+   }
   },
   {
    "case": "poa-ep11-stems",
@@ -35,6 +48,7 @@
    "at": 780.85,
    "ear": "present",
    "note": "'Claro que tinha.' — dub says 'no he was' (Paul wasn't ashamed), delivered faster. NOT a s",
+   "report_at": "2026-08-11 11:48",
    "state": "absent"
   },
   {
@@ -43,6 +57,7 @@
    "at": 974.27,
    "ear": "present",
    "note": "'que sao por, por natureza.' — dub says 'who are ... by nature'.",
+   "report_at": "2026-08-11 11:48",
    "state": "absent"
   },
   {
@@ -51,6 +66,7 @@
    "at": 1215.18,
    "ear": "missing",
    "note": "'Alguem paga ele.' — low confidence, dub fill = SILENCE. Ear-verified missing. [end correc",
+   "report_at": "2026-08-11 11:48",
    "state": "flagged",
    "tier": "high",
    "sung": false
@@ -61,6 +77,7 @@
    "at": 1863.7,
    "ear": "missing",
    "note": "'muitas coisas.' — low, dub silent. Ear-verified missing.",
+   "report_at": "2026-08-11 11:48",
    "state": "flagged",
    "tier": "medium",
    "sung": false
@@ -71,6 +88,7 @@
    "at": 262.86,
    "ear": "present",
    "note": "'Ou entao' - present in both (original has more background noise)",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "medium",
    "sung": false
@@ -81,6 +99,7 @@
    "at": 361.9,
    "ear": "missing",
    "note": "'Nao e possivel, seu charlatao.' - user ear-verified MISSING 2026-08-06; the dub transcrip",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "medium",
    "sung": false
@@ -91,6 +110,7 @@
    "at": 419.07,
    "ear": "present",
    "note": "'Esperem!' - present in both",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "low",
    "sung": false
@@ -101,6 +121,7 @@
    "at": 429.17,
    "ear": "present",
    "note": "'Obrigado.' - present",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "low",
    "sung": false
@@ -111,6 +132,7 @@
    "at": 448.51,
    "ear": "present",
    "note": "'Por favor,' - present",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "medium",
    "sung": false
@@ -121,6 +143,7 @@
    "at": 579.47,
    "ear": "present",
    "note": "'O que?' - present",
+   "report_at": "2026-08-10 13:26",
    "state": "flagged",
    "tier": "medium",
    "sung": false
@@ -131,6 +154,7 @@
    "at": 1216.3,
    "ear": "missing",
    "note": "Crowd heckles 'Mentira.' / 'Mentiroso total.' / 'Voces sao mentirosos.' - user heard it as",
+   "report_at": "2026-08-10 13:26",
    "state": "dropped",
    "gate": "slot-occupied",
    "why": {
@@ -143,6 +167,7 @@
    "at": 1424.89,
    "ear": "present",
    "note": "'Obrigada.' - present in both",
+   "report_at": "2026-08-10 13:26",
    "state": "dropped",
    "gate": "judge-present",
    "why": {
@@ -155,8 +180,9 @@
    "at": 1684.89,
    "ear": "missing",
    "note": "'E foi assim que Dionisio, o Areopagita, Damares e alguns homens creram em Atenas.' — a WH",
+   "report_at": "2026-08-11 10:18",
    "state": "flagged",
-   "tier": "medium",
+   "tier": "high",
    "sung": false
   },
   {
@@ -165,9 +191,12 @@
    "at": 1167.53,
    "ear": "present",
    "note": "'Nao se preocupem.' — flagged low with fill='speech-like', and it IS present: the dub says",
-   "state": "flagged",
-   "tier": "low",
-   "sung": false
+   "report_at": "2026-08-11 10:20",
+   "state": "dropped",
+   "gate": "judge-present",
+   "why": {
+    "n_dub_lines_seen": 8
+   }
   },
   {
    "case": "poa-ep25",
@@ -175,8 +204,9 @@
    "at": 767.66,
    "ear": "missing",
    "note": "'E, e.' — the English is missing TWO pain moans before 'is it very difficult Peter'. A VOC",
+   "report_at": "2026-08-11 10:21",
    "state": "flagged",
-   "tier": "low",
+   "tier": "medium",
    "sung": false
   }
  ]
