@@ -105,4 +105,13 @@ print(base64.b64decode(t).decode().split(':', 1)[1])\" | \
   echo "image changed: ${BEFORE:7:12} -> ${AFTER:7:12}"
 fi
 
+if [ "$IMAGE" = "1" ]; then
+  say "recall check"
+  # The offline suite only sees the ranking layer. This one recomputes what the pipeline
+  # actually does with every ear-verified line and fails if a real drop degraded — the check
+  # that would have caught EP12's heckle the day it was lost. Advisory here because it reads
+  # the LAST run's reports; re-run it after the next QC run for a true reading.
+  ssh_ "cd $APP && set -a && . ./.env 2>/dev/null; set +a; .venv/bin/python tools/check_recall.py"     || echo "  WARNING: recall check reported a degradation — investigate before relying on this build"
+fi
+
 say "deployed ${LOCAL_HEAD:0:8} ($BRANCH)"
