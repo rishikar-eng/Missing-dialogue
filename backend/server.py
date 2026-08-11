@@ -1031,6 +1031,15 @@ def _launch_run(conv: str, key: str, cfg: dict[str, Any], n: int) -> dict[str, A
     {mode, job, launched?, disp}. Raises on launch failure (caller formats the error)."""
     from . import episode_runner, fargate, notify
     disp = cfg.get("display_name")
+    # SCRIPT QC NEEDS A SCRIPT. Three of the four registered series have no scripts_folder at
+    # all — they are checked audio-only — so "run ep 27" on one of them launched a Fargate
+    # task that could only fail, and surfaced in Teams several minutes later as "cannot unpack
+    # non-iterable NoneType object". Refuse in the immediate reply and name the command that
+    # does work.
+    if not cfg["box"].get("scripts_folder"):
+        raise ValueError(
+            f"{disp} has no scripts in Box — it is checked audio-only. "
+            f"Use `run scriptless qc {(cfg.get('aliases') or [key])[0]} ep {n}` instead.")
     sess = _AGENT_SESSIONS.setdefault(conv, {"series_key": None, "cfg": None, "convo": [], "fast": {}})
     fast = sess.setdefault("fast", {})
     if fargate.enabled():
@@ -2186,6 +2195,26 @@ def _teams_fast(text: str, conv: str) -> dict[str, Any]:
         if not series_key:
             return {"type": "message", "text": f"Which series? I handle: {', '.join(series_registry.series_names())}"}
         key, cfg = series_registry.resolve(series_key)
+        # A SCRIPTLESS-ONLY SERIES HAS NO SCRIPT TO CHECK FOR. Three of the four registered
+        # series have no scripts_folder, and "check ep 27" on one of them walked into
+        # check_episode and died on a missing "script" key. Answer with the audio-only card,
+        # which is both correct and what was actually being asked for.
+        if not cfg["box"].get("scripts_folder"):
+            from . import audio_jobs as _aj
+            av = _aj.availability(key, cfg, int(ep))
+            fast.update(episode=int(ep), series_key=key)
+            sess["series_key"], sess["cfg"] = key, cfg
+            ready = av.get("languages_ready") or {}
+            bad = len(av.get("unusable") or {})
+            note = (f"{cfg.get('display_name')} is checked audio-only (no scripts in Box) — "
+                    f"here is the scriptless view.")
+            summary = (f"EP {ep} — {av.get('series')}: "
+                       + ("original found, " if av.get("original") else "**original NOT found**, ")
+                       + f"{len(ready)}/{len(cfg.get('languages', []))} ready to check"
+                       + (f", {bad} cannot be checked" if bad else ""))
+            return {"type": "message", "text": note + chr(10) + chr(10) + summary,
+                    "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive",
+                                     "content": _audio_availability_card(av, conv)}]}
         rep = box_discovery.check_episode(box_oauth.get_token(), key, cfg, int(ep))
         brief = _agent._availability_brief(rep)
         fast.update(episode=int(ep), series_key=key)
