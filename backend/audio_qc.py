@@ -1630,6 +1630,13 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
             txt = otext[i] if otext else None
             q = oqual[i] if oqual else None
             best_seg = float(sim[i].max()) if sim.size else 0.0
+            # the strongest dub match NEAR the expected position, contention ignored
+            local_best, local_at = 0.0, None
+            if sim.size and len(dseg):
+                lo, hi = s + drift0 - _LOCAL_MATCH_S, e + drift0 + _LOCAL_MATCH_S
+                for j in range(len(dseg)):
+                    if lo <= dseg[j][0] <= hi and sim[i][j] > local_best:
+                        local_best, local_at = float(sim[i][j]), float(dseg[j][0])
             if txt and _songlike(txt):
                 _drop("song-like", s, e, txt,
                       unique_ratio=round(len(set(txt.split())) / max(1, len(txt.split())), 2))
@@ -1711,6 +1718,9 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                     _say(f"  cleared-by-judge @{s:.1f}-{e:.1f}s — a dub line conveys it  {txt!r}")
                     continue
             _err = _missing(i, s, e, dub_label, best_seg, txt, slot_cov=slot_cov)
+            _err["local_match"] = round(local_best, 3)
+            if local_at is not None:
+                _err["local_match_at"] = round(local_at - s, 2)   # seconds off, signed
             try:
                 # descriptive extra — must NEVER be able to kill a detection run
                 _f = _dub_fill(dv, s, e, max(-3.0, min(3.0, drift0)), _fill_ref, dwin)
@@ -1836,6 +1846,17 @@ _STRONG_SEMANTIC = 0.35    # a genuinely poor text match, used only when acousti
 # both batches: the three ear-verified real drops sit at 0.37, 0.72 and 0.73, so 0.75 removes
 # two of the three false highs and costs no real drop.
 _HIGH_MAX_COVERAGE = 0.75
+# THE LINE MAY SIMPLY BE LATE. _align is one-to-one, so when two original lines want the same
+# dub line the loser is reported missing even though the dub says it — and the studio hears
+# exactly that: "eng says 'tell me' at the 4 second mark", "dub says 'right' just before".
+# `coverage` cannot see this: it is sim[i].max() over the WHOLE episode, so a match 20 minutes
+# away scores the same as one half a second away. `local_match` asks the question that matters
+# — is the content HERE, near where it belongs, whether or not the aligner had already given
+# that dub line to someone else. 0.50 is the aligner's own bar for "this is a match"
+# (align.MIN_SIM), so nothing new is being invented: a candidate that clears it would have
+# been paired if the slot had not already been taken.
+_LOCAL_MATCH_SIM = 0.50
+_LOCAL_MATCH_S = 3.0       # how far either side of the expected position counts as "here"
 
 
 def _tier_from_features(e: dict[str, Any]) -> str:
@@ -1896,6 +1917,12 @@ def _tier_from_features(e: dict[str, Any]) -> str:
         hole = sc is not None and sc < _HOLE_SLOT_COV
         quiet = False
 
+    # THE CONTENT IS RIGHT THERE. Checked before any acoustic reasoning, because a silent
+    # instant means nothing once the line has been located a beat away — that combination is
+    # what put three false flags at the top of the queue in the second blind ear check.
+    lm = e.get("local_match")
+    if lm is not None and lm >= _LOCAL_MATCH_SIM:
+        return "low"
     if occupied:                      # the dub speaks under the line — weakest case there is
         return "low"
     if (hole and words >= _HIGH_MIN_WORDS and dur >= _HIGH_MIN_SECONDS
