@@ -178,7 +178,16 @@ def _sum_speaker_tracks(folder_id: str, tok: str) -> str:
 
 def _local(p: str) -> str:
     if p.startswith("spk://"):            # a FOLDER of per-character dub tracks
-        return _sum_speaker_tracks(p[6:], os.environ["BOX_ACCESS_TOKEN"])
+        dst = _sum_speaker_tracks(p[6:], os.environ["BOX_ACCESS_TOKEN"])
+        # GIVE IT A CACHE IDENTITY. This branch used to return without one, so a
+        # speaker-summed dub never pushed its transcript to S3. Two consequences, both real:
+        # every re-run paid to transcribe the same audio again, and a flag on such an episode
+        # could not be diagnosed afterwards because nothing recorded what the dub actually
+        # said — which is why EP27's contested line is still unexplained. The summed file is
+        # content-addressed already (folder id + track count + total bytes), so that name is
+        # a safe cache key.
+        _cache_attach(dst, "sepcache/" + os.path.basename(dst).rsplit(".", 1)[0])
+        return dst
     if p.startswith("box://"):
         # Teams-triggered runs pass Box file ids + a short-lived access token in the env.
         import httpx

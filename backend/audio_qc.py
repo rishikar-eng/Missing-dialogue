@@ -1855,8 +1855,13 @@ _HIGH_MAX_COVERAGE = 0.75
 # that dub line to someone else. 0.50 is the aligner's own bar for "this is a match"
 # (align.MIN_SIM), so nothing new is being invented: a candidate that clears it would have
 # been paired if the slot had not already been taken.
-_LOCAL_MATCH_SIM = 0.50
 _LOCAL_MATCH_S = 3.0       # how far either side of the expected position counts as "here"
+# NOT USED AS A GATE, deliberately. Measured on the lines the studio judged: every one the dub
+# actually says scored 0.00-0.32 locally, and so did the one case they could not call either
+# way. Cross-lingual embeddings do not score a loose adaptation — "Diz aqui pro tio" arriving
+# as "tell me" is a rewrite for idiom, not a translation — so no threshold separates present
+# from missing here. The number is still recorded, with the offset, because "the dub says this
+# 1.7 s late" is exactly what a reviewer wants to know; it just cannot decide the tier.
 
 
 def _tier_from_features(e: dict[str, Any]) -> str:
@@ -1917,12 +1922,6 @@ def _tier_from_features(e: dict[str, Any]) -> str:
         hole = sc is not None and sc < _HOLE_SLOT_COV
         quiet = False
 
-    # THE CONTENT IS RIGHT THERE. Checked before any acoustic reasoning, because a silent
-    # instant means nothing once the line has been located a beat away — that combination is
-    # what put three false flags at the top of the queue in the second blind ear check.
-    lm = e.get("local_match")
-    if lm is not None and lm >= _LOCAL_MATCH_SIM:
-        return "low"
     if occupied:                      # the dub speaks under the line — weakest case there is
         return "low"
     if (hole and words >= _HIGH_MIN_WORDS and dur >= _HIGH_MIN_SECONDS
