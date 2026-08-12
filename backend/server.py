@@ -1620,8 +1620,14 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                     ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
                     downloads[lang] = st["download_url"]
                 if st.get("markers_csv_url") or st.get("ptx_url"):
-                    _sg = int(s.get("sung") or 0)
-                    _mk = max(0, int(s.get("missing") or 0) - _sg)
+                    # COUNTED from the marker CSV, not inferred from the summary: `missing`
+                    # minus `sung` claimed 39 markers for a 21-marker session whenever a
+                    # report carried no n_sung. What is left off follows from the same
+                    # subtraction, so the two numbers can never contradict each other.
+                    _mk = s.get("markers")
+                    _mk = int(_mk) if _mk is not None else max(
+                        0, int(s.get("missing") or 0) - int(s.get("sung") or 0))
+                    _sg = max(0, int(s.get("missing") or 0) - _mk)
                     # The .ptx IS the session — the engineer opens it and clicks down the
                     # markers — so it leads, with the CSV kept beside it as the source it
                     # was converted from (and the input to the studio's own converter).

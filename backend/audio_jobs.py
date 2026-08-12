@@ -9,6 +9,8 @@ for the agent. Results are read S3-first so status survives a server restart.
 """
 from __future__ import annotations
 
+import csv
+import io
 import os
 import uuid
 from typing import Any
@@ -571,6 +573,23 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
             "errors": {k: v["error"] for k, v in langs.items() if v.get("error")}}
 
 
+def _marker_count(s3, bucket: str, csv_key: str) -> int | None:
+    """How many markers the delivered files ACTUALLY contain — counted from the marker CSV,
+    which is what the .ptx is built from.
+
+    Not derived from the summary. `missing - n_sung` was wrong twice over: `n_sung` is absent
+    from older reports (so every sung line was counted as a marker — 39 claimed against a
+    21-marker session), and the run that wrote the CSV may not filter exactly as today's code
+    would. The file is a few KB and only read once the run is done. Returns None if it cannot
+    be read, and the caller then says nothing rather than guessing.
+    """
+    try:
+        body = s3.get_object(Bucket=bucket, Key=csv_key)["Body"].read().decode("utf-8-sig")
+        return sum(1 for _ in csv.DictReader(io.StringIO(body)))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _publish_ptx(s3, bucket: str, csv_key: str) -> str | None:
     """Convert a published marker CSV to a Pro Tools session and publish it beside the CSV.
 
@@ -681,10 +700,14 @@ def status(job_id: str) -> dict[str, Any]:
                 out[which] = fargate.download_url(obj["Key"])
         # Convert on first sight, then it is simply listed above on every later poll. Checked
         # after the loop, not inside it: S3 lists keys in order and must not decide this.
-        if csv_key and "ptx_url" not in out:
-            url = _publish_ptx(s3, c["bucket"], csv_key)
-            if url:
-                out["ptx_url"] = url
+        if csv_key:
+            if "ptx_url" not in out:
+                url = _publish_ptx(s3, c["bucket"], csv_key)
+                if url:
+                    out["ptx_url"] = url
+            n = _marker_count(s3, c["bucket"], csv_key)
+            if n is not None:
+                out["summary"]["markers"] = n
         return out
     except Exception:
         pass                                        # not published yet — fall through to ECS

@@ -15,6 +15,7 @@ The delivered-file check needs the POA batch on this machine and skips without i
 
 Run: python -m pytest tests/test_ptx_format.py -q
 """
+import io
 import os
 import sys
 from pathlib import Path
@@ -94,6 +95,52 @@ def test_session_name_fits_the_field():
     assert name.endswith("_QC-Markers.ptx")
     short = "POA_EP11_English_QC-Markers"
     assert ptx.session_name_for(short) == short + ".ptx"
+
+
+def test_marker_count_is_read_from_the_csv_not_inferred():
+    """What the Teams card is allowed to claim about the session it links.
+
+    It used to say `missing - n_sung` markers. Reports that carry no n_sung made that the raw
+    missing count — 39 advertised against a 21-marker session. The count now comes from the
+    CSV the .ptx was built from, so the number beside the link is the number in the file.
+    """
+    from backend import audio_jobs
+
+    body = ("No.,In,Color,Name,Comment\r\n"
+            + "".join(f"{i},00:00:0{i}:00,Red,MISS-HI,line {i}\r\n" for i in range(1, 4)))
+
+    class _S3:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def get_object(self, Bucket, Key):  # noqa: N803 — boto3's own signature
+            if self.payload is None:
+                raise RuntimeError("no such key")
+            return {"Body": io.BytesIO(self.payload.encode("utf-8-sig"))}
+
+    assert audio_jobs._marker_count(_S3(body), "b", "k.csv") == 3
+    # header-only CSV: a clean episode has zero markers, and that is a real answer
+    assert audio_jobs._marker_count(_S3("No.,In,Color,Name,Comment\r\n"), "b", "k.csv") == 0
+    # unreadable: None, so the card says nothing rather than inventing a number
+    assert audio_jobs._marker_count(_S3(None), "b", "k.csv") is None
+
+
+def test_card_markers_and_left_off_always_sum_to_the_flag_count():
+    """The two numbers on the card come from one subtraction, so they cannot contradict:
+    whatever is not a marker is reported as left off, and both are non-negative."""
+    def render(summary):
+        s = summary
+        mk = s.get("markers")
+        mk = int(mk) if mk is not None else max(
+            0, int(s.get("missing") or 0) - int(s.get("sung") or 0))
+        return mk, max(0, int(s.get("missing") or 0) - mk)
+
+    assert render({"missing": 39, "markers": 21, "sung": None}) == (21, 18)
+    assert render({"missing": 21, "markers": 21}) == (21, 0)
+    assert render({"missing": 0, "markers": 0}) == (0, 0)
+    # no counted value (CSV unreadable): falls back, and still never goes negative
+    assert render({"missing": 39, "sung": 18}) == (21, 18)
+    assert render({"missing": 5, "sung": 99}) == (0, 5)
 
 
 @pytest.mark.skipif(not PTX_DIR.is_dir(), reason="delivered POA batch not on this machine")
