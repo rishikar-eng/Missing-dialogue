@@ -51,3 +51,19 @@ def audio_qc_xlsx(series: str | None, episode: int | str, dub_lang: str) -> str:
 
 def markers_mid(series: str | None, episode: int | str, lang: str) -> str:
     return _join(slug(series), _ep(episode), lang.title(), "ProTools-Markers") + ".mid"
+
+
+def markers_ptx_from_csv(csv_name: str) -> str:
+    """The .ptx that a marker CSV converts to, named from the CSV so the pair is obviously
+    one deliverable.
+
+    The dated `AudioQC-Report_<date>` middle is dropped, which is not cosmetic: a .ptx stores
+    its own name INSIDE the file in a fixed-width field (58 bytes in the studio's sessions),
+    and the workbook stem alone is 74. Dropping it lands on exactly the name shape the studio
+    already has from the first POA batch — POA-Paulo-O-Apostolo_EP11_English_QC-Markers.ptx.
+    Anything still too long is trimmed by backend.ptx.session_name_for.
+    """
+    from . import ptx
+    stem = re.sub(r"_AudioQC-Report_\d{4}-\d{2}-\d{2}", "",
+                  csv_name.rsplit("/", 1)[-1].rsplit(".", 1)[0])
+    return ptx.session_name_for(stem)

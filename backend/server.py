@@ -1619,16 +1619,30 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 if st.get("download_url"):
                     ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
                     downloads[lang] = st["download_url"]
-                if st.get("protools_url"):
-                    ln.append(f"   [Pro Tools markers]({st['protools_url']}) — import as Memory Locations")
-                    markers[lang] = st["protools_url"]
-                if st.get("markers_csv_url"):
+                if st.get("markers_csv_url") or st.get("ptx_url"):
                     _sg = int(s.get("sung") or 0)
                     _mk = max(0, int(s.get("missing") or 0) - _sg)
-                    ln.append(f"   [Marker CSV]({st['markers_csv_url']}) — {_mk} markers"
+                    # The .ptx IS the session — the engineer opens it and clicks down the
+                    # markers — so it leads, with the CSV kept beside it as the source it
+                    # was converted from (and the input to the studio's own converter).
+                    _mark = []
+                    if st.get("ptx_url"):
+                        _mark.append(f"[Pro Tools session]({st['ptx_url']})")
+                    if st.get("markers_csv_url"):
+                        _mark.append(f"[marker CSV]({st['markers_csv_url']})")
+                    ln.append(f"   {' · '.join(_mark)} — {_mk} markers"
                               + (f" ({_sg} song lines left off, still in the workbook)"
                                  if _sg else "")
                               + " · 25 fps, session start 00:00:00:00")
+                if st.get("protools_url"):
+                    # Not a duplicate of the .ptx above: that one OPENS as its own session,
+                    # this drops the same markers into a session already being worked in.
+                    ln.append(f"   [Markers as MIDI]({st['protools_url']}) — "
+                              "to import into a session you already have open")
+                # The card's one compact link is whichever the engineer can act on fastest.
+                markers[lang] = st.get("ptx_url") or st.get("protools_url") or ""
+                if not markers[lang]:
+                    markers.pop(lang, None)
                 if st.get("ref_audio_url"):
                     ref = f"   [Missing-lines audio]({st['ref_audio_url']})"
                     if st.get("ref_timeline_url"):

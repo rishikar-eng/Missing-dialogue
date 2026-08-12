@@ -571,6 +571,36 @@ def launch_all(series_key: str, cfg: dict[str, Any], episode: int,
             "errors": {k: v["error"] for k, v in langs.items() if v.get("error")}}
 
 
+def _publish_ptx(s3, bucket: str, csv_key: str) -> str | None:
+    """Convert a published marker CSV to a Pro Tools session and publish it beside the CSV.
+
+    Done HERE, on the always-on dispatcher, rather than inside the QC task: the writer is
+    pure stdlib and takes milliseconds, while adding it to the heavy sonar image would mean
+    rebuilding and pushing that image (demucs/fairseq2/sonar) to ship a file format. Running
+    it on the read side also back-fills every run that finished before this existed — the
+    first status() call after deploy converts, and the object is then just found.
+
+    Returns the download URL, or None when there is nothing to convert or the conversion
+    fails — a .ptx is a convenience on top of the CSV, and never worth failing a report for.
+    """
+    import tempfile
+    from . import naming, ptx
+    try:
+        name = naming.markers_ptx_from_csv(csv_key)
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "markers.csv")
+            s3.download_file(bucket, csv_key, src)
+            out = os.path.join(td, name)
+            if not ptx.csv_to_ptx(src, out, session_name=name):
+                return None                      # clean episode: no markers, no session
+            key = f"{csv_key.rsplit('/', 1)[0]}/{name}"
+            s3.upload_file(out, bucket, key)
+        return fargate.download_url(key)
+    except Exception as e:  # noqa: BLE001
+        print(f"[audio_jobs] .ptx conversion failed for {csv_key}: {e}")
+        return None
+
+
 def status(job_id: str) -> dict[str, Any]:
     """S3-first: a published report.json means done regardless of task/server lifecycle."""
     import json
@@ -632,18 +662,29 @@ def status(job_id: str) -> dict[str, Any]:
                 "sung": s.get("n_sung") or 0,
             },
         }
+        csv_key = None
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):
             if obj["Key"].endswith(".xlsx") and "download_url" not in out:
                 out["download_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".mid"):
                 out["protools_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".csv"):
-                # the marker list the studio's .ptx converter ingests
+                # the marker list, and the source the .ptx session is converted from
+                csv_key = obj["Key"]
                 out["markers_csv_url"] = fargate.download_url(obj["Key"])
+            elif obj["Key"].endswith(".ptx"):
+                # the Pro Tools session itself — what the sound engineer actually opens
+                out["ptx_url"] = fargate.download_url(obj["Key"])
             elif obj["Key"].endswith(".flac"):
                 # Missing-lines reference audio (same deliverable as script QC)
                 which = "ref_timeline_url" if "Timeline" in obj["Key"] else "ref_audio_url"
                 out[which] = fargate.download_url(obj["Key"])
+        # Convert on first sight, then it is simply listed above on every later poll. Checked
+        # after the loop, not inside it: S3 lists keys in order and must not decide this.
+        if csv_key and "ptx_url" not in out:
+            url = _publish_ptx(s3, c["bucket"], csv_key)
+            if url:
+                out["ptx_url"] = url
         return out
     except Exception:
         pass                                        # not published yet — fall through to ECS
