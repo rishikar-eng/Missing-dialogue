@@ -648,6 +648,18 @@ def status(job_id: str) -> dict[str, Any]:
                         # one entry per block, not one per line inside it
                         and (not x.get("block") or x["block"].get("first"))),
                        key=lambda x: (_rank.get(x.get("confidence"), 3), x["script_start_s"]))
+        # --- what is actually actionable: every MISSING flag that is not a song ------------
+        _miss = [e for e in rep.get("errors", []) if e.get("type") == "MISSING"]
+        _keep = [e for e in _miss if not (e.get("sung") or e.get("song_reprise"))]
+        _bc = {"high": 0, "medium": 0, "low": 0}
+        for e in _keep:
+            _bc[e.get("confidence") or "low"] = _bc.get(e.get("confidence") or "low", 0) + 1
+        # findings, not lines: a contiguous un-dubbed stretch is one thing to act on
+        _blocks = {(e.get("block") or {}).get("id") for e in _keep if e.get("block")}
+        _loose = sum(1 for e in _keep if not e.get("block"))
+        _act = {"n": len(_keep), "by_conf": _bc,
+                "findings": _loose + len(_blocks), "blocks": len(_blocks),
+                "sung": len(_miss) - len(_keep)}
         ex = []
         for e in _cand[:6]:
             b = e.get("block")
@@ -667,18 +679,24 @@ def status(job_id: str) -> dict[str, Any]:
         out: dict[str, Any] = {
             "status": "done",
             "summary": {
-                "missing": s.get("n_missing"),
-                "missing_by_confidence": s.get("n_missing_by_confidence"),
+                # SONGS ARE NOT FINDINGS on a series whose songs are left untranslated, so
+                # they are not counted here. The headline used to read "39 lines" beside a
+                # 17-marker session because it counted 22 song lines nobody will ever action.
+                # Computed from the errors rather than the summary so it is also right for
+                # reports written before n_sung existed.
+                "missing": _act["n"],
+                "missing_by_confidence": _act["by_conf"],
+                "missing_all": s.get("n_missing"),      # every flag, songs included
                 "extra": s.get("n_extra"), "misaligned": s.get("n_misaligned"),
                 "original_lines": s.get("n_original_regions"),
                 "coverage": s.get("coverage"), "unchecked": s.get("n_unchecked"),
                 "examples": ex,
                 # a contiguous un-dubbed stretch counts ONCE (the lines are still listed)
-                "findings": s.get("n_missing_findings"),
-                "blocks": s.get("n_missing_blocks") or 0,
+                "findings": _act["findings"],
+                "blocks": _act["blocks"],
                 "fills": s.get("missing_by_dub_fill") or {},
                 # lines reported but deliberately NOT given a Pro Tools marker
-                "sung": s.get("n_sung") or 0,
+                "sung": _act["sung"],
             },
         }
         csv_key = None

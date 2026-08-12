@@ -1609,9 +1609,15 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                 n_find = int(s.get("findings") or n_missing)
                 # NB: `blocks` is the render accumulator in this scope — do not shadow it
                 n_blocks = int(s.get("blocks") or 0)
+                # `missing` and `findings` are already song-free (audio_jobs.status). Say
+                # that songs were set aside, or the smaller number reads as the tool having
+                # missed things. Only spell out the line count when it differs from the
+                # finding count — i.e. when a stretch collapsed several lines into one.
+                n_sung = int(s.get("sung") or 0)
                 head = (f"{n_find} possible missing"
                         + (f" ({n_missing} lines, {n_blocks} in un-dubbed stretches)"
-                           if n_blocks else ""))
+                           if n_blocks and n_missing != n_find else "")
+                        + (f" · {n_sung} song lines not counted" if n_sung else ""))
                 ln = [f"{icon} **{lang}** — {head} "
                       f"(high {conf.get('high', 0)} / med {conf.get('medium', 0)} / low {conf.get('low', 0)})",
                       f"   checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} "
@@ -1627,7 +1633,9 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                     _mk = s.get("markers")
                     _mk = int(_mk) if _mk is not None else max(
                         0, int(s.get("missing") or 0) - int(s.get("sung") or 0))
-                    _sg = max(0, int(s.get("missing") or 0) - _mk)
+                    # what was left off is stated in the headline now, so this line just
+                    # says what is IN the file the engineer is about to open
+                    _sg = 0
                     # The .ptx IS the session — the engineer opens it and clicks down the
                     # markers — so it leads, with the CSV kept beside it as the source it
                     # was converted from (and the input to the studio's own converter).
