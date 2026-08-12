@@ -1816,8 +1816,11 @@ def compare(original_path: str, dub_path: str, *, original_lang: str, dub_lang: 
                         + " with nothing matching it in the original — added or improvised."),
         })
     if n_unchecked:
+        _why = ", ".join(f"{n} {r}" for r, n in unchecked_breakdown(
+            {"dropped_by_gate": {g: sum(1 for d in _dropped if d["gate"] == g)
+                                 for g in {d["gate"] for d in _dropped}}}).items())
         _say(f"coverage: {len(oseg) - n_unchecked}/{len(oseg)} original lines verifiable "
-             f"({n_unchecked} unchecked — transcript unreliable on one side)")
+             f"({n_unchecked} unchecked — {_why})")
     return _report(errors, oseg, dub_label, tol_s, n_unchecked=n_unchecked,
                    series=os.environ.get("AQC_SERIES") or None, judged=_judged,
                    dropped=_dropped)
@@ -1981,6 +1984,38 @@ def _missing(i: int, s: float, e: float, ch: str, best: float,
     }
 
 
+# WHY A LINE COULD NOT BE VERIFIED, in words a sound engineer can act on. Five gates send
+# candidates to unchecked and only ONE of them means a bad transcript, so reporting the
+# total as "unreadable on one side" (as every surface did until now) misdescribes most of
+# it: on EP25, 26 of 32 were slots the dub is audibly SPEAKING over, and exactly 1 was
+# unreadable. A studio reading "32 unreadable" concludes the audio is poor; the truth is
+# "the dub talks there, so absence cannot be certified".
+_UNCHECKED_REASON: dict[str, str] = {
+    "slot-occupied":        "dub speaks there",
+    "dub-unreadable":       "dub speaks there",   # speech present, just not transcribable
+    "long-span":            "not one line",       # a 16 s "line" is a decode artefact
+    "reference-unreliable": "unreadable",
+    "judge-garble":         "unreadable",
+}
+_UNCHECKED_ORDER = ("dub speaks there", "not one line", "unreadable")
+
+
+def unchecked_breakdown(summary: dict[str, Any]) -> dict[str, int]:
+    """Split `n_unchecked` into its reasons, in _UNCHECKED_ORDER, omitting zeroes.
+
+    Derived from `dropped_by_gate` rather than stored alongside it, so it is also correct
+    for reports written before this existed. Gates that do NOT reach unchecked (song-like,
+    judge-present) are absent from the map and so cannot leak in — which is why the values
+    sum back to n_unchecked exactly."""
+    by_gate = (summary or {}).get("dropped_by_gate") or {}
+    out: dict[str, int] = {}
+    for gate, n in by_gate.items():
+        reason = _UNCHECKED_REASON.get(gate)
+        if reason:
+            out[reason] = out.get(reason, 0) + int(n or 0)
+    return {r: out[r] for r in _UNCHECKED_ORDER if out.get(r)}
+
+
 def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             n_unchecked: int = 0, series: str | None = None,
             judged: list[dict[str, Any]] | None = None,
@@ -2032,8 +2067,9 @@ def _report(errors: list[dict[str, Any]], oseg: list, ch: str, tol_s: float,
             "n_extra": n["EXTRA"], "n_mismatch": 0, "n_unmapped": 0,
             "n_sync_warnings": 0, "n_original_regions": total,
             # HONESTY METRIC: how much of the original's dialogue we could actually verify.
-            # A region where either side's transcript is unreliable is declared UNCHECKED,
-            # never guessed at — the studio must know what the tool did not see.
+            # A region we cannot certify either way is declared UNCHECKED, never guessed at
+            # — the studio must know what the tool did not see. Mostly this is the dub
+            # SPEAKING over the slot, not a bad transcript; see _UNCHECKED_REASON.
             "n_unchecked": n_unchecked,
             "coverage": round(1.0 - n_unchecked / total, 3) if total else 0.0,
             # triage order for the sound team: verify high first, low last

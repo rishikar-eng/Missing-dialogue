@@ -1618,10 +1618,18 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                         + (f" ({n_missing} lines, {n_blocks} in un-dubbed stretches)"
                            if n_blocks and n_missing != n_find else "")
                         + (f" · {n_sung} song lines not counted" if n_sung else ""))
+                # NOT VERIFIABLE ≠ UNREADABLE. Five gates reach unchecked and only one is a
+                # bad transcript; on EP25, 26 of 32 were slots the dub audibly speaks over.
+                # "32 unreadable" reads as "your audio is poor" — the opposite of the truth —
+                # so name the reasons. Falls back to the bare total on older reports.
+                n_unck = int(s.get('unchecked') or 0)
+                _why = s.get('unchecked_by_reason') or {}
                 ln = [f"{icon} **{lang}** — {head} "
                       f"(high {conf.get('high', 0)} / med {conf.get('medium', 0)} / low {conf.get('low', 0)})",
                       f"   checked {(s.get('coverage') or 0):.0%} of {s.get('original_lines', 0)} "
-                      f"original lines · {s.get('unchecked', 0)} unreadable on one side"]
+                      f"original lines · {n_unck} not verifiable"
+                      + (f" ({', '.join(f'{v} {k}' for k, v in _why.items())})"
+                         if _why and n_unck else "")]
                 if st.get("download_url"):
                     ln.append(f"   [AudioQC workbook]({st['download_url']}) — flags in verify order")
                     downloads[lang] = st["download_url"]

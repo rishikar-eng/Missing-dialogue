@@ -45,6 +45,20 @@ def _ms(t: float | None) -> str:
 
 
 
+def _unchecked_why(s: dict[str, Any]) -> str:
+    """"26 dub speaks there, 4 not one line" — or "" when the report cannot say.
+
+    audio_qc owns the gate vocabulary but drags in numpy, and a workbook must still build if
+    it is unimportable, so this degrades to the bare count rather than failing the run."""
+    try:
+        from .audio_qc import unchecked_breakdown
+        return ", ".join(f"{n} {r}" for r, n in unchecked_breakdown(s).items())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+
+
 
 
 
@@ -107,10 +121,14 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         ("Original lines found", s.get("n_original_regions", 0)),
 
 
+        # Says WHY the unverifiable lines were unverifiable. Most are the dub speaking over
+        # the slot; calling them all "unreadable" (as this did) blames the delivered audio.
         ("Verifiable coverage", f"{s.get('coverage', 0.0):.0%} "
 
 
-                                f"({s.get('n_unchecked', 0)} lines unreadable on one side)"),
+                                f"({s.get('n_unchecked', 0)} lines not verifiable"
+                                + (f" — {_unchecked_why(s)}" if _unchecked_why(s) else "")
+                                + ")"),
 
 
         ("MISSING flags", f"{s.get('n_missing', 0)}  "

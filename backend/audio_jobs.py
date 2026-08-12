@@ -620,6 +620,18 @@ def _publish_ptx(s3, bucket: str, csv_key: str) -> str | None:
         return None
 
 
+def _unchecked_reasons(summary: dict[str, Any]) -> dict[str, int]:
+    """Why the unchecked lines were unchecked, or {} if this report cannot say.
+
+    audio_qc pulls in numpy and is not guaranteed importable in every process that renders a
+    card, so a missing breakdown must degrade to the plain total rather than blank the card."""
+    try:
+        from .audio_qc import unchecked_breakdown
+        return unchecked_breakdown(summary)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def status(job_id: str) -> dict[str, Any]:
     """S3-first: a published report.json means done regardless of task/server lifecycle."""
     import json
@@ -690,6 +702,10 @@ def status(job_id: str) -> dict[str, Any]:
                 "extra": s.get("n_extra"), "misaligned": s.get("n_misaligned"),
                 "original_lines": s.get("n_original_regions"),
                 "coverage": s.get("coverage"), "unchecked": s.get("n_unchecked"),
+                # WHY those lines could not be verified. Most are the dub speaking over the
+                # slot, not bad audio, and the card said "unreadable on one side" for all of
+                # them. Derived from the gate counts, so old reports break down correctly too.
+                "unchecked_by_reason": _unchecked_reasons(s),
                 "examples": ex,
                 # a contiguous un-dubbed stretch counts ONCE (the lines are still listed)
                 "findings": _act["findings"],

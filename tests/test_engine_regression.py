@@ -36,7 +36,8 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from backend.audio_qc import (  # noqa: E402
-    _group_missing, _songlike, _tag_song_reprise, _tier_from_features,
+    _UNCHECKED_REASON, _group_missing, _songlike, _tag_song_reprise,
+    _tier_from_features, unchecked_breakdown,
 )
 
 CASES = os.path.join(HERE, "fixtures", "tier_cases.json")
@@ -307,6 +308,46 @@ def test_song_neighbourhood_does_not_span_the_episode():
 def test_songlike_detects_repetition_not_length():
     assert _songlike("la la la la la la la la")
     assert not _songlike("Alguem paga ele por favor agora mesmo")
+
+
+def test_every_unchecked_gate_has_a_reason():
+    """A new gate must not fall out of the card's breakdown silently.
+
+    The card says "N not verifiable (26 dub speaks there, 4 unreadable)". Those come from
+    _UNCHECKED_REASON, keyed by gate name. Add a gate that increments n_unchecked and forget
+    the map entry, and the parts quietly stop summing to the whole — nobody would notice,
+    because a smaller number in a parenthesis still looks right."""
+    import re
+    src = open(os.path.join(ROOT, "backend", "audio_qc.py"), encoding="utf-8").read()
+    # every _drop() whose gate is reached after an n_unchecked increment
+    gates = set()
+    for blk in src.split("n_unchecked += 1")[1:]:
+        m = re.search(r'_drop\(\s*"([a-z-]+)"', blk)
+        if m:
+            gates.add(m.group(1))
+    assert gates, "could not find the unchecked gates — did the source layout change?"
+    missing = sorted(gates - set(_UNCHECKED_REASON))
+    assert not missing, (
+        "gate(s) send lines to unchecked but have no plain-English reason, so the card's "
+        "breakdown will not sum to n_unchecked: %s%s   add them to _UNCHECKED_REASON"
+        % (", ".join(missing), NL))
+
+
+def test_unchecked_breakdown_sums_to_the_total():
+    """The parts must equal the whole on real production summaries. A gate that does NOT
+    reach unchecked (song-like, judge-present) leaking into the map would inflate this."""
+    data = _load(CASES)
+    checked = 0
+    for ep, blk in sorted(data["episodes"].items()):
+        s = blk.get("summary") or {}
+        if "dropped_by_gate" not in s or "n_unchecked" not in s:
+            continue                       # captured before the gate counts existed
+        got = sum(unchecked_breakdown(s).values())
+        assert got == int(s["n_unchecked"] or 0), (
+            "%s: breakdown sums to %d but n_unchecked is %s — %s"
+            % (ep, got, s["n_unchecked"], unchecked_breakdown(s)))
+        checked += 1
+    assert checked, "no fixture episode carries gate counts; this test proved nothing"
 
 
 # --------------------------------------------------------------------------- bless
