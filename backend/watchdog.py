@@ -237,12 +237,22 @@ def post_teams(text: str, webhook: str | None = None) -> bool:
                     "body": [{"type": "TextBlock", "text": text, "wrap": True}]}}]}
     legacy = {"@type": "MessageCard", "@context": "http://schema.org/extensions",
               "summary": "QC Watchdog", "text": text}
-    for body in (card, legacy):
+    # SAY WHAT THE CHANNEL ACTUALLY DID. This used to return False silently on any non-2xx:
+    # a disabled Power Automate flow or an expired connection produced a completely clean log
+    # — 27k lines, zero errors — that looked exactly like a healthy watchdog with nothing to
+    # report. The one failure mode this endpoint is known to have (HTTP 202 accepted, message
+    # never rendered) is invisible from the status code alone, so log which body shape won.
+    for kind, body in (("adaptive-card", card), ("legacy-messagecard", legacy)):
         try:
-            if httpx.post(url, json=body, timeout=20).status_code < 300:
+            r = httpx.post(url, json=body, timeout=20)
+            if r.status_code < 300:
+                print(f"[watchdog] posted to Teams — {kind}, HTTP {r.status_code}")
                 return True
+            # never log `url`: it carries the flow's signature
+            print(f"[watchdog] post REJECTED — {kind}, HTTP {r.status_code}: {r.text[:200]}")
         except Exception as e:  # never let a posting failure break the scan loop
-            print("[watchdog] post failed:", e)
+            print(f"[watchdog] post failed — {kind}: {e}")
+    print("[watchdog] POST FAILED — the channel was NOT notified")
     return False
 
 
@@ -312,18 +322,23 @@ def run_once(folders: list[str] | None = None, announce: bool = True) -> dict[st
         rep = readiness(files)
         first_run = not prev and not state.get(fid)
         label = state.get(fid, {}).get("label") or _folder_name(token, fid)
+        posted = None
         if new and announce and not first_run:
             # If the new files name an episode of a registered series, report that episode's
             # REAL cross-language state (cheap targeted lookup) rather than only what happens
             # to sit in this watched folder.
             ep = rep.get("episode")
             srep = series_readiness(token, ep) if ep else None
-            post_teams(_fmt_series(new, srep) if srep else _fmt(new, rep, label))
+            # KEEP THE VERDICT. Discarding this was why nobody could tell a working watchdog
+            # from one whose webhook had been silently rejecting every announcement.
+            posted = post_teams(_fmt_series(new, srep) if srep else _fmt(new, rep, label))
         elif first_run:
             print(f"[watchdog] baseline for {fid}: {len(files)} files (no announcement)")
         state[fid] = {"files": {k: {"name": v["name"]} for k, v in files.items()},
                       "label": label, "last_scan": time.time(), "ready": rep["ready"]}
         summary[fid] = {"total": len(files), "new": len(new), "ready": rep["ready"]}
+        if posted is not None:                 # only meaningful when we tried to announce
+            summary[fid]["posted"] = posted
     _save_state(state)
     return summary
 
