@@ -278,26 +278,47 @@ HTTP 202`, `"new": 1, "posted": true`, and the card correctly resolved the file 
 Rider EP 42 with all six languages' track counts. Reproduce it that way; it is the only test
 that exercises scan → diff → readiness → format → post without touching a studio folder.
 
-Confirmed working: cron fires every 15 min · one pass = **16.75 s** over 220 files in 3
-folders · **0 errors in 28k log lines** · uploader attribution is correct in the real folders
-(Ashish Shinde 36, Samrudhi Patil 30, Parag Gaikwad 3, Anant pawar 1 — real people, real dates).
+Confirmed working: **0 errors in 28k log lines** · uploader attribution is correct in the real
+folders (Ashish Shinde 36, Samrudhi Patil 30, Parag Gaikwad 3, Anant pawar 1 — real people,
+real dates).
+
+**Current configuration (2026-08-17): 10 folders, cron `*/30`.** `DQC_WATCH_FOLDERS` =
+Gavv scripts + premix + the test folder + **all six Gavv dub folders + POA English**.
+Tracking 1,281 files; state file 80 KB.
+
+Cost scales with the file count, and it is not free:
+
+| watched | files | pass duration |
+|---|---|---|
+| 3 folders (to 2026-08-17) | 220 | 16.75 s |
+| 10 folders (now) | 1,281 | **182 s steady-state** (259 s on the pass that baselines new folders) |
+
+3 min per pass at 30-min cadence ≈ a 10% duty cycle. **There is no lock** (shortcoming 7), so
+if the list grows much further, raise the cron interval before adding folders — a pass that
+outruns its interval will race itself on the state file. Adding folders is safe to do live:
+`first_run` baselines an unseen folder silently, verified 2026-08-17 when 1,061 files across
+7 new folders produced `(no announcement)` and zero posts.
 
 ### 7.5.2 Shortcomings — read before relying on it
 
-**1. It reports new FILES, never new FOLDERS.** This is the big one, and it is a silent gap.
-`scan_tree` recurses into folder entries but only ever records files:
+**1. IT ONLY SEES THE FOLDERS IT IS POINTED AT, AND THOSE WENT DORMANT.** This is the one that
+actually cost something. Until 2026-08-17 `DQC_WATCH_FOLDERS` held three ids: Kamen Rider's
+scripts folder, its premix folder, and the test folder. Measured that day: the newest file in
+Final EN Scripts was **62 days old** and in Premix **58 days old**, while every active dub
+delivery folder was unmonitored — POA English had received files **2 days** earlier, and all
+six Gavv dub folders 12–13 days earlier. So the watchdog was correctly reporting `new: 0` on
+4,925 consecutive passes while ~1,000 files landed in folders it could not see.
 
-```python
-if e.get("type") == "folder":
-    if depth < max_depth: walk(e["id"], ...)   # descend, record NOTHING
-else:
-    files[e["id"]] = {...}
-```
+Nothing in the log says "you are watching a dead folder". If cards stop appearing, **check the
+newest file date in each watched folder before assuming the poster broke** — a dormant folder
+and a broken webhook produce identical output. Fixed by adding the 6 Gavv dub folders + POA
+English (10 total); the cost is in (2).
 
-So: a **new empty folder is completely invisible** (no files → no diff entries → no post), and
-a new folder that does contain files announces the *files* with an `_(in FolderName)_` suffix
-but never says a folder was created, nor by whom. Box already returns `created_by` for folder
-entries in the same response `_FIELDS` asks for — the data is fetched and thrown away.
+Note in passing: `scan_tree` records files only — folder entries are recursed into but never
+stored, so a new *empty* folder is invisible and a populated one announces its files with an
+`_(in FolderName)_` suffix without naming the folder or its creator. Not currently a
+requirement (the ask is files), and Box already returns `created_by` for folders in the same
+response if that ever changes.
 
 **2. The depth limit is a latent cliff.** `max_depth=3` (`DQC_WATCH_DEPTH`). Measured
 2026-08-14: at depth 3 vs 8 the counts are identical (144/144, 70/70, 6/6), so **nothing is
