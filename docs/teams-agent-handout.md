@@ -269,6 +269,74 @@ Things worth knowing if you touch it:
 - Box access is **read-only** on all studio folders (`can_upload=False`), so it cannot alter
   a delivery.
 
+### 7.5.1 Verified behaviour (2026-08-14)
+
+Checked end-to-end against the live channel by deleting one entry from
+`watchdog_state.json` so an existing file re-registered as new — no Box write needed, and the
+state self-heals on the same pass. Result: `[watchdog] posted to Teams — adaptive-card,
+HTTP 202`, `"new": 1, "posted": true`, and the card correctly resolved the file to Kamen
+Rider EP 42 with all six languages' track counts. Reproduce it that way; it is the only test
+that exercises scan → diff → readiness → format → post without touching a studio folder.
+
+Confirmed working: cron fires every 15 min · one pass = **16.75 s** over 220 files in 3
+folders · **0 errors in 28k log lines** · uploader attribution is correct in the real folders
+(Ashish Shinde 36, Samrudhi Patil 30, Parag Gaikwad 3, Anant pawar 1 — real people, real dates).
+
+### 7.5.2 Shortcomings — read before relying on it
+
+**1. It reports new FILES, never new FOLDERS.** This is the big one, and it is a silent gap.
+`scan_tree` recurses into folder entries but only ever records files:
+
+```python
+if e.get("type") == "folder":
+    if depth < max_depth: walk(e["id"], ...)   # descend, record NOTHING
+else:
+    files[e["id"]] = {...}
+```
+
+So: a **new empty folder is completely invisible** (no files → no diff entries → no post), and
+a new folder that does contain files announces the *files* with an `_(in FolderName)_` suffix
+but never says a folder was created, nor by whom. Box already returns `created_by` for folder
+entries in the same response `_FIELDS` asks for — the data is fetched and thrown away.
+
+**2. The depth limit is a latent cliff.** `max_depth=3` (`DQC_WATCH_DEPTH`). Measured
+2026-08-14: at depth 3 vs 8 the counts are identical (144/144, 70/70, 6/6), so **nothing is
+being missed today** — but a delivery nested one level deeper vanishes with no warning in the
+log. There is no "truncated here" signal.
+
+**3. Unreadable folders fail silently.** `walk()` wraps `_list` in `except Exception: return`.
+A permissions error, a rate limit and a genuinely empty folder all produce the same thing:
+nothing. Combined with (2), coverage gaps are invisible by construction.
+
+**4. No deletions or renames.** The diff is `k not in prev` only. A file removed or renamed
+between passes is never reported, and a rename reads as an addition.
+
+**5. A lost state file silently re-baselines.** `first_run` correctly suppresses the
+announcement for an unseen folder — but if `watchdog_state.json` is deleted or
+`DQC_DATA_ROOT` changes, the next pass treats everything as a baseline and every delivery that
+arrived in the meantime is swallowed. Back the state file up with the run store.
+
+**6. Delivery is still not provable.** As of 2026-08-14 `post_teams` logs the body shape and
+HTTP status, and `run_once` records `posted` in the summary — so a *rejection* is now visible.
+But the endpoint's known failure mode returns **HTTP 202 and renders nothing**, so a 202 means
+"Power Automate accepted it", not "the channel showed it". Only a human can confirm the last hop.
+
+**7. No lock between passes.** Nothing prevents two overlapping runs racing on the state file.
+Low risk in practice (16.75 s pass vs 15 min interval) but the failure mode is a double post or
+a lost baseline, and both look like bugs elsewhere.
+
+**8. Cadence over-delivers.** The ask was 20–30 min; cron runs at 15. Harmless, but each pass
+is 3 full Box tree walks (~96/day). `DQC_WATCH_DEPTH` and the cron line are the two knobs.
+
+**9. `_size` uses decimal KB** (819.2 KB for 819,200 bytes). The uncommitted
+`tests/test_watchdog_accuracy.py` asserts binary (800 KB) and fails 13/18 on this alone —
+pre-existing, cosmetic, but somebody should pick one and commit the file.
+
+**10. "added by" means "who put this file object here", not who produced it.** Box attributes
+a *copy* to the copier. Verified: every `Rakia.wav` across Box is `created_by` Deepika Rao
+except the QC-Watchdog-Test copy, which is attributed to whoever staged that folder. Correct
+for genuine vendor uploads; misleading for anything staged or copied internally.
+
 ## 8. Conventions & guardrails
 
 - Match the surrounding style: FastAPI + pydantic, comments explain *why* not *what*.
