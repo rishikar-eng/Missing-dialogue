@@ -154,18 +154,76 @@ def readiness(files: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def series_readiness(token: str, episode: int) -> dict[str, Any] | None:
+def series_of_folder(fid: str) -> str | None:
+    """Which registered series owns this watched folder, by id — or None if it is not one of
+    theirs (the test folder, an ad-hoc drop).
+
+    Before this existed `series_readiness` hardcoded "gavv", which was invisible while the
+    only watched folders WERE Gavv's. The moment POA's delivery folder was watched
+    (2026-08-17) every POA file produced a card headed "Kamen Rider Gavv" carrying Gavv's
+    language readiness. Resolve the series from the folder that the file landed in."""
+    from . import series_registry
+    fid = str(fid)
+    for key, cfg in ((s["key"], s) for s in series_registry.all_series()):
+        b = cfg.get("box", {}) or {}
+        ids: set[str] = set()
+        for f in ("scripts_folder", "premix_folder", "original_mix_folder",
+                  "mixes_folder", "me_stems_folder"):
+            if b.get(f):
+                ids.add(str(b[f]))
+        for group in ("mixes_folders", "voiceover"):
+            for v in (b.get(group) or {}).values():
+                for one in (v if isinstance(v, list) else [v]):
+                    ids.add(str(one))
+        for v in (b.get("premix_folders") or []):
+            ids.add(str(v))
+        if fid in ids:
+            return key
+    return None
+
+
+def series_readiness(token: str, episode: int, series_key: str | None = None) -> dict[str, Any] | None:
     """Authoritative readiness for a registered series' episode, via the same check the
     `@QC check` command uses. Far cheaper AND more complete than crawling the voiceover
     tree: it looks up just this episode's script/original/tracks across every language
-    (~2s), instead of walking ~1000 files per language. Returns None if unavailable."""
+    (~2s), instead of walking ~1000 files per language. Returns None if unavailable.
+
+    `series_key` must name the series the files actually came from — see series_of_folder."""
     try:
         from . import box_discovery, series_registry
-        key, cfg = series_registry.resolve("gavv")
+        # No silent default. Defaulting to "gavv" is precisely the bug this function had:
+        # a caller that cannot name the series must get the generic card, not Gavv's.
+        if not series_key:
+            return None
+        r = series_registry.resolve(series_key)
+        if not r:
+            return None
+        key, cfg = r
+        # A SCRIPTLESS-ONLY SERIES HAS NO SCRIPT TO WAIT FOR. check_episode is the script-QC
+        # check; run it on POA and every card reads "Script ❌ / Original ❌ / not enough
+        # delivered" for episodes we have actually QC'd. Same branch server.py already takes
+        # for `check ep N`.
+        if not cfg["box"].get("scripts_folder"):
+            from . import audio_jobs
+            av = audio_jobs.availability(key, cfg, int(episode))
+            return {
+                "series": av.get("series"), "episode": episode,
+                "alias": (cfg.get("aliases") or [key])[0],
+                "scriptless": True,
+                "script_ok": None,                      # not applicable, not missing
+                "original_ok": bool(av.get("original")),
+                "original_name": av.get("original"),
+                "ready": av.get("languages_ready") or {},
+                "not_delivered": av.get("not_delivered") or [],
+                "unusable": av.get("unusable") or {},
+                "runnable": av.get("runnable"),
+            }
         rep = box_discovery.check_episode(token, key, cfg, int(episode))
         langs = rep.get("languages", {})
         return {
             "series": rep.get("series"), "episode": episode,
+            # the word the user actually types — "gavv", "poa" — not the display name
+            "alias": (cfg.get("aliases") or [key])[0],
             "script_ok": rep["script"].get("present"),
             "original_ok": rep["original"].get("present"),
             "ready": {l: v.get("tracks") for l, v in langs.items() if v.get("present")},
@@ -186,18 +244,28 @@ def _fmt_series(new: list[dict[str, Any]], s: dict[str, Any]) -> str:
         lines.append(f"• **{f['name']}**{_size(f['size'])} — added by {f['who']}{loc}")
     if len(new) > 12:
         lines.append(f"• …and {len(new) - 12} more")
-    lines += ["",
-              f"Script: {'✅' if s['script_ok'] else '❌ not yet'}",
-              f"Original audio: {'✅' if s['original_ok'] else '❌ not yet'}"]
+    scriptless = bool(s.get("scriptless"))
+    lines.append("")
+    # A scriptless series has no script and never will — printing "Script: ❌ not yet" reads
+    # as a missing delivery the studio should chase, when in fact nothing is owed.
+    if not scriptless:
+        lines.append(f"Script: {'✅' if s['script_ok'] else '❌ not yet'}")
+    lines.append(f"Original audio: {'✅' if s['original_ok'] else '❌ not yet'}")
+    noun = "Dub mixes" if scriptless else "Dub speaker tracks"
     if s["ready"]:
-        lines.append("Dub speaker tracks: ✅ "
-                     + ", ".join(f"{l} ({n})" for l, n in s["ready"].items()))
+        lines.append(f"{noun}: ✅ " + ", ".join(f"{l} ({n})" for l, n in s["ready"].items()))
     else:
-        lines.append("Dub speaker tracks: ❌ not yet")
+        lines.append(f"{noun}: ❌ not yet")
     if s["not_delivered"]:
         lines.append(f"Not delivered yet: {', '.join(s['not_delivered'])}")
+    for lang, why in (s.get("unusable") or {}).items():
+        lines.append(f"⚠️ {lang}: {why}")
     lines.append("")
-    lines.append(f"**▶ Ready to QC.** Say `@QC check gavv ep {s['episode']}` to kick it off."
+    alias = s.get("alias") or "<series>"
+    # the command differs by mode: scriptless series are run with `run scriptless qc`
+    cmd = (f"@QC check scriptless qc {alias} ep {s['episode']}" if scriptless
+           else f"@QC check {alias} ep {s['episode']}")
+    lines.append(f"**▶ Ready to QC.** Say `{cmd}` to kick it off."
                  if s["runnable"] else "_Not enough delivered to QC this episode yet._")
     return "\n".join(lines)
 
@@ -277,9 +345,12 @@ def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
     it never asserts that nothing is missing.
     """
     # Lead with the EPISODE when the filenames reveal one — that's what the team tracks; the
-    # folder is just where it landed. Only Kamen Rider Gavv is a registered series today.
+    # folder is just where it landed. This card is the fallback for a folder no registered
+    # series claims, so the folder's own name is the only honest label: the old code printed
+    # "Kamen Rider Gavv" unconditionally, on the since-falsified premise that Gavv was the
+    # only registered series.
     ep = rep.get("episode")
-    head = f"Kamen Rider Gavv — EP {ep}" if ep else label
+    head = f"{label} — EP {ep}" if ep else label
     lines = [f"**📁 {head} — {len(new)} new file{'s' if len(new) != 1 else ''}**", ""]
     for f in sorted(new, key=lambda x: x["path"])[:15]:
         loc = f"  _(in {f['folder']})_" if f.get("folder") not in ("", "root") else ""
@@ -298,7 +369,9 @@ def _fmt(new: list[dict[str, Any]], rep: dict[str, Any], label: str) -> str:
     lines.append("")
     if rep["ready"]:
         ep = rep.get("episode")
-        cmd = f"@QC check gavv ep {ep}" if ep else "@QC check gavv ep <n>"
+        # This card is the fallback for a folder NO registered series owns, so there is no
+        # alias to offer — say so rather than guessing a series the files may not belong to.
+        cmd = f"@QC check <series> ep {ep}" if ep else "@QC check <series> ep <n>"
         lines.append(f"**▶ Ready to QC.** Say `{cmd}` to kick it off.")
     else:
         want = [n for n, k in (("script", "script"), ("original audio", "original"),
@@ -324,11 +397,15 @@ def run_once(folders: list[str] | None = None, announce: bool = True) -> dict[st
         label = state.get(fid, {}).get("label") or _folder_name(token, fid)
         posted = None
         if new and announce and not first_run:
-            # If the new files name an episode of a registered series, report that episode's
-            # REAL cross-language state (cheap targeted lookup) rather than only what happens
-            # to sit in this watched folder.
-            ep = rep.get("episode")
-            srep = series_readiness(token, ep) if ep else None
+            # THE EPISODE IS THE ONE THAT JUST ARRIVED, not the folder's most common number.
+            # readiness() votes across every file under the watched root, which is right when
+            # a root IS one episode's drop (the test folder) and nonsense once it is a whole
+            # series tree: a file in "EP 50" announced itself as EP 2, because 2 was the
+            # commonest number among 147 files spanning 50 episodes.
+            ep = episode_of({str(i): f for i, f in enumerate(new)}) or rep.get("episode")
+            # ...and the series is whichever one owns THIS folder, never a hardcoded default.
+            skey = series_of_folder(fid)
+            srep = series_readiness(token, ep, skey) if (ep and skey) else None
             # KEEP THE VERDICT. Discarding this was why nobody could tell a working watchdog
             # from one whose webhook had been silently rejecting every announcement.
             posted = post_teams(_fmt_series(new, srep) if srep else _fmt(new, rep, label))
