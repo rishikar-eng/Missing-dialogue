@@ -229,7 +229,23 @@ def build_audio_workbook(report: dict[str, Any], meta: dict[str, Any], out_path:
         if e["type"] == "MISSING":
 
 
-            note = "Listen to the dub here — the original line appears to have no dub."
+            # KEY THE NOTE OFF THE MEASURED FILL, not off the row type. Every MISSING row
+            # used to read "the original line appears to have no dub" — which the row's own
+            # "Dub under the line" column contradicted whenever the fill was speech-like.
+            # POA EP31 shipped 4 rows saying "no dub" and "dub speaks here" side by side.
+            _f = e.get("fill")
+            if _f == "speech-like":
+                note = ("The dub SPEAKS under this line — check whether it is this line "
+                        "delivered differently, or a neighbouring line bleeding in.")
+            elif _f == "ambience":
+                note = ("Only ambience/walla under this line — no dialogue, but the dub is "
+                        "not silent here.")
+            elif _f == "silence":
+                note = "The dub is silent under this line — listen for a genuine drop."
+            else:
+                # fill could not be measured (slot too short, or _dub_fill raised)
+                note = ("Listen to the dub here — no usable dub audio was measured under "
+                        "this line.")
 
 
         elif e["type"] == "EXTRA":
