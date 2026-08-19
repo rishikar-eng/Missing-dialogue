@@ -502,16 +502,16 @@ def _main():
             print(f"MARKERCSV s3://{BUCKET}/{pre}/{cname}", flush=True)
         except Exception as _ce:  # noqa: BLE001 — a deliverable, but never fatal
             print(f"[run] marker CSV failed: {_ce}", flush=True)
-        try:
-            mname = fname.rsplit(".", 1)[0] + "_ProTools-Markers.mid"
-            audio_report.build_marker_midi(rep, f"/tmp/{mname}")
-            s3.upload_file(f"/tmp/{mname}", BUCKET, f"{pre}/{mname}")
-            print(f"MARKERS s3://{BUCKET}/{pre}/{mname}", flush=True)
-        except Exception as _me:  # noqa: BLE001 — markers are extra, never fatal
-            print(f"[run] marker export failed: {_me}", flush=True)
+        # MARKER MIDI IS NO LONGER SHIPPED (studio decision, 2026-08-19). The .ptx is the
+        # session the engineer opens and the CSV is the converter input; the MIDI was a
+        # third way to say the same thing and nobody used it. build_marker_midi() is kept
+        # in audio_report.py — it is still exercised by the regression tests.
         try:
             # Missing-lines reference audio, same deliverable script QC ships: the original's
             # audio for every flag — stitched, and on-timeline (silent between flags).
+            # ONLY THE ON-TIMELINE CUT IS SHIPPED (studio decision, 2026-08-19). The
+            # stitched "Missing-Lines-Only" version is still WRITTEN locally because
+            # build_ref_audio() produces both in one pass, but it is not uploaded.
             rname = naming.missing_flac(series or None, episode or 0, dl, False)
             tname = naming.missing_flac(series or None, episode or 0, dl, True)
             ref_src = o
@@ -526,9 +526,8 @@ def _main():
                     print("[run] ref audio cut from the cached dialogue stem", flush=True)
             if audio_report.build_ref_audio(rep.get("errors", []), ref_src,
                                             f"/tmp/{rname}", f"/tmp/{tname}"):
-                s3.upload_file(f"/tmp/{rname}", BUCKET, f"{pre}/{rname}")
                 s3.upload_file(f"/tmp/{tname}", BUCKET, f"{pre}/{tname}")
-                print(f"REFAUDIO s3://{BUCKET}/{pre}/{rname}", flush=True)
+                print(f"REFAUDIO s3://{BUCKET}/{pre}/{tname}", flush=True)
         except Exception as _re:  # noqa: BLE001 — ref audio is extra, never fatal
             print(f"[run] ref-audio export failed: {_re}", flush=True)
     _push_sep_cache()                      # cache push LAST: results first, always

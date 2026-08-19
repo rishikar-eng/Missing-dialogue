@@ -719,8 +719,10 @@ def status(job_id: str) -> dict[str, Any]:
         for obj in s3.list_objects_v2(Bucket=c["bucket"], Prefix=prefix).get("Contents", []):
             if obj["Key"].endswith(".xlsx") and "download_url" not in out:
                 out["download_url"] = fargate.download_url(obj["Key"])
-            elif obj["Key"].endswith(".mid"):
-                out["protools_url"] = fargate.download_url(obj["Key"])
+            # NO MIDI LINK. Marker MIDI is no longer produced (studio decision,
+            # 2026-08-19) — but runs from BEFORE that date still have a .mid sitting in
+            # their prefix, and linking it would resurrect a deliverable that was dropped.
+            # Deliberately not matched here.
             elif obj["Key"].endswith(".csv"):
                 # the marker list, and the source the .ptx session is converted from
                 csv_key = obj["Key"]
@@ -728,10 +730,11 @@ def status(job_id: str) -> dict[str, Any]:
             elif obj["Key"].endswith(".ptx"):
                 # the Pro Tools session itself — what the sound engineer actually opens
                 out["ptx_url"] = fargate.download_url(obj["Key"])
-            elif obj["Key"].endswith(".flac"):
-                # Missing-lines reference audio (same deliverable as script QC)
-                which = "ref_timeline_url" if "Timeline" in obj["Key"] else "ref_audio_url"
-                out[which] = fargate.download_url(obj["Key"])
+            elif obj["Key"].endswith(".flac") and "Timeline" in obj["Key"]:
+                # ONLY the on-timeline cut. The stitched "Missing-Lines-Only" version was
+                # dropped 2026-08-19; older prefixes still contain one, so match on the
+                # name rather than on the extension alone.
+                out["ref_timeline_url"] = fargate.download_url(obj["Key"])
         # Convert on first sight, then it is simply listed above on every later poll. Checked
         # after the loop, not inside it: S3 lists keys in order and must not decide this.
         if csv_key:

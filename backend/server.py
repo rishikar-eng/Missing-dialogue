@@ -1656,20 +1656,18 @@ def _run_status_raw(jid: str | None, rec: dict[str, Any] | None, job: Any) -> di
                               + (f" ({_sg} song lines left off, still in the workbook)"
                                  if _sg else "")
                               + " · 25 fps, session start 00:00:00:00")
-                if st.get("protools_url"):
-                    # Not a duplicate of the .ptx above: that one OPENS as its own session,
-                    # this drops the same markers into a session already being worked in.
-                    ln.append(f"   [Markers as MIDI]({st['protools_url']}) — "
-                              "to import into a session you already have open")
-                # The card's one compact link is whichever the engineer can act on fastest.
-                markers[lang] = st.get("ptx_url") or st.get("protools_url") or ""
+                # MARKER MIDI AND THE STITCHED REFERENCE AUDIO ARE NO LONGER SHIPPED
+                # (studio decision, 2026-08-19). The .ptx is the session the engineer opens
+                # and the CSV is the converter input — the MIDI was a third way to say the
+                # same thing. Of the two reference cuts only the ON-TIMELINE one is kept,
+                # because it is the one that lines up with the session.
+                markers[lang] = st.get("ptx_url") or ""
                 if not markers[lang]:
                     markers.pop(lang, None)
-                if st.get("ref_audio_url"):
-                    ref = f"   [Missing-lines audio]({st['ref_audio_url']})"
-                    if st.get("ref_timeline_url"):
-                        ref += f" · [on timeline]({st['ref_timeline_url']})"
-                    ln.append(ref + " — the original's audio for every flag")
+                if st.get("ref_timeline_url"):
+                    ln.append(f"   [Missing-lines audio on timeline]"
+                              f"({st['ref_timeline_url']}) — the original's audio for "
+                              f"every flag, at its real timecode")
                 # Same card the script QC renders, with audio-mode wording: `detail`/`icon`
                 # override the script-flavoured composition (no speakers → no wrong-speaker),
                 # `examples` feed the collapsed drill-down (tier stands in for character).
